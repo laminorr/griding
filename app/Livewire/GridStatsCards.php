@@ -297,7 +297,8 @@ class GridStatsCards extends Component
     public function formatCurrency(float $amount): string
     {
         if ($this->displayCurrency === 'usd') {
-            $usdAmount = $amount / 42000; // Simple conversion
+            // For display purposes only - update manually when needed to reflect current USD/IRT rate
+            $usdAmount = $amount / 70000; // Approximate USD/IRT rate
             return '$' . number_format($usdAmount, 2);
         }
         
