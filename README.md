@@ -1,61 +1,158 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+<div dir="rtl">
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+# 🤖 Trade Griding - ربات معاملاتی Grid Trading نوبیتکس
 
-## About Laravel
+<div align="center">
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+![PHP](https://img.shields.io/badge/PHP-8.2+-777BB4?style=flat&logo=php&logoColor=white)
+![Laravel](https://img.shields.io/badge/Laravel-12-FF2D20?style=flat&logo=laravel&logoColor=white)
+![License](https://img.shields.io/badge/license-MIT-green)
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+**ربات خودکار Grid Trading برای صرافی نوبیتکس**
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+[ویژگی‌ها](#-ویژگیها) • [نصب](#-نصب-و-راهاندازی) • [تنظیمات](#️-تنظیمات) • [استفاده](#-نحوه-استفاده)
 
-## Learning Laravel
+</div>
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
+---
 
-You may also try the [Laravel Bootcamp](https://bootcamp.laravel.com), where you will be guided through building a modern Laravel application from scratch.
+## 📖 درباره پروژه
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+Trade Griding یک پلتفرم معاملاتی خودکار مبتنی بر استراتژی **Grid Trading** است که به‌طور اختصاصی برای صرافی **نوبیتکس** طراحی شده است.
 
-## Laravel Sponsors
+### 💡 استراتژی Grid Trading چیست؟
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
+استراتژی Grid Trading بر اساس قرار دادن سفارش‌های خرید و فروش در فواصل مشخص (Grid) کار می‌کند:
+- 📉 سفارش‌های **خرید** زیر قیمت فعلی
+- 📈 سفارش‌های **فروش** بالای قیمت فعلی
+- 💰 کسب سود از **نوسانات** بازار (نه پیش‌بینی جهت)
 
-### Premium Partners
+> **شعار:** "سود از نوسان، نه از پیش‌بینی"
 
-- **[Vehikl](https://vehikl.com)**
-- **[Tighten Co.](https://tighten.co)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Redberry](https://redberry.international/laravel-development)**
-- **[Active Logic](https://activelogic.com)**
+---
 
-## Contributing
+## ✨ ویژگی‌ها
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+### 🎯 **قابلیت‌های اصلی**
+- ✅ **Grid Trading خودکار** با توزیع logarithmic و linear
+- ✅ **تنظیمات سفارشی** (فاصله 0.5%-10%, سطوح 4-20)
+- ✅ **حالت‌های مختلف** (فقط خرید، فقط فروش، هر دو)
+- ✅ **Dry-run Mode** برای تست بدون ریسک
+- ✅ **پنل مدیریت** حرفه‌ای با Filament v3
 
-## Code of Conduct
+### 🔗 **اتصال به نوبیتکس**
+- ✅ **REST API** با مدیریت خطا و auto-retry
+- ✅ **WebSocket** برای قیمت‌های real-time
+- ✅ **Rate Limiting** هوشمند
+- ✅ پشتیبانی از **چند ارز** (BTCIRT, ETHIRT, USDTIRT)
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+### 📊 **مدیریت سفارش‌ها**
+- ✅ ثبت خودکار **CompletedTrade**
+- ✅ ساخت خودکار **سفارش مقابل**
+- ✅ پیگیری وضعیت real-time
+- ✅ تاریخچه کامل معاملات
 
-## Security Vulnerabilities
+---
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+## 🚀 نصب و راه‌اندازی
 
-## License
+### پیش‌نیازها
+- PHP >= 8.2
+- Composer
+- MySQL / MariaDB
+- Redis (اختیاری)
+- Git
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+### مراحل نصب
+```bash
+# 1. کلون کردن
+git clone https://github.com/laminorr/griding.git
+cd griding
+
+# 2. نصب Dependencies
+composer install
+npm install && npm run build
+
+# 3. تنظیم Environment
+cp .env.example .env
+php artisan key:generate
+
+# 4. تنظیم دیتابیس در .env
+# DB_DATABASE=your_database
+# DB_USERNAME=your_username
+# DB_PASSWORD=your_password
+
+# 5. اجرای Migrations
+php artisan migrate
+
+# 6. راه‌اندازی
+php artisan serve
+```
+
+---
+
+## ⚙️ تنظیمات
+
+### تنظیم API Key نوبیتکس
+
+در فایل `.env`:
+```env
+NOBITEX_API_KEY=your_api_key_here
+NOBITEX_USE_TESTNET=false
+```
+
+### تنظیمات Grid Trading
+```env
+GRID_DEFAULT_CAPITAL=100000000
+GRID_DEFAULT_ACTIVE_PERCENT=30
+GRID_DEFAULT_SPACING=1.5
+GRID_DEFAULT_LEVELS=10
+```
+
+---
+
+## 🎮 نحوه استفاده
+
+1. **ورود به پنل:** `https://your-domain.com/admin`
+2. **ایجاد ربات** از منوی ربات‌ها
+3. **تست اتصال** با دکمه Test Connection
+4. **محاسبه Grid** با Grid Calculator
+5. **راه‌اندازی** با Dry-run یا Live Mode
+
+---
+
+## ⚠️ نکات مهم
+
+### امنیت
+- ❌ هیچ‌وقت `.env` را commit نکنید
+- ✅ API Key را دوره‌ای تغییر دهید
+- ✅ از IP Whitelist استفاده کنید
+
+### مدیریت ریسک
+- ✅ با مبلغ کم شروع کنید
+- ✅ از Dry-run برای تست استفاده کنید
+- ✅ Stop Loss مشخص کنید
+
+---
+
+## 📚 مستندات
+- [مستندات نوبیتکس](https://docs.nobitex.ir)
+- [مستندات Laravel](https://laravel.com/docs)
+
+---
+
+## ⚡ تکنولوژی‌ها
+- **Backend:** Laravel 12 + PHP 8.2
+- **Admin Panel:** Filament v3.3
+- **Database:** MySQL + Redis
+- **Frontend:** Livewire + Tailwind CSS
+
+---
+
+<div align="center">
+
+**ساخته شده با ❤️ برای معامله‌گران ایرانی**
+
+</div>
+
+</div>
