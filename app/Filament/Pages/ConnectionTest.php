@@ -300,7 +300,7 @@ class ConnectionTest extends Page
             ->send();
     }
 
-    private function loadCachedData(): void
+    public function loadCachedData(): void
     {
         // Load connection status
         $cachedStatus = Cache::get('nobitex_connection_status');
