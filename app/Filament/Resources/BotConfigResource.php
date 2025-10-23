@@ -94,6 +94,7 @@ class BotConfigResource extends Resource
                         TextInput::make('active_capital_percent')
                             ->label('درصد سرمایه فعال')
                             ->numeric()
+                            ->required()
                             ->suffix('%')
                             ->default(30)
                             ->minValue(10)

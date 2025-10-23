@@ -186,12 +186,12 @@ class CreateBotConfig extends CreateRecord
     private function validateBotConfiguration(array $data): void
     {
         // بررسی سرمایه
-        if ($data['total_capital'] < 100) {
-            throw new \InvalidArgumentException('حداقل سرمایه 100 دلار است');
+        if ($data['total_capital'] < 50000000) { // 50M IRR
+            throw new \InvalidArgumentException('حداقل سرمایه 50 میلیون تومان است');
         }
-        
-        if ($data['total_capital'] > 100000) {
-            throw new \InvalidArgumentException('حداکثر سرمایه 100,000 دلار است');
+
+        if ($data['total_capital'] > 10000000000) { // 10B IRR
+            throw new \InvalidArgumentException('حداکثر سرمایه 10 میلیارد تومان است');
         }
         
         // بررسی تنظیمات گرید
