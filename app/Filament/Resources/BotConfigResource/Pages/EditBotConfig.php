@@ -83,9 +83,9 @@ class EditBotConfig extends EditRecord
                     try {
                         $calculator = app(GridCalculatorService::class);
                         $nobitex = app(NobitexService::class);
-                        
-                        $currentPrice = $this->record->center_price ?? $nobitex->getCurrentPrice();
-                        
+
+                        $currentPrice = $this->record->center_price ?? $nobitex->getCurrentPrice('BTCIRT');
+
                         $riskAnalysis = $calculator->analyzeGridRisk(
                             $currentPrice,
                             $this->record->grid_spacing,
@@ -222,9 +222,9 @@ class EditBotConfig extends EditRecord
             
             // تنظیم قیمت مرکز اگر موجود نباشد
             if (!$record->center_price) {
-                $currentPrice = app(NobitexService::class)->getCurrentPrice();
+                $currentPrice = app(NobitexService::class)->getCurrentPrice('BTCIRT');
                 $record->update(['center_price' => $currentPrice]);
-                
+
                 Log::info('قیمت مرکز تنظیم شد', [
                     'bot_id' => $record->id,
                     'center_price' => $currentPrice
