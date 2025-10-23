@@ -232,23 +232,20 @@ class ConnectionTest extends Page
         try {
             $nobitex = app(NobitexService::class);
             $orderbook = $nobitex->getOrderBook('BTCIRT');
-            
-            if ($orderbook['success']) {
-                $askCount = count($orderbook['asks']);
-                $bidCount = count($orderbook['bids']);
-                $lastPrice = number_format($orderbook['lastTradePrice'], 0);
-                
-                $mode = $this->simulationMode ? ' (شبیه‌سازی)' : '';
-                
-                Notification::make()
-                    ->title('📊 اردربوک' . $mode)
-                    ->body("Asks: {$askCount} | Bids: {$bidCount} | آخرین قیمت: {$lastPrice} IRR")
-                    ->info()
-                    ->send();
-            } else {
-                throw new Exception('Failed to get orderbook data');
-            }
-                
+
+            // OrderBookDto is an object, access properties directly
+            $askCount = count($orderbook->asks);
+            $bidCount = count($orderbook->bids);
+            $lastPrice = number_format($orderbook->lastPrice, 0);
+
+            $mode = $this->simulationMode ? ' (شبیه‌سازی)' : '';
+
+            Notification::make()
+                ->title('📊 اردربوک' . $mode)
+                ->body("Asks: {$askCount} | Bids: {$bidCount} | آخرین قیمت: {$lastPrice} IRR")
+                ->info()
+                ->send();
+
         } catch (Exception $e) {
             Notification::make()
                 ->title('خطا در دریافت اردربوک')
