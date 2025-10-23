@@ -19,6 +19,7 @@ class BotConfig extends Model
     protected $fillable = [
         // -- نسل جدید
         'name',
+        'user_id',              // صاحب ربات
         'symbol',               // مثال: BTCIRT / ETHUSDT
         'mode',                 // buy | sell | both
         'levels',               // تعداد لِول‌ها (per_side)
@@ -26,7 +27,7 @@ class BotConfig extends Model
         'budget_irt',           // بودجه به ریال (یا quote)
         'simulation',           // Dry-run به صورت پیش‌فرض
         'is_active',            // Start/Stop
-        'status',
+        // 'status',            // Computed via getStatusAttribute() accessor, not fillable
         'min_order_value_irt',  // حداقل ارزش سفارش
         'fee_bps',              // کارمزد به bps (مثلاً 35 = 0.35%)
         'qty_decimals',         // تعداد اعشار مقدار
