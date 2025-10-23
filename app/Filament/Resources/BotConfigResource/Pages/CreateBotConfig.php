@@ -85,7 +85,7 @@ class CreateBotConfig extends CreateRecord
                 ->action(function () {
                     try {
                         $nobitex = app(NobitexService::class);
-                        $price = $nobitex->getCurrentPrice();
+                        $price = $nobitex->getCurrentPrice('BTCIRT');
                         $formattedPrice = number_format($price, 0);
                         
                         Notification::make()
@@ -176,7 +176,7 @@ class CreateBotConfig extends CreateRecord
     {
         try {
             $nobitex = app(NobitexService::class);
-            return $nobitex->getCurrentPrice();
+            return $nobitex->getCurrentPrice('BTCIRT');
         } catch (\Exception $e) {
             Log::warning('خطا در دریافت قیمت BTC', ['error' => $e->getMessage()]);
             return Cache::get('btc_price_backup', 2100000000); // قیمت پیش‌فرض
