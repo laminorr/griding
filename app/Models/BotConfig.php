@@ -26,6 +26,7 @@ class BotConfig extends Model
         'budget_irt',           // بودجه به ریال (یا quote)
         'simulation',           // Dry-run به صورت پیش‌فرض
         'is_active',            // Start/Stop
+        'status',
         'min_order_value_irt',  // حداقل ارزش سفارش
         'fee_bps',              // کارمزد به bps (مثلاً 35 = 0.35%)
         'qty_decimals',         // تعداد اعشار مقدار
