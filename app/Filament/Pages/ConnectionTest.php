@@ -196,17 +196,17 @@ class ConnectionTest extends Page
     {
         try {
             $nobitex = app(NobitexService::class);
-            $balance = $nobitex->getBalance();
-            
+            $balance = $nobitex->getBalances();
+
             if ($this->simulationMode) {
                 $this->accountBalance = [
-                    'btc' => $balance['btc']['balance'] ?? 0,
-                    'irt' => number_format($balance['rls']['balance'] ?? 0, 0)
+                    'btc' => $balance['btc']['available'] ?? 0,
+                    'irt' => number_format($balance['rls']['available'] ?? 0, 0)
                 ];
             } else {
                 $this->accountBalance = [
-                    'btc' => $balance['btc']['balance'] ?? 0,
-                    'irt' => number_format($balance['rls']['balance'] ?? 0, 0)
+                    'btc' => $balance['btc']['available'] ?? 0,
+                    'irt' => number_format($balance['rls']['available'] ?? 0, 0)
                 ];
             }
             
@@ -231,7 +231,7 @@ class ConnectionTest extends Page
     {
         try {
             $nobitex = app(NobitexService::class);
-            $orderbook = $nobitex->getOrderbook('BTCIRT');
+            $orderbook = $nobitex->getOrderBook('BTCIRT');
             
             if ($orderbook['success']) {
                 $askCount = count($orderbook['asks']);
