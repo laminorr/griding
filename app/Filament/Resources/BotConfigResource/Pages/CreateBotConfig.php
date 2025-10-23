@@ -109,6 +109,7 @@ class CreateBotConfig extends CreateRecord
         // تنظیم مقادیر پیش‌فرض
         $data['center_price'] = $data['center_price'] ?? $this->getCurrentBTCPrice();
         $data['is_active'] = false; // همیشه غیرفعال شروع می‌شه
+        $data['user_id'] = auth()->id(); // تخصیص به کاربر جاری
         
         // اعتبارسنجی تنظیمات
         $this->validateBotConfiguration($data);
@@ -244,17 +245,18 @@ class CreateBotConfig extends CreateRecord
             );
             
             // تحلیل ریسک
-            $riskAnalysis = $calculator->analyzeGridRisk(
-                $data['center_price'],
-                $data['grid_spacing'],
-                $data['grid_levels'],
-                $data['total_capital']
-            );
+            $riskAnalysis = $calculator->assessGridRisk([
+                'center_price' => $data['center_price'],
+                'spacing' => $data['grid_spacing'],
+                'levels' => $data['grid_levels'],
+                'active_percent' => $data['active_capital_percent']
+            ], $data['total_capital']);
             
             // ذخیره اطلاعات تکمیلی
-            $data['expected_daily_profit'] = $expectedProfit['avg_profit_per_cycle'];
-            $data['max_drawdown_calculated'] = $riskAnalysis['max_drawdown_percent'];
-            $data['risk_level'] = $riskAnalysis['risk_level'];
+            // Note: These are for display/logging only, not saved to DB
+            // $data['expected_daily_profit'] = $expectedProfit['avg_profit_per_cycle'];
+            // $data['max_drawdown_calculated'] = $riskAnalysis['max_drawdown_percent'];
+            // $data['risk_level'] = $riskAnalysis['risk_level'];
             
         } catch (\Exception $e) {
             Log::warning('خطا در محاسبه اطلاعات تکمیلی', ['error' => $e->getMessage()]);
@@ -284,9 +286,8 @@ class CreateBotConfig extends CreateRecord
         try {
             // تنظیم قیمت مرکز گرید
             $record->update([
-                'center_price' => $this->getCurrentBTCPrice(),
-                'created_by' => auth()->id(),
-                'last_health_check' => now()
+                'center_price' => $this->getCurrentBTCPrice()
+                // 'created_by' and 'last_health_check' columns don't exist in DB
             ]);
             
             // ایجاد لاگ اولیه

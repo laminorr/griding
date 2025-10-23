@@ -86,12 +86,12 @@ class EditBotConfig extends EditRecord
 
                         $currentPrice = $this->record->center_price ?? $nobitex->getCurrentPrice('BTCIRT');
 
-                        $riskAnalysis = $calculator->analyzeGridRisk(
-                            $currentPrice,
-                            $this->record->grid_spacing,
-                            $this->record->grid_levels,
-                            $this->record->total_capital
-                        );
+                        $riskAnalysis = $calculator->assessGridRisk([
+                            'center_price' => $currentPrice,
+                            'spacing' => $this->record->grid_spacing,
+                            'levels' => $this->record->grid_levels,
+                            'active_percent' => $this->record->active_capital_percent
+                        ], $this->record->total_capital);
                         
                         return view('filament.modals.risk-analysis', [
                             'record' => $this->record,
