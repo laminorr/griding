@@ -130,4 +130,34 @@ class User extends Authenticatable implements FilamentUser
             'login_count'   => (int) ($this->login_count ?? 0) + 1,
         ]);
     }
+
+    // ===== Bot Limit Methods =====
+    public function canCreateBot(): bool
+    {
+        $activeBots = \App\Models\BotConfig::where('user_id', $this->id)
+            ->where('is_active', true)
+            ->count();
+
+        return $activeBots < ($this->max_concurrent_bots ?? 10);
+    }
+
+    public function canUseCapital(float $amount): bool
+    {
+        $usedCapital = \App\Models\BotConfig::where('user_id', $this->id)
+            ->where('is_active', true)
+            ->sum('total_capital');
+
+        $maxCapital = $this->max_total_capital ?? 10000000000; // 10B IRR default
+        return ($usedCapital + $amount) <= $maxCapital;
+    }
+
+    public function getRemainingCapitalLimit(): float
+    {
+        $usedCapital = \App\Models\BotConfig::where('user_id', $this->id)
+            ->where('is_active', true)
+            ->sum('total_capital');
+
+        $maxCapital = $this->max_total_capital ?? 10000000000; // 10B IRR default
+        return max(0, $maxCapital - $usedCapital);
+    }
 }
