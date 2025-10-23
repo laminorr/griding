@@ -142,7 +142,7 @@ class TradingEngineService
             $botConfig->update([
                 'is_active' => false,
                 'status' => 'failed',
-                'last_error' => $e->getMessage()
+                'last_error_message' => $e->getMessage()
             ]);
             
             return [
@@ -1116,7 +1116,7 @@ class TradingEngineService
                 'center_price' => $botConfig->center_price,
                 'last_check' => $botConfig->last_check_at?->diffForHumans(),
                 'performance' => $performance,
-                'last_error' => $botConfig->last_error
+                'last_error' => $botConfig->last_error_message
             ];
             
         } catch (Exception $e) {
