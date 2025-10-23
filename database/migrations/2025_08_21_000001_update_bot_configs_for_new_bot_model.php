@@ -76,7 +76,7 @@ return new class extends Migration
             }
 
             // ——— ایندکس ترکیبی مفید برای لیست‌ها/فیلترها ———
-            if (! $this->indexExists('bot_configs', 'bot_configs_is_active_simulation_symbol_index')) {
+            if (! Schema::hasIndex('bot_configs', 'bot_configs_is_active_simulation_symbol_index')) {
                 $table->index(['is_active', 'simulation', 'symbol']);
             }
         });
@@ -95,19 +95,19 @@ return new class extends Migration
     {
         Schema::table('bot_configs', function (Blueprint $table) {
             // حذف ایندکس‌های ساخته‌شده (اگر وجود داشته باشد)
-            if ($this->indexExists('bot_configs', 'bot_configs_symbol_index')) {
+            if (Schema::hasIndex('bot_configs', 'bot_configs_symbol_index')) {
                 $table->dropIndex(['symbol']);
             }
-            if ($this->indexExists('bot_configs', 'bot_configs_simulation_index')) {
+            if (Schema::hasIndex('bot_configs', 'bot_configs_simulation_index')) {
                 $table->dropIndex(['simulation']);
             }
-            if ($this->indexExists('bot_configs', 'bot_configs_is_active_index')) {
+            if (Schema::hasIndex('bot_configs', 'bot_configs_is_active_index')) {
                 $table->dropIndex(['is_active']);
             }
-            if ($this->indexExists('bot_configs', 'bot_configs_last_run_at_index')) {
+            if (Schema::hasIndex('bot_configs', 'bot_configs_last_run_at_index')) {
                 $table->dropIndex(['last_run_at']);
             }
-            if ($this->indexExists('bot_configs', 'bot_configs_is_active_simulation_symbol_index')) {
+            if (Schema::hasIndex('bot_configs', 'bot_configs_is_active_simulation_symbol_index')) {
                 $table->dropIndex(['is_active', 'simulation', 'symbol']);
             }
 
@@ -134,16 +134,5 @@ return new class extends Migration
                 }
             }
         });
-    }
-
-    /**
-     * بررسی وجود ایندکس (برای درایورهای رایج MySQL)
-     */
-    private function indexExists(string $table, string $indexName): bool
-    {
-        $connection = Schema::getConnection()->getDoctrineSchemaManager();
-        $indexes = $connection->listTableIndexes($table);
-
-        return array_key_exists($indexName, $indexes);
     }
 };
