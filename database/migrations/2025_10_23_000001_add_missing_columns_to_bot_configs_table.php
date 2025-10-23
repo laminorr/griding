@@ -9,10 +9,8 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('bot_configs', function (Blueprint $table) {
-            // Status tracking
-            $table->string('status', 32)->default('stopped')->after('is_active');
-            $table->index('status');
-            $table->string('stop_reason')->nullable()->after('stopped_at');
+            // Status tracking (status column already exists, skip it)
+            $table->string('stop_reason')->nullable()->after('status');
 
             // Lifecycle tracking
             $table->timestamp('last_check_at')->nullable()->after('last_run_at');
@@ -37,7 +35,7 @@ return new class extends Migration
     {
         Schema::table('bot_configs', function (Blueprint $table) {
             $table->dropColumn([
-                'status', 'stop_reason', 'last_check_at', 'last_rebalance_at',
+                'stop_reason', 'last_check_at', 'last_rebalance_at',
                 'rebalance_count', 'take_profit_percent', 'max_drawdown_percent',
                 'rebalance_threshold', 'total_profit', 'win_rate', 'notes'
             ]);
