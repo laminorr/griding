@@ -8,6 +8,7 @@ return [
     | Global toggles
     |--------------------------------------------------------------------------
     */
+    'simulation_mode' => env('TRADING_SIMULATION_MODE', false),
     'enable_scheduler' => env('TRADING_ENABLE_SCHEDULER', true),
 
     /*
