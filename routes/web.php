@@ -266,13 +266,17 @@ if (app()->environment('local')) {
                     $centerPrice, $spacing, $levels, 0.00001
                 ),
                 
-                'risk_analysis' => $gridCalculator->analyzeGridRisk(
-                    $centerPrice, $spacing, $levels, $totalCapital, $activePercent
-                ),
-                
-                'optimization' => $gridCalculator->optimizeGridSettings(
-                    $totalCapital, 'BTCIRT', 'balanced'
-                ),
+                'risk_analysis' => $gridCalculator->assessGridRisk([
+                    'center_price' => $centerPrice,
+                    'spacing' => $spacing,
+                    'levels' => $levels,
+                    'active_percent' => $activePercent
+                ], $totalCapital),
+
+                'optimization' => [
+                    'status' => 'pending',
+                    'message' => 'Optimization feature under development'
+                ],
                 
                 'timestamp' => now()->toISOString()
             ]);
