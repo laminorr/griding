@@ -67,7 +67,18 @@ class BotConfigResource extends Resource
                             ->default(fn () => 'Grid Bot #' . (BotConfig::count() + 1))
                             ->placeholder('نام دلخواه برای ربات...')
                             ->prefixIcon('heroicon-o-identification'),
-                        
+
+                        Toggle::make('simulation')
+                            ->label('حالت شبیه‌سازی')
+                            ->helperText('در حالت شبیه‌سازی، هیچ سفارش واقعی به نوبیتکس ارسال نمی‌شود')
+                            ->default(true)
+                            ->inline(false)
+                            ->required()
+                            ->onIcon('heroicon-o-beaker')
+                            ->offIcon('heroicon-o-currency-dollar')
+                            ->onColor('warning')
+                            ->offColor('success'),
+
                         Toggle::make('is_active')
                             ->label('فعال‌سازی ربات')
                             ->onIcon('heroicon-o-play')
@@ -186,11 +197,14 @@ class BotConfigResource extends Resource
                     ->weight(FontWeight::Bold)
                     ->formatStateUsing(function ($record) {
                         $status = $record->is_active ? '🟢 فعال' : '⚫ متوقف';
-                        
+                        $mode = $record->simulation ? '🧪 شبیه‌سازی' : '💰 واقعی';
+                        $modeColor = $record->simulation ? 'text-orange-600' : 'text-green-600';
+
                         return new HtmlString("
                             <div class='text-center'>
                                 <div class='font-bold text-gray-900 dark:text-white'>{$record->name}</div>
                                 <div class='text-sm text-gray-600 dark:text-gray-400 mt-1'>{$status}</div>
+                                <div class='text-xs {$modeColor} font-semibold mt-1'>{$mode}</div>
                             </div>
                         ");
                     })
@@ -326,6 +340,14 @@ class BotConfigResource extends Resource
                     ->options([
                         1 => 'فعال',
                         0 => 'غیرفعال',
+                    ])
+                    ->placeholder('همه'),
+
+                SelectFilter::make('simulation')
+                    ->label('حالت')
+                    ->options([
+                        1 => '🧪 شبیه‌سازی',
+                        0 => '💰 واقعی',
                     ])
                     ->placeholder('همه'),
 
