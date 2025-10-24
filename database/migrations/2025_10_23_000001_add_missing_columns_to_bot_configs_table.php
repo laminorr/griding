@@ -10,7 +10,7 @@ return new class extends Migration
     {
         Schema::table('bot_configs', function (Blueprint $table) {
             // Status tracking (status column already exists, skip it)
-            $table->string('stop_reason')->nullable()->after('status');
+            $table->string('stop_reason')->nullable()->after('is_active');
 
             // Lifecycle tracking
             $table->timestamp('last_check_at')->nullable()->after('last_run_at');
