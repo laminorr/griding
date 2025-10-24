@@ -67,7 +67,14 @@ class BotConfigResource extends Resource
                             ->default(fn () => 'Grid Bot #' . (BotConfig::count() + 1))
                             ->placeholder('نام دلخواه برای ربات...')
                             ->prefixIcon('heroicon-o-identification'),
-                        
+
+                        Toggle::make('simulation')
+                            ->label('حالت شبیه‌سازی')
+                            ->helperText('در حالت شبیه‌سازی، هیچ سفارش واقعی به نوبیتکس ارسال نمی‌شود')
+                            ->default(true)
+                            ->inline(false)
+                            ->required(),
+
                         Toggle::make('is_active')
                             ->label('فعال‌سازی ربات')
                             ->onIcon('heroicon-o-play')
