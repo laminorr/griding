@@ -193,14 +193,12 @@ class GridCalculatorAdvanced extends Component
             );
 
             // Risk analysis
-            $this->riskAnalysis = $this->gridCalculator->analyzeGridRisk(
-                $this->current_price,
-                $this->grid_spacing,
-                $this->grid_levels,
-                $this->total_capital,
-                $this->active_capital_percent,
-                $this->getRiskParameters()
-            );
+            $this->riskAnalysis = $this->gridCalculator->assessGridRisk([
+                'center_price' => $this->current_price,
+                'spacing' => $this->grid_spacing,
+                'levels' => $this->grid_levels,
+                'active_percent' => $this->active_capital_percent
+            ], $this->total_capital);
 
             // Market analysis
             $this->marketAnalysis = $this->performMarketAnalysis();
@@ -306,30 +304,12 @@ class GridCalculatorAdvanced extends Component
     public function optimizeParameters(): void
     {
         try {
-            $optimized = $this->gridCalculator->optimizeGridSettings(
-                $this->total_capital,
-                'BTCIRT',
-                $this->strategy_type,
-                $this->getOptimizationConstraints(),
-                $this->getOptimizationPreferences()
-            );
-
-            if (isset($optimized['optimized_settings'])) {
-                $settings = $optimized['optimized_settings'];
-                
-                $this->grid_spacing = $settings['spacing'] ?? $this->grid_spacing;
-                $this->grid_levels = $settings['levels'] ?? $this->grid_levels;
-                $this->active_capital_percent = $settings['active_percent'] ?? $this->active_capital_percent;
-                
-                $this->dispatch('notification', [
-                    'type' => 'success',
-                    'title' => '🎯 بهینه‌سازی انجام شد',
-                    'message' => 'پارامترها بر اساس شرایط فعلی بازار بهینه شدند'
-                ]);
-                
-                // Auto-calculate with optimized parameters
-                $this->calculateGrid();
-            }
+            // TODO: Optimization feature under development
+            $this->dispatch('notification', [
+                'type' => 'info',
+                'title' => '⚙️ بهینه‌سازی خودکار',
+                'message' => 'این قابلیت در حال توسعه است. از استراتژی‌های از پیش تعریف شده استفاده کنید.'
+            ]);
 
         } catch (\Exception $e) {
             $this->dispatch('notification', [
