@@ -502,14 +502,35 @@ class TradingEngineService
             if (!$newPrice) {
                 return ['success' => false, 'reason' => 'No suitable replacement price'];
             }
-            
-            $orderResult = $this->nobitexService->createOrder(
-                $filledOrder->type,
-                $newPrice,
-                $filledOrder->amount,
-                $botConfig->symbol ?? 'BTCIRT'
-            );
-            
+
+            if ($botConfig->simulation) {
+                // SIMULATION MODE - Log only, don't create real replacement order
+                Log::info('SIMULATION: Would create replacement order', [
+                    'bot_id' => $botConfig->id,
+                    'filled_order_id' => $filledOrder->id,
+                    'type' => $filledOrder->type,
+                    'price' => $newPrice,
+                    'amount' => $filledOrder->amount,
+                    'symbol' => $botConfig->symbol ?? 'BTCIRT',
+                ]);
+
+                // Create simulated successful order result
+                $orderResult = [
+                    'success' => true,
+                    'order_id' => 'SIM-' . uniqid() . '-' . time(),
+                    'status' => 'Active',
+                    'message' => 'Simulated replacement order created'
+                ];
+            } else {
+                // LIVE MODE - Create real replacement order
+                $orderResult = $this->nobitexService->createOrder(
+                    $filledOrder->type,
+                    $newPrice,
+                    $filledOrder->amount,
+                    $botConfig->symbol ?? 'BTCIRT'
+                );
+            }
+
             if ($orderResult['success']) {
                 GridOrder::create([
                     'bot_config_id' => $botConfig->id,
@@ -747,8 +768,19 @@ class TradingEngineService
             
             foreach ($existingOrders as $order) {
                 if ($order->nobitex_order_id) {
-                    $this->nobitexService->cancelOrder($order->nobitex_order_id);
-                    $cancelledCount++;
+                    if ($botConfig->simulation) {
+                        // SIMULATION MODE - Log only, don't cancel real order
+                        Log::info('SIMULATION: Would cancel order during cleanup', [
+                            'bot_id' => $botConfig->id,
+                            'order_id' => $order->id,
+                            'nobitex_order_id' => $order->nobitex_order_id,
+                        ]);
+                        $cancelledCount++;
+                    } else {
+                        // LIVE MODE - Cancel real order
+                        $this->nobitexService->cancelOrder($order->nobitex_order_id);
+                        $cancelledCount++;
+                    }
                 }
                 
                 $order->update([
@@ -793,13 +825,33 @@ class TradingEngineService
                 ]);
                 
                 // ثبت در نوبیتکس
-                $orderResult = $this->nobitexService->createOrder(
-                    $level['type'],
-                    $level['price'],
-                    $orderSize,
-                    $botConfig->symbol ?? 'BTCIRT'
-                );
-                
+                if ($botConfig->simulation) {
+                    // SIMULATION MODE - Log only, don't create real order
+                    Log::info('SIMULATION: Would create grid order', [
+                        'bot_id' => $botConfig->id,
+                        'type' => $level['type'],
+                        'price' => $level['price'],
+                        'amount' => $orderSize,
+                        'symbol' => $botConfig->symbol ?? 'BTCIRT',
+                    ]);
+
+                    // Create simulated successful order result
+                    $orderResult = [
+                        'success' => true,
+                        'order_id' => 'SIM-' . uniqid() . '-' . time(),
+                        'status' => 'Active',
+                        'message' => 'Simulated order created'
+                    ];
+                } else {
+                    // LIVE MODE - Create real order
+                    $orderResult = $this->nobitexService->createOrder(
+                        $level['type'],
+                        $level['price'],
+                        $orderSize,
+                        $botConfig->symbol ?? 'BTCIRT'
+                    );
+                }
+
                 if ($orderResult['success']) {
                     $gridOrder->update([
                         'status' => 'placed',
@@ -845,12 +897,26 @@ class TradingEngineService
             foreach ($activeOrders as $order) {
                 try {
                     if ($order->nobitex_order_id) {
-                        $cancelResult = $this->nobitexService->cancelOrder($order->nobitex_order_id);
-                        
-                        if ($cancelResult['success']) {
+                        if ($botConfig->simulation) {
+                            // SIMULATION MODE - Log only, don't cancel real order
+                            Log::info('SIMULATION: Would cancel active order', [
+                                'bot_id' => $botConfig->id,
+                                'order_id' => $order->id,
+                                'nobitex_order_id' => $order->nobitex_order_id,
+                            ]);
+
+                            // Simulate successful cancellation
+                            $cancelResult = ['success' => true];
                             $cancelled++;
                         } else {
-                            $failed++;
+                            // LIVE MODE - Cancel real order
+                            $cancelResult = $this->nobitexService->cancelOrder($order->nobitex_order_id);
+
+                            if ($cancelResult['success']) {
+                                $cancelled++;
+                            } else {
+                                $failed++;
+                            }
                         }
                     }
                     
