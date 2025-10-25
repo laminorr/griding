@@ -58,7 +58,7 @@ class CompletedTrade extends Model
     // ========== Relations ==========
     public function botConfig(): BelongsTo
     {
-        return $this->belongsTo(BotConfig::class);
+        return $this->belongsTo(BotConfig::class, 'bot_config_id');
     }
 
     public function buyOrder(): BelongsTo
