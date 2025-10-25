@@ -118,11 +118,11 @@ class BotConfig extends Model
 
     /**
      * معاملات تکمیل‌شده (برای آمار سود و …) — در صورت وجود.
-     * جدول این مدل باید ستون bot_id داشته باشد.
+     * جدول این مدل باید ستون bot_config_id داشته باشد.
      */
     public function completedTrades(): HasMany
     {
-        return $this->hasMany('App\Models\CompletedTrade', 'bot_id');
+        return $this->hasMany('App\Models\CompletedTrade', 'bot_config_id');
     }
 
     // ========= Scopes =========
