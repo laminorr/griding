@@ -697,7 +697,7 @@ class TradingEngineService
             }
             
             // تست اتصال
-            $connectionTest = $this->nobitexService->testConnection();
+            $connectionTest = $this->nobitexService->healthCheck();
             if ($connectionTest['status'] !== 'ok') {
                 return ['success' => false, 'error' => 'Connection failed'];
             }
