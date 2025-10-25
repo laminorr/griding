@@ -216,9 +216,11 @@ class CreateBotConfig extends CreateRecord
                 $data['active_capital_percent'],
                 $data['grid_levels']
             );
-            
-            if (!$orderSizeResult['is_valid']) {
-                throw new \InvalidArgumentException('اندازه سفارش کمتر از حداقل مجاز: ' . implode(', ', $orderSizeResult['warnings']));
+
+            // Check if result exists and has is_valid key
+            if (!isset($orderSizeResult['is_valid']) || !$orderSizeResult['is_valid']) {
+                $errorMessage = $orderSizeResult['message'] ?? $orderSizeResult['error'] ?? 'خطا در محاسبه اندازه سفارش';
+                throw new \InvalidArgumentException($errorMessage);
             }
         } catch (\Exception $e) {
             throw new \InvalidArgumentException('خطا در محاسبه اندازه سفارش: ' . $e->getMessage());
