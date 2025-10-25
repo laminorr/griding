@@ -122,7 +122,7 @@ class BotConfig extends Model
      */
     public function completedTrades(): HasMany
     {
-        return $this->hasMany('App\Models\CompletedTrade', 'bot_config_id');
+        return $this->hasMany(CompletedTrade::class, 'bot_config_id');
     }
 
     // ========= Scopes =========
