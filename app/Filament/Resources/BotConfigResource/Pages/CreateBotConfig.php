@@ -223,7 +223,15 @@ class CreateBotConfig extends CreateRecord
                 throw new \InvalidArgumentException($errorMessage);
             }
         } catch (\Exception $e) {
-            throw new \InvalidArgumentException('خطا در محاسبه اندازه سفارش: ' . $e->getMessage());
+            // Log the full error for debugging
+            Log::error('Bot validation error', [
+                'userId' => auth()->id(),
+                'data' => $data,
+                'exception' => $e,
+            ]);
+
+            // Re-throw with the actual error message (don't wrap it again)
+            throw new \InvalidArgumentException($e->getMessage());
         }
     }
 
