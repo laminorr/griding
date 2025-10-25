@@ -254,12 +254,18 @@ class CreateBotConfig extends CreateRecord
                 $data['active_capital_percent'],
                 $data['grid_levels']
             );
-            
+
+            // Check validation before using result
+            if (!isset($orderSizeResult['is_valid']) || !$orderSizeResult['is_valid']) {
+                $errorMessage = $orderSizeResult['message'] ?? $orderSizeResult['error'] ?? 'خطا در محاسبه اندازه سفارش';
+                throw new \InvalidArgumentException($errorMessage);
+            }
+
             $expectedProfit = $calculator->calculateExpectedProfit(
                 $data['center_price'],
                 $data['grid_spacing'],
                 $data['grid_levels'],
-                $orderSizeResult['btc_amount']
+                $orderSizeResult['crypto_amount']
             );
             
             // تحلیل ریسک
@@ -333,18 +339,28 @@ class CreateBotConfig extends CreateRecord
                 $record->active_capital_percent,
                 $record->grid_levels
             );
-            
+
+            // Check validation before using result
+            if (!isset($orderSizeResult['is_valid']) || !$orderSizeResult['is_valid']) {
+                // If validation fails, log it but don't crash the notification
+                Log::warning('Order size calculation failed in notification', [
+                    'bot_id' => $record->id,
+                    'result' => $orderSizeResult
+                ]);
+                return; // Skip notification if calculation failed
+            }
+
             $activeCapital = ($record->total_capital * $record->active_capital_percent) / 100;
             $activeCapitalToman = $activeCapital * 42000;
-            
+
             Notification::make()
                 ->title('🎉 ربات با موفقیت ایجاد شد!')
                 ->body("
                     📊 **{$record->name}** آماده است
                     💰 سرمایه فعال: $" . number_format($activeCapital, 0) . " (" . number_format($activeCapitalToman, 0) . " تومان)
                     📏 {$record->grid_levels} سطح با فاصله {$record->grid_spacing}%
-                    🔹 اندازه هر سفارش: " . number_format($orderSizeResult['btc_amount'], 8) . " BTC
-                    
+                    🔹 اندازه هر سفارش: " . number_format($orderSizeResult['crypto_amount'], 8) . " BTC
+
                     💡 برای شروع معامله، ربات را فعال کنید
                 ")
                 ->success()
