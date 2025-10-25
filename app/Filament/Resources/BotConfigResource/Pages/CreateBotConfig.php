@@ -110,7 +110,15 @@ class CreateBotConfig extends CreateRecord
         $data['center_price'] = $data['center_price'] ?? $this->getCurrentBTCPrice();
         $data['is_active'] = false; // همیشه غیرفعال شروع می‌شه
         $data['user_id'] = auth()->id(); // تخصیص به کاربر جاری
-        
+
+        // Cast numeric strings to proper types
+        $data['total_capital'] = (float) $data['total_capital'];
+        $data['active_capital_percent'] = (float) $data['active_capital_percent'];
+        $data['grid_spacing'] = (float) $data['grid_spacing'];
+        $data['grid_levels'] = (int) $data['grid_levels'];
+        $data['stop_loss_percent'] = (float) $data['stop_loss_percent'];
+        $data['max_drawdown_percent'] = (float) ($data['max_drawdown_percent'] ?? 10);
+
         // اعتبارسنجی تنظیمات
         $this->validateBotConfiguration($data);
         
@@ -122,7 +130,7 @@ class CreateBotConfig extends CreateRecord
             'total_capital' => $data['total_capital'],
             'grid_levels' => $data['grid_levels']
         ]);
-        
+
         return $data;
     }
 
