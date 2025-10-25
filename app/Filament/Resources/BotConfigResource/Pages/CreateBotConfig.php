@@ -222,7 +222,8 @@ class CreateBotConfig extends CreateRecord
             $orderSizeResult = $calculator->calculateOrderSize(
                 $data['total_capital'],
                 $data['active_capital_percent'],
-                $data['grid_levels']
+                $data['grid_levels'],
+                'BTCIRT'  // Add symbol parameter
             );
 
             // Check if result exists and has is_valid key
@@ -247,12 +248,13 @@ class CreateBotConfig extends CreateRecord
     {
         try {
             $calculator = app(GridCalculatorService::class);
-            
+
             // محاسبه سود مورد انتظار
             $orderSizeResult = $calculator->calculateOrderSize(
                 $data['total_capital'],
                 $data['active_capital_percent'],
-                $data['grid_levels']
+                $data['grid_levels'],
+                'BTCIRT'  // Add symbol parameter
             );
 
             // Check validation before using result
@@ -332,12 +334,13 @@ class CreateBotConfig extends CreateRecord
     private function sendSuccessNotification(Model $record): void
     {
         $calculator = app(GridCalculatorService::class);
-        
+
         try {
             $orderSizeResult = $calculator->calculateOrderSize(
                 $record->total_capital,
                 $record->active_capital_percent,
-                $record->grid_levels
+                $record->grid_levels,
+                $record->symbol ?? 'BTCIRT'  // Add symbol parameter with fallback
             );
 
             // Check validation before using result
