@@ -226,9 +226,9 @@ class CreateBotConfig extends CreateRecord
                 'BTCIRT'  // Add symbol parameter
             );
 
-            // Check if result exists and has is_valid key
-            if (!isset($orderSizeResult['is_valid']) || !$orderSizeResult['is_valid']) {
-                $errorMessage = $orderSizeResult['message'] ?? $orderSizeResult['error'] ?? 'خطا در محاسبه اندازه سفارش';
+            // Check if validation exists and passed
+            if (!isset($orderSizeResult['validation']['is_valid']) || !$orderSizeResult['validation']['is_valid']) {
+                $errorMessage = $orderSizeResult['validation']['message'] ?? $orderSizeResult['error'] ?? 'خطا در محاسبه اندازه سفارش';
                 throw new \InvalidArgumentException($errorMessage);
             }
         } catch (\Exception $e) {
@@ -258,8 +258,8 @@ class CreateBotConfig extends CreateRecord
             );
 
             // Check validation before using result
-            if (!isset($orderSizeResult['is_valid']) || !$orderSizeResult['is_valid']) {
-                $errorMessage = $orderSizeResult['message'] ?? $orderSizeResult['error'] ?? 'خطا در محاسبه اندازه سفارش';
+            if (!isset($orderSizeResult['validation']['is_valid']) || !$orderSizeResult['validation']['is_valid']) {
+                $errorMessage = $orderSizeResult['validation']['message'] ?? $orderSizeResult['error'] ?? 'خطا در محاسبه اندازه سفارش';
                 throw new \InvalidArgumentException($errorMessage);
             }
 
@@ -344,7 +344,7 @@ class CreateBotConfig extends CreateRecord
             );
 
             // Check validation before using result
-            if (!isset($orderSizeResult['is_valid']) || !$orderSizeResult['is_valid']) {
+            if (!isset($orderSizeResult['validation']['is_valid']) || !$orderSizeResult['validation']['is_valid']) {
                 // If validation fails, log it but don't crash the notification
                 Log::warning('Order size calculation failed in notification', [
                     'bot_id' => $record->id,
