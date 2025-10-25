@@ -289,16 +289,13 @@ $responseTime = round($healthCheck['response_time_ms'] ?? 0, 2);
                 'completedTrades as profitable_trades_count' => function ($query) {
                     $query->where('profit', '>', 0);
                 },
-                'gridOrders as active_orders_count' => function ($query) {
-                    $query->where('status', 'placed');
-                }
+                'activeGridRunOrders as active_orders_count'
             ])
             ->withSum('completedTrades', 'profit')
             ->with(['completedTrades' => function ($query) {
                 $query->latest()->limit(1);
             }])
-            ->orderByDesc('is_active')
-            ->orderByDesc('updated_at');
+            ->orderByDesc('is_active');
     }
 
     // ========== Health Monitoring ==========
