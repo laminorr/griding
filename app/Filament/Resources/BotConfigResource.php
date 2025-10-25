@@ -214,17 +214,13 @@ class BotConfigResource extends Resource
                     ->alignment(Alignment::Center),
 
                 // سود/زیان
-                TextColumn::make('total_profit')
+                TextColumn::make('completed_trades_sum_profit')
                     ->label('سود/زیان')
-                    ->getStateUsing(function ($record) {
-                        return $record->completedTrades()
-                            ->selectRaw('COALESCE(SUM(profit - COALESCE(fee, 0)), 0) as net_profit')
-                            ->value('net_profit') ?? 0;
-                    })
                     ->formatStateUsing(function ($state) {
+                        $state = $state ?? 0;
                         $sign = $state >= 0 ? '+' : '';
                         $color = $state >= 0 ? 'text-green-600' : 'text-red-600';
-                        
+
                         return new HtmlString("
                             <div class='text-center'>
                                 <div class='font-bold {$color}'>
@@ -239,8 +235,8 @@ class BotConfigResource extends Resource
                 // معاملات
                 TextColumn::make('completed_trades_count')
                     ->label('معاملات')
-                    ->counts('completedTrades')
                     ->formatStateUsing(function ($state) {
+                        $state = $state ?? 0;
                         return new HtmlString("
                             <div class='text-center'>
                                 <div class='font-semibold text-blue-600'>{$state}</div>
@@ -298,15 +294,13 @@ class BotConfigResource extends Resource
                 TextColumn::make('win_rate')
                     ->label('نرخ موفقیت')
                     ->getStateUsing(function ($record) {
-                        $totalTrades = $record->completedTrades()->count();
+                        $totalTrades = $record->completed_trades_count ?? 0;
                         if ($totalTrades === 0) {
                             return 0;
                         }
-                        
-                        $winningTrades = $record->completedTrades()
-                            ->where('profit', '>', 0)
-                            ->count();
-                        
+
+                        $winningTrades = $record->profitable_trades_count ?? 0;
+
                         return round(($winningTrades / $totalTrades) * 100, 1);
                     })
                     ->formatStateUsing(function ($state) {
@@ -315,7 +309,7 @@ class BotConfigResource extends Resource
                             $state >= 50 => 'text-yellow-600',
                             default => 'text-red-600'
                         };
-                        
+
                         return new HtmlString("
                             <div class='text-center'>
                                 <div class='font-bold {$color}'>{$state}%</div>
@@ -323,7 +317,7 @@ class BotConfigResource extends Resource
                             </div>
                         ");
                     })
-                    ->sortable()
+                    ->sortable(false)
                     ->alignment(Alignment::Center),
             ])
             ->defaultSort('updated_at', 'desc')
