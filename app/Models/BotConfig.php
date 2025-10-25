@@ -109,11 +109,12 @@ class BotConfig extends Model
     }
 
     /**
-     * آلیاس برای سازگاری با کدهای قدیمی (مثلاً ListBotConfigs).
+     * سفارش‌های گرید مستقیم مربوط به این ربات (grid_orders table).
+     * این جدول دارای bot_config_id است و نیازی به hasManyThrough ندارد.
      */
-    public function gridOrders(): HasManyThrough
+    public function gridOrders(): HasMany
     {
-        return $this->gridRunOrders();
+        return $this->hasMany(GridOrder::class, 'bot_config_id');
     }
 
     /**
