@@ -117,6 +117,22 @@ class BotConfig extends Model
     }
 
     /**
+     * سفارش‌های فعال (placed) از طریق GridRun.
+     * این ریلیشن برای جلوگیری از ambiguous column در کوئری‌ها استفاده می‌شود.
+     */
+    public function activeGridRunOrders(): HasManyThrough
+    {
+        return $this->hasManyThrough(
+            'App\Models\GridRunOrder',
+            'App\Models\GridRun',
+            'bot_id',      // FK on grid_runs
+            'run_id',      // FK on grid_run_orders
+            'id',          // Local key on bot_configs
+            'id'           // Local key on grid_runs
+        )->where('grid_run_orders.status', 'placed');
+    }
+
+    /**
      * معاملات تکمیل‌شده (برای آمار سود و …) — در صورت وجود.
      * جدول این مدل باید ستون bot_config_id داشته باشد.
      */
