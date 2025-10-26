@@ -64,7 +64,8 @@ class CheckTradesJob implements ShouldQueue
      */
     private function processBot(BotConfig $bot)
     {
-        Log::info("CheckTradesJob: Processing bot {$bot->name} (ID: {$bot->id})");
+        // ✅ ADD: Log at very start
+        Log::info("CheckTradesJob: [START] Processing bot {$bot->name} (ID: {$bot->id})");
 
         try {
             // بررسی سفارشات فعال (placed = در انتظار اجرا)
@@ -90,17 +91,34 @@ class CheckTradesJob implements ShouldQueue
             foreach ($filledOrders as $filledOrder) {
                 $this->createPairOrder($filledOrder, $bot);
             }
+
+            // ✅ ADD: Log before update
+            Log::info("CheckTradesJob: [BEFORE UPDATE] Bot {$bot->name}");
         } catch (\Exception $e) {
-            Log::error("CheckTradesJob: Error processing bot {$bot->name}: " . $e->getMessage());
+            Log::error("CheckTradesJob: [CATCH] Error for bot {$bot->name}: " . $e->getMessage());
+            Log::error($e->getTraceAsString());
             // Don't rethrow - let finally block run
         } finally {
-            // ✅ ALWAYS update last_check_at, even if errors occurred
-            $bot->update([
-                'last_check_at' => now(),
-            ]);
+            // ✅ ADD: Log at start of finally
+            Log::info("CheckTradesJob: [FINALLY] Updating timestamp for bot {$bot->name}");
 
-            Log::info("CheckTradesJob: Bot {$bot->name} timestamp updated");
+            try {
+                // ✅ ALWAYS update last_check_at, even if errors occurred
+                $bot->update([
+                    'last_check_at' => now(),
+                ]);
+
+                // ✅ ADD: Verify update worked
+                $bot->refresh();
+                Log::info("CheckTradesJob: [SUCCESS] Bot {$bot->name} updated to: " . $bot->last_check_at);
+            } catch (\Exception $e) {
+                Log::error("CheckTradesJob: [FINALLY ERROR] Failed to update timestamp: " . $e->getMessage());
+                Log::error($e->getTraceAsString());
+            }
         }
+
+        // ✅ ADD: Log at very end
+        Log::info("CheckTradesJob: [END] Finished processing bot {$bot->name}");
     }
 
     /**
