@@ -89,6 +89,13 @@ class CheckTradesJob implements ShouldQueue
         foreach ($filledOrders as $filledOrder) {
             $this->createPairOrder($filledOrder, $bot);
         }
+
+        // ✅ Update last_check_at timestamp
+        $bot->update([
+            'last_check_at' => now(),
+        ]);
+
+        Log::info("CheckTradesJob: Bot {$bot->name} check completed and timestamp updated");
     }
 
     /**
