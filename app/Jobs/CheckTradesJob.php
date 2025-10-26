@@ -66,36 +66,41 @@ class CheckTradesJob implements ShouldQueue
     {
         Log::info("CheckTradesJob: Processing bot {$bot->name} (ID: {$bot->id})");
 
-        // بررسی سفارشات فعال (placed = در انتظار اجرا)
-        $activeOrders = $bot->gridOrders()
-            ->where('status', 'placed')
-            ->get();
+        try {
+            // بررسی سفارشات فعال (placed = در انتظار اجرا)
+            $activeOrders = $bot->gridOrders()
+                ->where('status', 'placed')
+                ->get();
 
-        Log::info("CheckTradesJob: Found {$activeOrders->count()} active orders for bot {$bot->name}");
+            Log::info("CheckTradesJob: Found {$activeOrders->count()} active orders for bot {$bot->name}");
 
-        // بررسی وضعیت واقعی سفارشات از نوبیتکس
-        if ($activeOrders->isNotEmpty()) {
-            $this->checkOrdersStatus($activeOrders, $bot);
+            // بررسی وضعیت واقعی سفارشات از نوبیتکس
+            if ($activeOrders->isNotEmpty()) {
+                $this->checkOrdersStatus($activeOrders, $bot);
+            }
+
+            // اگر سفارشی پر شده، سفارش جدید در طرف مقابل ایجاد کن
+            $filledOrders = $bot->gridOrders()
+                ->where('status', 'filled')
+                ->whereNull('paired_order_id')
+                ->get();
+
+            Log::info("CheckTradesJob: Found {$filledOrders->count()} filled orders without pair for bot {$bot->name}");
+
+            foreach ($filledOrders as $filledOrder) {
+                $this->createPairOrder($filledOrder, $bot);
+            }
+        } catch (\Exception $e) {
+            Log::error("CheckTradesJob: Error processing bot {$bot->name}: " . $e->getMessage());
+            // Don't rethrow - let finally block run
+        } finally {
+            // ✅ ALWAYS update last_check_at, even if errors occurred
+            $bot->update([
+                'last_check_at' => now(),
+            ]);
+
+            Log::info("CheckTradesJob: Bot {$bot->name} timestamp updated");
         }
-
-        // اگر سفارشی پر شده، سفارش جدید در طرف مقابل ایجاد کن
-        $filledOrders = $bot->gridOrders()
-            ->where('status', 'filled')
-            ->whereNull('paired_order_id')
-            ->get();
-
-        Log::info("CheckTradesJob: Found {$filledOrders->count()} filled orders without pair for bot {$bot->name}");
-
-        foreach ($filledOrders as $filledOrder) {
-            $this->createPairOrder($filledOrder, $bot);
-        }
-
-        // ✅ Update last_check_at timestamp
-        $bot->update([
-            'last_check_at' => now(),
-        ]);
-
-        Log::info("CheckTradesJob: Bot {$bot->name} check completed and timestamp updated");
     }
 
     /**
