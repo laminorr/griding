@@ -12,7 +12,7 @@ use Illuminate\Support\Facades\Log;
 
 class TestNobitexApi extends Command
 {
-    protected $signature = 'test:nobitex-api {--verbose : Show detailed output}';
+    protected $signature = 'test:nobitex-api';
     protected $description = 'Test all Nobitex API endpoints and functionality';
 
     private NobitexService $nobitex;
