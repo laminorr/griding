@@ -103,14 +103,13 @@ class CheckTradesJob implements ShouldQueue
             Log::info("CheckTradesJob: [FINALLY] Updating timestamp for bot {$bot->name}");
 
             try {
-                // ✅ ALWAYS update last_check_at, even if errors occurred
-                $bot->update([
-                    'last_check_at' => now(),
-                ]);
+                // Use direct DB update to bypass Model events/observers
+                $timestamp = now();
+                $affected = DB::table('bot_configs')
+                    ->where('id', $bot->id)
+                    ->update(['last_check_at' => $timestamp]);
 
-                // ✅ ADD: Verify update worked
-                $bot->refresh();
-                Log::info("CheckTradesJob: [SUCCESS] Bot {$bot->name} updated to: " . $bot->last_check_at);
+                Log::info("CheckTradesJob: [SUCCESS] Bot {$bot->name} timestamp updated (affected: {$affected}) to: {$timestamp}");
             } catch (\Exception $e) {
                 Log::error("CheckTradesJob: [FINALLY ERROR] Failed to update timestamp: " . $e->getMessage());
                 Log::error($e->getTraceAsString());
