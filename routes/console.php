@@ -18,21 +18,18 @@ if ((bool) config('trading.enable_scheduler', true)) {
         ->name('check-trades')
         ->description('Check open orders and handle fills')
         ->everyMinute()
-        ->withoutOverlapping(2)
-        ->onOneServer();
+        ->withoutOverlapping(2);
 
     Schedule::job(new AdjustGridJob)
         ->name('adjust-grid')
         ->description('Recalculate and adjust grid if needed')
         ->everyTenMinutes()
-        ->withoutOverlapping(20)
-        ->onOneServer();
+        ->withoutOverlapping(20);
 
     Schedule::command('queue:prune-batches --hours=48')
         ->name('queue-prune-batches')
         ->description('Prune old queue batches')
-        ->dailyAt('03:20')
-        ->onOneServer();
+        ->dailyAt('03:20');
 
     // ---- Market stats heartbeat (BTCIRT/ETHIRT/USDTIRT) ----
     foreach (['BTCIRT','ETHIRT','USDTIRT'] as $s) {
@@ -40,7 +37,6 @@ if ((bool) config('trading.enable_scheduler', true)) {
             ->name("read-market-{$s}")
             ->description("Log last price & spread for {$s}")
             ->everyMinute()
-            ->withoutOverlapping(2)
-            ->onOneServer();
+            ->withoutOverlapping(2);
     }
 }
