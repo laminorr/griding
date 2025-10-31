@@ -880,15 +880,45 @@ class TradingEngineService
                         priceIRT: (int) round($level['price'])
                     );
 
-                    $orderResponse = $this->nobitexService->createOrder($dto);
+                    // Log attempt before calling Nobitex
+                    Log::info('Attempting to create Nobitex order', [
+                        'bot_id' => $botConfig->id,
+                        'type' => $level['type'],
+                        'price' => $level['price'],
+                        'amount' => $orderSize,
+                        'symbol' => $symbol
+                    ]);
 
-                    // Convert response to array format expected by the rest of the code
-                    $orderResult = [
-                        'success' => $orderResponse->ok,
-                        'order_id' => $orderResponse->orderId,
-                        'status' => $orderResponse->ok ? 'Active' : 'Failed',
-                        'error' => $orderResponse->message ?? 'Order creation failed'
-                    ];
+                    try {
+                        $orderResponse = $this->nobitexService->createOrder($dto);
+
+                        Log::info('Nobitex order response received', [
+                            'bot_id' => $botConfig->id,
+                            'ok' => $orderResponse->ok,
+                            'orderId' => $orderResponse->orderId ?? 'NULL',
+                            'message' => $orderResponse->message ?? 'N/A'
+                        ]);
+
+                        // Convert response to array format expected by the rest of the code
+                        $orderResult = [
+                            'success' => $orderResponse->ok,
+                            'order_id' => $orderResponse->orderId,
+                            'status' => $orderResponse->ok ? 'Active' : 'Failed',
+                            'error' => $orderResponse->message ?? 'Order creation failed'
+                        ];
+
+                    } catch (\Throwable $e) {
+                        Log::error('Exception in createOrder', [
+                            'bot_id' => $botConfig->id,
+                            'exception' => $e->getMessage(),
+                            'trace' => $e->getTraceAsString()
+                        ]);
+
+                        $orderResult = [
+                            'success' => false,
+                            'error' => $e->getMessage()
+                        ];
+                    }
                 }
 
                 if ($orderResult['success']) {
@@ -897,21 +927,27 @@ class TradingEngineService
                         'nobitex_order_id' => $orderResult['order_id'],
                         'placed_at' => now()
                     ]);
-                    
+
                     $results['successful']++;
                 } else {
+                    Log::error('Failed to create grid order', [
+                        'bot_id' => $botConfig->id,
+                        'grid_order_id' => $gridOrder->id,
+                        'error' => $orderResult['error'] ?? 'Unknown error'
+                    ]);
+
                     $gridOrder->update([
                         'status' => 'failed',
                         'error_message' => $orderResult['error']
                     ]);
-                    
+
                     $results['failed']++;
-                    $results['errors'][] = "Order at {$level['price']}: {$orderResult['error']}";
+                    $results['errors'][] = $orderResult['error'] ?? 'Unknown error';
                 }
                 
                 sleep(2); // Rate limiting
-                
-            } catch (Exception $e) {
+
+            } catch (\Throwable $e) {
                 $results['failed']++;
                 $results['errors'][] = "Exception at {$level['price']}: {$e->getMessage()}";
             }
