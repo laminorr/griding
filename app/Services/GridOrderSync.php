@@ -36,7 +36,7 @@ class GridOrderSync
         // Hard-coded fallback for min_order_value_irt to handle config loading issues
         $minIrt = (int) ($minOrderValueIrt ?? ($plan['min_order_value_irt'] ?? null));
         if (empty($minIrt)) {
-            $minIrt = (int) config('trading.exchange.min_order_value_irt');
+            $minIrt = (int) config('trading.min_order_value_irt');
             if (empty($minIrt)) {
                 Log::warning('GridOrderSync: min_order_value_irt not loaded from config, using fallback: 3,000,000 IRT');
                 $minIrt = 3_000_000; // 3M IRT = 300K Toman
