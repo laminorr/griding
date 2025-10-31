@@ -41,19 +41,41 @@ final readonly class CreateOrderDto
 
 public function toApiPayload(): array
 {
+    // Get precision from config (default 8 for BTC)
+    $amountPrecision = 8; // BTC standard
+
+    // Ensure we're working with strings
+    $amountStr = (string) $this->amountBase;
+
+    // Truncate amount to proper precision (don't round, truncate)
+    if (str_contains($amountStr, '.')) {
+        [$integer, $decimal] = explode('.', $amountStr, 2);
+        $decimal = substr($decimal, 0, $amountPrecision);
+        $amountStr = $integer . '.' . rtrim($decimal, '0');
+        $amountStr = rtrim($amountStr, '.'); // Remove trailing dot if no decimals left
+    }
+
     $payload = [
         'type'        => $this->side->toApiString(),
         'execution'   => $this->execution->toApiString(),
         'srcCurrency' => strtolower($this->srcCurrency),
         'dstCurrency' => strtolower($this->dstCurrency),
-        'amount'      => $this->amountBase,
+        'amount'      => $amountStr,  // Clean string: "0.0001678"
     ];
+
     if ($this->execution->isPriceRequired()) {
-        $payload['price'] = (string) $this->priceIRT;
+        // Ensure price is integer string (remove any .0)
+        $priceStr = (string) $this->priceIRT;
+        if (str_contains($priceStr, '.')) {
+            $priceStr = explode('.', $priceStr, 2)[0];
+        }
+        $payload['price'] = $priceStr;   // Clean integer string: "122169745338"
     }
+
     if ($this->clientRef) {
         $payload['client_ref'] = $this->clientRef;
     }
+
     return $payload;
 }
 }
