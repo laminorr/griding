@@ -65,22 +65,4 @@ public function toApiPayload(): array
     }
     return $payload;
 }
-
-
-    /** نگاشت آماده برای API نوبیتکس */
-    public function toApiPayload(): array
-    {
-        $payload = [
-            'type'        => $this->side->toApiString(),        // buy|sell
-            'execution'   => $this->execution->toApiString(),   // market|limit
-            'srcCurrency' => strtolower($this->srcCurrency),
-            'dstCurrency' => strtolower($this->dstCurrency),
-            'amount'      => $this->amountBase,
-        ];
-        if ($this->execution->isPriceRequired()) {
-            $payload['price'] = (string) $this->priceIRT;       // IRT به‌صورت string
-        }
-        if ($this->clientRef) {
-            $payload['client_ref'] = $this->clientRef;
-        }
-        return $payload;
+}
