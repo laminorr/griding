@@ -38,8 +38,16 @@ class GridOrderExecutor
     {
         $symbol = (string) ($diff['symbol'] ?? 'UNKNOWN');
         $tick   = max(1, (int) ($diff['tick'] ?? 1));
-        $minIrt = (int) ($diff['min_order_value_irt']
-            ?? (int) config('trading.exchange.min_order_value_irt', 3_000_000));
+
+        // Hard-coded fallback for min_order_value_irt to handle config loading issues
+        $minIrt = (int) ($diff['min_order_value_irt'] ?? null);
+        if (empty($minIrt)) {
+            $minIrt = (int) config('trading.exchange.min_order_value_irt');
+            if (empty($minIrt)) {
+                Log::channel('trading')->warning('GridOrderExecutor: min_order_value_irt not loaded from config, using fallback: 3,000,000 IRT');
+                $minIrt = 3_000_000; // 3M IRT = 300K Toman
+            }
+        }
 
         $placed = 0; $cancelled = 0; $errors = 0;
 

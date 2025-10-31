@@ -35,7 +35,14 @@ class GridPlanner
 
         // --- config های مرتبط
         $tick        ??= (int) (config("trading.ticks.$symbol") ?? 10);
-        $minNotional  = (int) (config('trading.exchange.min_order_value_irt') ?? 3_000_000);
+
+        // Hard-coded fallback for min_order_value_irt to handle config loading issues
+        $minNotional = (int) config('trading.exchange.min_order_value_irt');
+        if (empty($minNotional)) {
+            Log::warning('GridPlanner: min_order_value_irt not loaded from config, using fallback: 3,000,000 IRT');
+            $minNotional = 3_000_000; // 3M IRT = 300K Toman
+        }
+
         $feeBps       = (int) (config('trading.exchange.fee_bps') ?? 35);
         $qtyDecimals  = (int) (config("trading.exchange.precision.$symbol.qty_decimals") ?? 6);
 
