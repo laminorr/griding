@@ -11,6 +11,8 @@ return [
     'simulation_mode' => env('TRADING_SIMULATION_MODE', false),
     'enable_scheduler' => env('TRADING_ENABLE_SCHEDULER', true),
 
+    'min_order_value_irt' => (int) (env('TRADING_MIN_ORDER_VALUE_IRT') ?: 3_000_000),
+
     /*
     |--------------------------------------------------------------------------
     | Market ticks (price step per symbol)
@@ -34,7 +36,6 @@ return [
         'fee_rate_percent' => ((int) env('TRADING_EXCHANGE_FEE_BPS', 35)) / 100.0,
 
         'slippage_bps' => (int) env('TRADING_SLIPPAGE_BPS', 10), // 0.10%
-        'min_order_value_irt' => (int) (env('TRADING_MIN_ORDER_VALUE_IRT') ?: 3_000_000), // 3M IRT = 300K Toman
 
         'allowed_symbols' => array_values(
             array_filter(
