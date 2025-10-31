@@ -531,13 +531,19 @@ class TradingEngineService
                 $srcCurrency = strtolower(substr($symbol, 0, -3)); // Remove last 3 chars (IRT)
                 $dstCurrency = strtolower(substr($symbol, -3));    // Get last 3 chars (IRT)
 
+                // Get precision for this symbol from config (default 8 for BTC)
+                $precision = config("trading.exchange.precision.{$symbol}.qty_decimals") ?? 8;
+
+                // Round amount to proper precision
+                $roundedAmount = number_format($filledOrder->amount, $precision, '.', '');
+
                 // Create proper DTO
                 $dto = new CreateOrderDto(
                     side: $filledOrder->type === 'buy' ? OrderSide::BUY : OrderSide::SELL,
                     execution: ExecutionType::LIMIT,
                     srcCurrency: $srcCurrency,
                     dstCurrency: $dstCurrency,
-                    amountBase: (string) $filledOrder->amount,
+                    amountBase: $roundedAmount,
                     priceIRT: (int) round($newPrice)
                 );
 
@@ -870,13 +876,19 @@ class TradingEngineService
                     $srcCurrency = strtolower(substr($symbol, 0, -3)); // Remove last 3 chars (IRT)
                     $dstCurrency = strtolower(substr($symbol, -3));    // Get last 3 chars (IRT)
 
+                    // Get precision for this symbol from config (default 8 for BTC)
+                    $precision = config("trading.exchange.precision.{$symbol}.qty_decimals") ?? 8;
+
+                    // Round amount to proper precision
+                    $roundedAmount = number_format($orderSize, $precision, '.', '');
+
                     // Create proper DTO
                     $dto = new CreateOrderDto(
                         side: $level['type'] === 'buy' ? OrderSide::BUY : OrderSide::SELL,
                         execution: ExecutionType::LIMIT,
                         srcCurrency: $srcCurrency,
                         dstCurrency: $dstCurrency,
-                        amountBase: (string) $orderSize,
+                        amountBase: $roundedAmount,
                         priceIRT: (int) round($level['price'])
                     );
 
