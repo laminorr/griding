@@ -292,6 +292,16 @@ class NobitexService implements ExchangeClient
     public function createOrder(CreateOrderDto $dto): CreateOrderResponse
     {
         $payload = method_exists($dto, 'toApiPayload') ? $dto->toApiPayload() : (array) $dto;
+
+        // Debug logging to verify payload types and values
+        Log::info('Nobitex API payload', [
+            'payload' => $payload,
+            'amount_type' => gettype($payload['amount'] ?? null),
+            'price_type' => gettype($payload['price'] ?? null),
+            'amount_value' => $payload['amount'] ?? null,
+            'price_value' => $payload['price'] ?? null,
+        ]);
+
         $data = $this->request('POST', '/market/orders/add', [], $payload);
 
         if (method_exists(CreateOrderResponse::class, 'fromApi')) {

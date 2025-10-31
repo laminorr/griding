@@ -534,8 +534,9 @@ class TradingEngineService
                 // Get precision for this symbol from config (default 8 for BTC)
                 $precision = config("trading.exchange.precision.{$symbol}.qty_decimals") ?? 8;
 
-                // Round amount to proper precision
-                $roundedAmount = number_format($filledOrder->amount, $precision, '.', '');
+                // Convert to string early, before any float operations damage precision
+                $amountStr = rtrim(rtrim(sprintf('%.8f', $filledOrder->amount), '0'), '.');
+                $priceStr = (string) (int) round($newPrice);
 
                 // Create proper DTO
                 $dto = new CreateOrderDto(
@@ -543,8 +544,8 @@ class TradingEngineService
                     execution: ExecutionType::LIMIT,
                     srcCurrency: $srcCurrency,
                     dstCurrency: $dstCurrency,
-                    amountBase: $roundedAmount,
-                    priceIRT: (int) round($newPrice)
+                    amountBase: $amountStr,  // String: "0.0001678"
+                    priceIRT: (int) round($newPrice)  // Pass as int, will be converted to clean string in DTO
                 );
 
                 $orderResponse = $this->nobitexService->createOrder($dto);
@@ -879,8 +880,9 @@ class TradingEngineService
                     // Get precision for this symbol from config (default 8 for BTC)
                     $precision = config("trading.exchange.precision.{$symbol}.qty_decimals") ?? 8;
 
-                    // Round amount to proper precision
-                    $roundedAmount = number_format($orderSize, $precision, '.', '');
+                    // Convert to string early, before any float operations damage precision
+                    $amountStr = rtrim(rtrim(sprintf('%.8f', $orderSize), '0'), '.');
+                    $priceStr = (string) (int) round($level['price']);
 
                     // Create proper DTO
                     $dto = new CreateOrderDto(
@@ -888,8 +890,8 @@ class TradingEngineService
                         execution: ExecutionType::LIMIT,
                         srcCurrency: $srcCurrency,
                         dstCurrency: $dstCurrency,
-                        amountBase: $roundedAmount,
-                        priceIRT: (int) round($level['price'])
+                        amountBase: $amountStr,  // String: "0.0001678"
+                        priceIRT: (int) round($level['price'])  // Pass as int, will be converted to clean string in DTO
                     );
 
                     // Log attempt before calling Nobitex
