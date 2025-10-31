@@ -39,22 +39,13 @@ final readonly class CreateOrderDto
         }
     }
 
-
-
-// داخل CreateOrderDto.php
-private function canonCurrency(string $c): string
-{
-    $c = strtolower(trim($c));
-    return $c === 'irt' ? 'rls' : $c; // ← IRT را به RLS نگاشت کن
-}
-
 public function toApiPayload(): array
 {
     $payload = [
         'type'        => $this->side->toApiString(),
         'execution'   => $this->execution->toApiString(),
-        'srcCurrency' => $this->canonCurrency($this->srcCurrency),
-        'dstCurrency' => $this->canonCurrency($this->dstCurrency),
+        'srcCurrency' => strtolower($this->srcCurrency),
+        'dstCurrency' => strtolower($this->dstCurrency),
         'amount'      => $this->amountBase,
     ];
     if ($this->execution->isPriceRequired()) {
