@@ -2,6 +2,9 @@
 
 namespace App\Services;
 
+use App\DTOs\CreateOrderDto;
+use App\Enums\ExecutionType;
+use App\Enums\OrderSide;
 use App\Models\GridOrder;
 use App\Models\BotConfig;
 use App\Models\CompletedTrade;
@@ -523,12 +526,30 @@ class TradingEngineService
                 ];
             } else {
                 // LIVE MODE - Create real replacement order
-                $orderResult = $this->nobitexService->createOrder(
-                    $filledOrder->type,
-                    $newPrice,
-                    $filledOrder->amount,
-                    $botConfig->symbol ?? 'BTCIRT'
+                $symbol = $botConfig->symbol ?? 'BTCIRT';
+                // Parse symbol to get src/dst currencies (e.g., 'BTCIRT' -> 'btc', 'irt')
+                $srcCurrency = strtolower(substr($symbol, 0, -3)); // Remove last 3 chars (IRT)
+                $dstCurrency = strtolower(substr($symbol, -3));    // Get last 3 chars (IRT)
+
+                // Create proper DTO
+                $dto = new CreateOrderDto(
+                    side: $filledOrder->type === 'buy' ? OrderSide::BUY : OrderSide::SELL,
+                    execution: ExecutionType::LIMIT,
+                    srcCurrency: $srcCurrency,
+                    dstCurrency: $dstCurrency,
+                    amountBase: (string) $filledOrder->amount,
+                    priceIRT: (int) round($newPrice)
                 );
+
+                $orderResponse = $this->nobitexService->createOrder($dto);
+
+                // Convert response to array format expected by the rest of the code
+                $orderResult = [
+                    'success' => $orderResponse->ok,
+                    'order_id' => $orderResponse->orderId,
+                    'status' => $orderResponse->ok ? 'Active' : 'Failed',
+                    'error' => $orderResponse->message ?? 'Order creation failed'
+                ];
             }
 
             if ($orderResult['success']) {
@@ -844,12 +865,30 @@ class TradingEngineService
                     ];
                 } else {
                     // LIVE MODE - Create real order
-                    $orderResult = $this->nobitexService->createOrder(
-                        $level['type'],
-                        $level['price'],
-                        $orderSize,
-                        $botConfig->symbol ?? 'BTCIRT'
+                    $symbol = $botConfig->symbol ?? 'BTCIRT';
+                    // Parse symbol to get src/dst currencies (e.g., 'BTCIRT' -> 'btc', 'irt')
+                    $srcCurrency = strtolower(substr($symbol, 0, -3)); // Remove last 3 chars (IRT)
+                    $dstCurrency = strtolower(substr($symbol, -3));    // Get last 3 chars (IRT)
+
+                    // Create proper DTO
+                    $dto = new CreateOrderDto(
+                        side: $level['type'] === 'buy' ? OrderSide::BUY : OrderSide::SELL,
+                        execution: ExecutionType::LIMIT,
+                        srcCurrency: $srcCurrency,
+                        dstCurrency: $dstCurrency,
+                        amountBase: (string) $orderSize,
+                        priceIRT: (int) round($level['price'])
                     );
+
+                    $orderResponse = $this->nobitexService->createOrder($dto);
+
+                    // Convert response to array format expected by the rest of the code
+                    $orderResult = [
+                        'success' => $orderResponse->ok,
+                        'order_id' => $orderResponse->orderId,
+                        'status' => $orderResponse->ok ? 'Active' : 'Failed',
+                        'error' => $orderResponse->message ?? 'Order creation failed'
+                    ];
                 }
 
                 if ($orderResult['success']) {
