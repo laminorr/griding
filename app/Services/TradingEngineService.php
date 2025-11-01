@@ -838,6 +838,15 @@ class TradingEngineService
         $results = ['total' => 0, 'successful' => 0, 'failed' => 0, 'errors' => []];
         
         foreach ($gridLevels as $level) {
+            // TEMPORARY: Skip SELL orders until BTC balance is sufficient
+            if ($level['type'] === 'sell') {
+                Log::info('Skipping SELL order (insufficient BTC)', [
+                    'bot_id' => $botConfig->id,
+                    'price' => $level['price']
+                ]);
+                continue;
+            }
+
             $results['total']++;
             
             try {
