@@ -14,11 +14,11 @@ Artisan::command('inspire', function () {
 if ((bool) config('trading.enable_scheduler', true)) {
 
     // ---- Core trading jobs ----
-    Schedule::job(new CheckTradesJob)
+    Schedule::job(new CheckTradesJob())
+        ->everyFiveMinutes()
+        ->withoutOverlapping()
         ->name('check-trades')
-        ->description('Check open orders and handle fills')
-        ->everyMinute()
-        ->withoutOverlapping(2);
+        ->onOneServer();
 
     Schedule::job(new AdjustGridJob)
         ->name('adjust-grid')
