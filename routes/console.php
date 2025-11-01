@@ -17,8 +17,8 @@ if ((bool) config('trading.enable_scheduler', true)) {
     Schedule::job(new CheckTradesJob())
         ->everyFiveMinutes()
         ->withoutOverlapping()
-        ->name('check-trades')
-        ->onOneServer();
+        ->name('check-trades');
+        // onOneServer() removed - not needed for single server setup
 
     Schedule::job(new AdjustGridJob)
         ->name('adjust-grid')
