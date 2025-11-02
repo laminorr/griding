@@ -336,31 +336,50 @@ class NobitexService implements ExchangeClient
     }
 
     /**
-     * وضعیت چند سفارش (batch)
+     * وضعیت چند سفارش (Nobitex API requires single order ID per request)
      * @param array<int,string> $orderIds
      * @return array<int,OrderStatusDto>
      */
     public function getOrdersStatus(array $orderIds): array
     {
-        $data = $this->request('POST', '/market/orders/status', [], ['ids' => array_values($orderIds)]);
-        $rows = (array) ($data['orders'] ?? []);
-
         $out = [];
-        foreach ($rows as $row) {
-            if (method_exists(OrderStatusDto::class, 'fromApi')) {
-                $out[] = OrderStatusDto::fromApi((array) $row);
-            } else {
-                $out[] = new OrderStatusDto(
-                    orderId: (string) ($row['id'] ?? ''),
-                    status: (string) ($row['status'] ?? 'UNKNOWN'),
-                    side:   (string) ($row['type'] ?? ''),
-                    execution: (string) ($row['execution'] ?? ''),
-                    amount: (string) ($row['amount'] ?? '0'),
-                    filled: (string) ($row['matchedAmount'] ?? '0'),
-                    priceIRT: isset($row['price']) ? (int) $row['price'] : null,
-                    createdAt: isset($row['createdAt']) ? (int) $row['createdAt'] : null,
-                    updatedAt: isset($row['updatedAt']) ? (int) $row['updatedAt'] : null,
-                );
+
+        foreach ($orderIds as $orderId) {
+            try {
+                // Call API once per order (Nobitex doesn't support batch)
+                $data = $this->request('POST', '/market/orders/status', [], ['id' => $orderId]);
+
+                // Response has 'order' (singular) not 'orders' (plural)
+                $row = (array) ($data['order'] ?? []);
+
+                if (empty($row)) {
+                    Log::channel('trading')->warning('Empty order response from Nobitex', [
+                        'order_id' => $orderId
+                    ]);
+                    continue;
+                }
+
+                if (method_exists(OrderStatusDto::class, 'fromApi')) {
+                    $out[] = OrderStatusDto::fromApi($row);
+                } else {
+                    $out[] = new OrderStatusDto(
+                        orderId: (string) ($row['id'] ?? ''),
+                        status: (string) ($row['status'] ?? 'UNKNOWN'),
+                        side: (string) ($row['type'] ?? ''),
+                        execution: (string) ($row['execution'] ?? ''),
+                        amount: (string) ($row['amount'] ?? '0'),
+                        filled: (string) ($row['matchedAmount'] ?? '0'),
+                        priceIRT: isset($row['price']) ? (int) $row['price'] : null,
+                        createdAt: isset($row['created_at']) ? strtotime($row['created_at']) : null,
+                        updatedAt: isset($row['updated_at']) ? strtotime($row['updated_at']) : null,
+                    );
+                }
+            } catch (\Exception $e) {
+                Log::channel('trading')->error('Failed to get order status', [
+                    'order_id' => $orderId,
+                    'error' => $e->getMessage()
+                ]);
+                // Continue with other orders
             }
         }
 
