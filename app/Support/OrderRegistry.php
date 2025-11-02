@@ -24,6 +24,15 @@ class OrderRegistry
         return array_values((array) Cache::get($this->key($symbol), []));
     }
 
+    // TODO: Add getOpenForBot($botId, $symbol) method
+    // This should filter orders by bot_config_id to prevent cross-bot conflicts
+    // Example implementation:
+    // public function getOpenForBot(int $botId, string $symbol): array
+    // {
+    //     $key = "gridbot:open_orders:bot:{$botId}:{$symbol}";
+    //     return array_values((array) Cache::get($key, []));
+    // }
+
     /** @param array{id?:string,side:string,price:int,quantity:string} $order */
     public function remember(string $symbol, array $order): void
     {

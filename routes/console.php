@@ -20,11 +20,13 @@ if ((bool) config('trading.enable_scheduler', true)) {
         ->name('check-trades');
         // onOneServer() removed - not needed for single server setup
 
-    Schedule::job(new AdjustGridJob)
+    // AdjustGridJob - now works with active BotConfig records only
+    Schedule::job(new AdjustGridJob())
         ->name('adjust-grid')
-        ->description('Recalculate and adjust grid if needed')
+        ->description('Adjust grids for active bots only')
         ->everyTenMinutes()
-        ->withoutOverlapping(20);
+        ->withoutOverlapping(20)
+        ->onOneServer();  // Requires CACHE_STORE=database or redis
 
     Schedule::command('queue:prune-batches --hours=48')
         ->name('queue-prune-batches')
