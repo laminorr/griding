@@ -34,6 +34,21 @@ class GridOrderExecutor
      * @param array $diff خروجی GridOrderSync::diff
      * @param bool  $simulation اگر true باشد، فقط لاگ ثبت می‌شود (بدون تماس واقعی با API)
      */
+    // TODO: Add applyForBot($botId, $diff, $simulation) method
+    // This should pass bot_id to order creation for proper scoping
+    //
+    // TODO: Add clientOrderId for idempotency:
+    // $clientOrderId = "grid:{$botId}:{$symbol}:{$side}:{$price}";
+    //
+    // TODO: Add deduplication check before creating order:
+    // if (Order::where('bot_config_id', $botId)
+    //     ->where('symbol', $symbol)
+    //     ->where('side', $side)
+    //     ->where('price', $price)
+    //     ->where('status', 'placed')
+    //     ->exists()) {
+    //     return; // Skip duplicate
+    // }
     public function apply(array $diff, bool $simulation = true): void
     {
         $symbol = (string) ($diff['symbol'] ?? 'UNKNOWN');
