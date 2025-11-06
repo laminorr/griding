@@ -20,7 +20,7 @@ class GridOrder extends Model
         'matched'   => 'decimal:8',
         'unmatched' => 'decimal:8',
         'raw_json'  => 'array',
-        'price'     => 'decimal:0',
+        'price'     => 'integer',
         'filled_at' => 'datetime',
     ];
 
