@@ -49,6 +49,17 @@ enum GridOrderStatus: string
     public static function fromString(string $value): self
     {
         $v = strtoupper(trim($value));
+
+        // Map Nobitex API status values to our internal enum
+        $v = match ($v) {
+            'DONE' => 'FILLED',                    // Nobitex: order fully matched
+            'ACTIVE' => 'ACTIVE',                  // Nobitex: order is open
+            'CANCELED', 'CANCELLED' => 'CANCELED', // Both spellings
+            'INACTIVE' => 'CANCELED',              // Nobitex: order inactive/expired
+            'PENDING' => 'PENDING',                // Order submitted but not confirmed
+            default => $v,                         // Keep as-is
+        };
+
         return match ($v) {
             'PENDING'   => self::PENDING,
             'ACTIVE'    => self::ACTIVE,
