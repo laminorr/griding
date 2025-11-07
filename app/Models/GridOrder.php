@@ -24,6 +24,33 @@ class GridOrder extends Model
         'filled_at' => 'datetime',
     ];
 
+    /**
+     * CRITICAL FIX: Force price to string before save to prevent PDO binding issues
+     */
+    public function setPriceAttribute($value): void
+    {
+        // Convert to string to prevent integer overflow in PDO bindings
+        $this->attributes['price'] = (string) $value;
+    }
+
+    /**
+     * Validation and guards
+     */
+    protected static function booted(): void
+    {
+        static::saving(function (GridOrder $order) {
+            // Validate price is positive and within DECIMAL(20,0) limits
+            if (!is_numeric($order->price) || $order->price <= 0) {
+                throw new \InvalidArgumentException("Invalid price on GridOrder: {$order->price}");
+            }
+
+            // Check doesn't exceed decimal(20,0) limit (10^20 - 1)
+            if (strlen((string)$order->price) > 20) {
+                throw new \InvalidArgumentException("Price exceeds DECIMAL(20,0) limit: {$order->price}");
+            }
+        });
+    }
+
     public function run(): BelongsTo
     {
         return $this->belongsTo(GridRun::class, 'run_id');

@@ -438,13 +438,29 @@ class CheckTradesJob implements ShouldQueue
             }
 
             // ایجاد رکورد سفارش جدید در دیتابیس
+            // Enhanced logging to catch any price corruption
+            Log::channel('trading')->info('PAIR_ORDER_PRE_CREATE', [
+                'bot_id' => $bot->id,
+                'type' => $newType,
+                'calculated_price' => $newPrice,
+                'price_type' => gettype($newPrice),
+                'filled_order_id' => $filledOrder->id,
+                'nobitex_order_id' => $nobitexOrderId,
+            ]);
+
             $newOrder = GridOrder::create([
                 'bot_config_id' => $bot->id,
-                'price' => $newPrice,
+                'price' => $newPrice,  // Mutator will convert to string
                 'amount' => $filledOrder->amount,
                 'type' => $newType,
                 'status' => 'placed',
                 'nobitex_order_id' => (string) $nobitexOrderId,
+            ]);
+
+            Log::channel('trading')->info('PAIR_ORDER_POST_CREATE', [
+                'order_id' => $newOrder->id,
+                'stored_price' => $newOrder->price,
+                'price_match' => ($newOrder->price == $newPrice) ? 'YES' : 'NO',
             ]);
 
             // به‌روزرسانی سفارش قبلی با ID سفارش جفت
