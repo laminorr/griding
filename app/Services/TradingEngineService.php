@@ -83,9 +83,15 @@ class TradingEngineService
             }
             
             // 5. محاسبه اندازه سفارشات
+            // Ensure active_capital_percent has a valid value
+            $activePercent = $botConfig->active_capital_percent ?? 100.0;
+            if ($activePercent <= 0 || $activePercent > 100) {
+                throw new Exception("Invalid active_capital_percent: {$activePercent}. Must be between 0 and 100.");
+            }
+
             $orderSizeResult = $this->gridCalculator->calculateOrderSize(
                 $botConfig->total_capital,
-                $botConfig->active_capital_percent,
+                $activePercent,
                 $botConfig->grid_levels,
                 $botConfig->symbol ?? 'BTCIRT'
             );
