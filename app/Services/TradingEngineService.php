@@ -842,15 +842,53 @@ class TradingEngineService
     private function placeGridOrders(BotConfig $botConfig, Collection $gridLevels, float $orderSize): array
     {
         $results = ['total' => 0, 'successful' => 0, 'failed' => 0, 'errors' => []];
-        
-        foreach ($gridLevels as $level) {
-            // TEMPORARY: Skip SELL orders until BTC balance is sufficient
-            if ($level['type'] === 'sell') {
-                Log::info('Skipping SELL order (insufficient BTC)', [
+
+        // Get BTC balance once before loop (for SELL orders)
+        $btcBalance = null;
+        $needsBalanceCheck = $gridLevels->contains('type', 'sell');
+
+        if ($needsBalanceCheck && !$botConfig->simulation) {
+            try {
+                $balances = $this->nobitexService->getBalances();
+                $btcBalance = (float)($balances['btc']['available'] ?? 0);
+
+                Log::channel('trading')->info('BTC balance for SELL orders', [
                     'bot_id' => $botConfig->id,
-                    'price' => $level['price']
+                    'btc_available' => $btcBalance,
                 ]);
-                continue;
+            } catch (\Exception $e) {
+                Log::channel('trading')->warning('Failed to get BTC balance', [
+                    'bot_id' => $botConfig->id,
+                    'error' => $e->getMessage(),
+                ]);
+                $btcBalance = 0;
+            }
+        }
+
+        foreach ($gridLevels as $level) {
+            // Check BTC balance for SELL orders
+            if ($level['type'] === 'sell' && !$botConfig->simulation) {
+                $requiredBtc = $orderSize;
+
+                if ($btcBalance === null || $btcBalance < $requiredBtc) {
+                    Log::channel('trading')->warning('Insufficient BTC for SELL order', [
+                        'bot_id' => $botConfig->id,
+                        'price' => $level['price'],
+                        'required_btc' => $requiredBtc,
+                        'available_btc' => $btcBalance ?? 'unknown',
+                    ]);
+                    continue; // Skip this SELL order
+                }
+
+                // Deduct from available balance for next iteration
+                $btcBalance -= $requiredBtc;
+
+                Log::channel('trading')->info('BTC sufficient for SELL order', [
+                    'bot_id' => $botConfig->id,
+                    'price' => $level['price'],
+                    'required_btc' => $requiredBtc,
+                    'remaining_btc' => $btcBalance,
+                ]);
             }
 
             $results['total']++;
