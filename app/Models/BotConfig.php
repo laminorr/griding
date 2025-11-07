@@ -369,6 +369,7 @@ class BotConfig extends Model
             $bot->step_pct    = $bot->step_pct ?? ($bot->grid_spacing ?? 0.250);
             $bot->budget_irt  = $bot->budget_irt ?? ($bot->total_capital ?? 0);
             $bot->simulation  = $bot->simulation ?? true;
+            $bot->active_capital_percent = $bot->active_capital_percent ?? 100.0;
         });
     }
 
