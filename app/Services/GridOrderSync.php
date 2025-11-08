@@ -101,9 +101,19 @@ class GridOrderSync
             }
         }
 
-        // 2) هر existing که مچ نشد → to_cancel
+        // 2) هر existing که مچ نشد → to_cancel (اما paired orders رو حفظ می‌کنیم)
         foreach ($existing as $idx => $eo) {
             if (!$used[$idx]) {
+                // ✅ NEVER cancel paired orders - they are part of an active trading cycle
+                if (!empty($eo['paired_order_id'])) {
+                    Log::info('GridOrderSync: Protecting paired order from cancellation', [
+                        'order_id' => $eo['id'],
+                        'price' => $eo['price'],
+                        'paired_order_id' => $eo['paired_order_id']
+                    ]);
+                    continue;
+                }
+
                 $toCancel[] = $eo + ['reason' => 'not_in_plan'];
             }
         }
