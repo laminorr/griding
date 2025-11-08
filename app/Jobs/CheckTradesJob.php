@@ -346,7 +346,7 @@ class CheckTradesJob implements ShouldQueue
 
             if ($buyOrder) {
                 // ایجاد CompletedTrade
-                $this->recordCompletedTrade($buyOrder, $order->price, $bot);
+                $this->recordCompletedTrade($buyOrder, $order, $bot);
 
                 // مارک کردن این دو سفارش به عنوان paired
                 $buyOrder->update(['paired_order_id' => $order->id]);
@@ -366,7 +366,7 @@ class CheckTradesJob implements ShouldQueue
 
             if ($sellOrder) {
                 // ایجاد CompletedTrade
-                $this->recordCompletedTrade($order, $sellOrder->price, $bot);
+                $this->recordCompletedTrade($order, $sellOrder, $bot);
 
                 // مارک کردن این دو سفارش به عنوان paired
                 $order->update(['paired_order_id' => $sellOrder->id]);
@@ -455,6 +455,7 @@ class CheckTradesJob implements ShouldQueue
                 'type' => $newType,
                 'status' => 'placed',
                 'nobitex_order_id' => (string) $nobitexOrderId,
+                'paired_order_id' => $filledOrder->id,
             ]);
 
             Log::channel('trading')->info('PAIR_ORDER_POST_CREATE', [
@@ -483,26 +484,29 @@ class CheckTradesJob implements ShouldQueue
     /**
      * ثبت معامله کامل شده
      */
-    private function recordCompletedTrade(GridOrder $buyOrder, float $sellPrice, BotConfig $bot)
+    private function recordCompletedTrade(GridOrder $buyOrder, GridOrder $sellOrder, BotConfig $bot)
     {
         $buyPrice = $buyOrder->price;
+        $sellPrice = $sellOrder->price;
         $amount = $buyOrder->amount;
-        
+
         // محاسبه سود/زیان
         $grossProfit = ($sellPrice - $buyPrice) * $amount;
-        $feeRate = 0.002; // 0.2% کارمزد
+        $feeRate = 0.0035; // 0.35% Nobitex fee
         $totalFee = (($buyPrice * $amount) + ($sellPrice * $amount)) * $feeRate;
         $netProfit = $grossProfit - $totalFee;
-        
+
         $trade = CompletedTrade::create([
             'bot_config_id' => $bot->id,
+            'buy_order_id' => $buyOrder->id,
+            'sell_order_id' => $sellOrder->id,
             'buy_price' => $buyPrice,
             'sell_price' => $sellPrice,
             'amount' => $amount,
             'profit' => $netProfit,
             'fee' => $totalFee,
         ]);
-        
+
         Log::info("Recorded completed trade {$trade->id}: Buy at {$buyPrice}, Sell at {$sellPrice}, Profit: {$netProfit}");
     }
 
