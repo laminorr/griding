@@ -24,14 +24,25 @@ class OrderRegistry
         return array_values((array) Cache::get($this->key($symbol), []));
     }
 
-    // TODO: Add getOpenForBot($botId, $symbol) method
-    // This should filter orders by bot_config_id to prevent cross-bot conflicts
-    // Example implementation:
-    // public function getOpenForBot(int $botId, string $symbol): array
-    // {
-    //     $key = "gridbot:open_orders:bot:{$botId}:{$symbol}";
-    //     return array_values((array) Cache::get($key, []));
-    // }
+    /**
+     * Get open orders for a specific bot from database (not cache)
+     * This ensures we see the latest orders including paired orders created by CheckTradesJob
+     */
+    public function getOpenForBot(int $botId, string $symbol): array
+    {
+        return \App\Models\GridOrder::where('bot_config_id', $botId)
+            ->where('symbol', $symbol)
+            ->whereIn('status', ['placed', 'active'])
+            ->get()
+            ->map(fn($order) => [
+                'id' => $order->nobitex_order_id,
+                'side' => $order->type,
+                'price' => (int) $order->price,
+                'quantity' => (string) $order->amount,
+                'paired_order_id' => $order->paired_order_id,  // Important!
+            ])
+            ->toArray();
+    }
 
     /** @param array{id?:string,side:string,price:int,quantity:string} $order */
     public function remember(string $symbol, array $order): void

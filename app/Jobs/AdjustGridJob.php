@@ -108,19 +108,49 @@ class AdjustGridJob implements ShouldQueue
                         budgetIrt: (int)($bot->total_capital ?? 50_000_000)
                     );
 
-                    // 2) CRITICAL: Get existing orders FOR THIS BOT ONLY
-                    // If getOpenForBot doesn't exist yet, use: $existing = $reg->getOpen($symbol);
-                    // But add bot_id filtering in OrderRegistry ASAP
-                    if (method_exists($reg, 'getOpenForBot')) {
-                        $existing = $reg->getOpenForBot($bot->id, $symbol);
-                    } else {
-                        // Fallback - but this is dangerous with multiple bots!
-                        $existing = $reg->getOpen($symbol);
-                        Log::channel('trading')->warning('USING_UNSCOPED_ORDERS', [
+                    // ✅ Get existing orders using bot-specific method
+                    $existingOrders = method_exists($reg, 'getOpenForBot')
+                        ? $reg->getOpenForBot($bot->id, $symbol)
+                        : $reg->getOpen($symbol);
+
+                    // ✅ Only adjust grid if price moved significantly outside current grid range
+                    if (!empty($existingOrders)) {
+                        $currentPrice = (int) ($plan['current_price'] ?? 0);
+                        $prices = array_column($existingOrders, 'price');
+                        $minPrice = min($prices);
+                        $maxPrice = max($prices);
+
+                        // Calculate grid range
+                        $gridRange = $maxPrice - $minPrice;
+                        $threshold = $gridRange * 0.5;  // 50% of grid range
+
+                        // Check if current price is still within acceptable range
+                        $distanceFromTop = $maxPrice - $currentPrice;
+                        $distanceFromBottom = $currentPrice - $minPrice;
+
+                        if ($distanceFromTop > -$threshold && $distanceFromBottom > -$threshold) {
+                            Log::channel('trading')->info('AdjustGridJob: Price still within grid range, skipping adjustment', [
+                                'bot_id' => $bot->id,
+                                'current_price' => $currentPrice,
+                                'grid_min' => $minPrice,
+                                'grid_max' => $maxPrice,
+                                'threshold' => $threshold
+                            ]);
+                            continue;
+                        }
+
+                        Log::channel('trading')->info('AdjustGridJob: Price moved outside grid range, proceeding with adjustment', [
                             'bot_id' => $bot->id,
-                            'message' => 'OrderRegistry::getOpenForBot not implemented - orders not scoped to bot_id!'
+                            'current_price' => $currentPrice,
+                            'grid_min' => $minPrice,
+                            'grid_max' => $maxPrice,
+                            'distance_from_top' => $distanceFromTop,
+                            'distance_from_bottom' => $distanceFromBottom
                         ]);
                     }
+
+                    // 2) Use the orders we already fetched above for price check
+                    $existing = $existingOrders;
 
                     // 3) Calculate diff
                     $diff = $sync->diff($plan, $existing, 1, 3.0);
