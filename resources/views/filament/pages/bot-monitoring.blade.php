@@ -31,6 +31,21 @@
         .pulse-slow {
             animation: pulse-slow 3s ease-in-out infinite;
         }
+
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.1);
+            border-radius: 3px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: rgba(59, 130, 246, 0.5);
+            border-radius: 3px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: rgba(59, 130, 246, 0.7);
+        }
     </style>
 
     <div x-data="botMonitoring()" x-init="init()" class="min-h-screen">
@@ -216,6 +231,110 @@
                             </div>
                         </div>
 
+                        <!-- Activity Timeline -->
+                        <div class="glass-card rounded-xl p-6">
+                            <div class="flex items-center justify-between mb-6">
+                                <div class="flex items-center gap-2">
+                                    <span class="text-2xl">📋</span>
+                                    <h3 class="text-lg font-bold text-white">گزارش فعالیت‌ها</h3>
+                                </div>
+                                <div class="text-xs text-gray-500">آخرین 100 گزارش</div>
+                            </div>
+
+                            <!-- No logs message -->
+                            <div x-show="!bot.activity_logs || bot.activity_logs.length === 0" class="text-center py-12">
+                                <div class="text-6xl mb-4">📝</div>
+                                <div class="text-gray-400 mb-2">هنوز فعالیتی ثبت نشده</div>
+                                <div class="text-xs text-gray-600">لاگ‌ها پس از اجرای اولین بررسی نمایش داده می‌شوند</div>
+                            </div>
+
+                            <!-- Activity logs -->
+                            <div x-show="bot.activity_logs && bot.activity_logs.length > 0" class="space-y-2 max-h-96 overflow-y-auto custom-scrollbar">
+                                <template x-for="log in bot.activity_logs" :key="log.id">
+                                    <div class="flex items-start gap-3 p-3 glass-card rounded-lg hover:bg-gray-800/50 transition-colors" x-data="{expanded: false}">
+                                        <!-- Icon based on action_type -->
+                                        <div class="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 text-lg"
+                                            :class="{
+                                                'bg-blue-500/20': log.action_type.includes('CHECK'),
+                                                'bg-green-500/20': log.level === 'SUCCESS',
+                                                'bg-yellow-500/20': log.action_type.includes('API'),
+                                                'bg-red-500/20': log.level === 'ERROR',
+                                                'bg-purple-500/20': log.action_type.includes('PRICE')
+                                            }">
+                                            <span x-text="{
+                                                'CHECK_TRADES_START': '🔍',
+                                                'CHECK_TRADES_END': '✅',
+                                                'API_CALL': '📡',
+                                                'ORDER_PLACED': '📝',
+                                                'ORDER_FILLED': '🎯',
+                                                'PRICE_CHECK': '📊',
+                                                'GRID_ADJUST': '🔧',
+                                                'ERROR': '❌'
+                                            }[log.action_type] || '📌'"></span>
+                                        </div>
+
+                                        <!-- Content -->
+                                        <div class="flex-1 min-w-0">
+                                            <div class="flex items-start justify-between gap-2">
+                                                <div class="flex-1">
+                                                    <div class="text-sm text-white break-words" x-text="log.message"></div>
+
+                                                    <!-- Execution time for API calls -->
+                                                    <template x-if="log.action_type === 'API_CALL' && log.execution_time">
+                                                        <div class="text-xs text-gray-400 mt-1">
+                                                            <span>زمان پاسخ: </span>
+                                                            <span class="text-green-400 en-font" x-text="log.execution_time + 'ms'"></span>
+                                                        </div>
+                                                    </template>
+
+                                                    <!-- Price check details -->
+                                                    <template x-if="log.action_type === 'PRICE_CHECK' && log.details">
+                                                        <div class="text-xs text-gray-400 mt-1">
+                                                            <span x-show="log.details.current_price">
+                                                                قیمت فعلی: <span class="text-yellow-400 en-font" x-text="formatPrice(log.details.current_price)"></span>
+                                                            </span>
+                                                            <span x-show="log.details.waiting_for" class="mr-2 text-blue-400" x-text="log.details.waiting_for"></span>
+                                                        </div>
+                                                    </template>
+
+                                                    <!-- Trade completed details -->
+                                                    <template x-if="log.details && log.details.profit">
+                                                        <div class="text-xs text-green-400 mt-1 en-font">
+                                                            <span>سود: </span>
+                                                            <span x-text="formatPrice(log.details.profit) + ' تومان'"></span>
+                                                        </div>
+                                                    </template>
+
+                                                    <!-- Expandable API details -->
+                                                    <div x-show="log.api_response">
+                                                        <button @click="expanded = !expanded"
+                                                            class="text-xs text-blue-400 hover:text-blue-300 mt-1 flex items-center gap-1">
+                                                            <span x-text="expanded ? '▼' : '▶'"></span>
+                                                            <span>جزئیات API</span>
+                                                        </button>
+                                                        <div x-show="expanded" x-collapse class="mt-2 p-2 bg-gray-900/50 rounded text-xs overflow-auto">
+                                                            <pre class="text-gray-400 en-font text-xs" x-text="JSON.stringify(log.api_response, null, 2)"></pre>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div class="text-xs text-gray-500 en-font flex-shrink-0"
+                                                    x-text="formatTimeAgo(log.created_at)"></div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+
+                            <!-- Auto-refresh indicator -->
+                            <div class="mt-4 flex items-center justify-between text-xs text-gray-500">
+                                <span>به‌روزرسانی خودکار هر 30 ثانیه</span>
+                                <div class="flex items-center gap-1">
+                                    <div class="w-1 h-1 bg-green-500 rounded-full animate-ping"></div>
+                                    <span>زنده</span>
+                                </div>
+                            </div>
+                        </div>
+
                     </div>
                 </template>
             </div>
@@ -254,6 +373,36 @@
                     if (minutes < 60) return Math.round(minutes) + ' دقیقه';
                     if (minutes < 1440) return (minutes / 60).toFixed(1) + ' ساعت';
                     return (minutes / 1440).toFixed(1) + ' روز';
+                },
+
+                formatPrice(price) {
+                    if (!price) return '0';
+                    const priceInt = parseInt(price);
+
+                    if (priceInt >= 10000000) {
+                        return (priceInt / 10000000).toFixed(1) + 'M';
+                    }
+
+                    return priceInt.toLocaleString('en-US');
+                },
+
+                formatTimeAgo(dateString) {
+                    const date = new Date(dateString);
+                    const now = new Date();
+                    const seconds = Math.floor((now - date) / 1000);
+
+                    if (seconds < 60) return 'چند لحظه پیش';
+                    if (seconds < 3600) return Math.floor(seconds / 60) + ' دقیقه پیش';
+                    if (seconds < 86400) return Math.floor(seconds / 3600) + ' ساعت پیش';
+                    if (seconds < 604800) return Math.floor(seconds / 86400) + ' روز پیش';
+
+                    return date.toLocaleDateString('fa-IR', {
+                        year: 'numeric',
+                        month: 'short',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                    });
                 }
             }
         }

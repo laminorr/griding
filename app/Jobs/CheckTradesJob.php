@@ -7,6 +7,7 @@ use App\Models\GridOrder;
 use App\Models\CompletedTrade;
 use App\Services\NobitexService;
 use App\Services\TradingEngineService;
+use App\Services\BotActivityLogger;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -64,7 +65,11 @@ class CheckTradesJob implements ShouldQueue
      */
     private function processBot(BotConfig $bot)
     {
-        // ✅ ADD: Log at very start
+        $startTime = microtime(true);
+        $logger = app(BotActivityLogger::class);
+
+        // Log start of check
+        $logger->logCheckTradesStart($bot->id);
         Log::info("CheckTradesJob: [START] Processing bot {$bot->name} (ID: {$bot->id})");
 
         try {
@@ -95,6 +100,12 @@ class CheckTradesJob implements ShouldQueue
             // ✅ ADD: Log before update
             Log::info("CheckTradesJob: [BEFORE UPDATE] Bot {$bot->name}");
         } catch (\Exception $e) {
+            // Log error
+            $logger->logError($bot->id, 'خطا در بررسی سفارشات: ' . $e->getMessage(), [
+                'exception' => get_class($e),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
             Log::error("CheckTradesJob: [CATCH] Error for bot {$bot->name}: " . $e->getMessage());
             Log::error($e->getTraceAsString());
             // Don't rethrow - let finally block run
@@ -110,6 +121,10 @@ class CheckTradesJob implements ShouldQueue
                     ->update(['last_check_at' => $timestamp]);
 
                 Log::info("CheckTradesJob: [SUCCESS] Bot {$bot->name} timestamp updated (affected: {$affected}) to: {$timestamp}");
+
+                // Log end of check with execution time
+                $executionTime = (int) ((microtime(true) - $startTime) * 1000);
+                $logger->logCheckTradesEnd($bot->id, $executionTime);
             } catch (\Exception $e) {
                 Log::error("CheckTradesJob: [FINALLY ERROR] Failed to update timestamp: " . $e->getMessage());
                 Log::error($e->getTraceAsString());
@@ -250,6 +265,7 @@ class CheckTradesJob implements ShouldQueue
     private function handleFilledOrder(GridOrder $order, $statusDto, BotConfig $bot): void
     {
         DB::beginTransaction();
+        $logger = app(BotActivityLogger::class);
 
         try {
             // به‌روزرسانی وضعیت سفارش به filled
@@ -260,6 +276,9 @@ class CheckTradesJob implements ShouldQueue
             ]);
 
             Log::info("CheckTradesJob: Order {$order->id} marked as filled - Price: {$order->price}, Amount: {$order->amount}, Type: {$order->type}");
+
+            // Log order filled
+            $logger->logOrderFilled($bot->id, $order);
 
             // ایجاد رکورد CompletedTrade (اگر سفارش جفتی دارد)
             $this->createCompletedTradeIfPaired($order, $bot);
@@ -390,6 +409,7 @@ class CheckTradesJob implements ShouldQueue
     private function createPairOrder(GridOrder $filledOrder, BotConfig $bot): void
     {
         DB::beginTransaction();
+        $logger = app(BotActivityLogger::class);
 
         try {
             // اگر سفارش خرید بود، سفارش فروش بساز و برعکس
@@ -418,12 +438,14 @@ class CheckTradesJob implements ShouldQueue
             $symbol = $bot->symbol ?? 'BTCIRT';
 
             // ثبت سفارش در نوبیتکس
+            $startTime = microtime(true);
             $apiResponse = $nobitexService->placeOrder(
                 $symbol,
                 $newType,
                 $newPrice,
                 (string) $filledOrder->amount
             );
+            $executionTime = (int) ((microtime(true) - $startTime) * 1000);
 
             // بررسی موفقیت‌آمیز بودن ثبت سفارش
             if (($apiResponse['status'] ?? null) !== 'ok') {
@@ -469,10 +491,27 @@ class CheckTradesJob implements ShouldQueue
 
             Log::info("CheckTradesJob: Successfully created pair order {$newOrder->id} (Nobitex ID: {$nobitexOrderId}) - Type: {$newType}, Price: {$newPrice} for filled order {$filledOrder->id}");
 
+            // Log API call and order placement
+            $logger->logApiCall($bot->id, '/market/orders/add', null, $apiResponse, $executionTime);
+            $logger->logOrderPlaced($bot->id, [
+                'order_id' => $newOrder->id,
+                'type' => $newType,
+                'price' => $newPrice,
+                'amount' => $filledOrder->amount,
+                'nobitex_order_id' => $nobitexOrderId,
+            ]);
+
             DB::commit();
 
         } catch (\Exception $e) {
             DB::rollBack();
+
+            // Log error
+            $logger->logError($bot->id, 'خطا در ایجاد سفارش جفت: ' . $e->getMessage(), [
+                'filled_order_id' => $filledOrder->id,
+                'exception' => get_class($e),
+            ]);
+
             Log::error("CheckTradesJob: Failed to create pair order for filled order {$filledOrder->id}: " . $e->getMessage());
             Log::error($e->getTraceAsString());
 
@@ -486,6 +525,8 @@ class CheckTradesJob implements ShouldQueue
      */
     private function recordCompletedTrade(GridOrder $buyOrder, GridOrder $sellOrder, BotConfig $bot)
     {
+        $logger = app(BotActivityLogger::class);
+
         $buyPrice = $buyOrder->price;
         $sellPrice = $sellOrder->price;
         $amount = $buyOrder->amount;
@@ -508,6 +549,18 @@ class CheckTradesJob implements ShouldQueue
         ]);
 
         Log::info("Recorded completed trade {$trade->id}: Buy at {$buyPrice}, Sell at {$sellPrice}, Profit: {$netProfit}");
+
+        // Log completed trade
+        $logger->logTradeCompleted($bot->id, [
+            'trade_id' => $trade->id,
+            'buy_order_id' => $buyOrder->id,
+            'sell_order_id' => $sellOrder->id,
+            'buy_price' => $buyPrice,
+            'sell_price' => $sellPrice,
+            'amount' => $amount,
+            'profit' => $netProfit,
+            'fee' => $totalFee,
+        ]);
     }
 
     /**
