@@ -145,6 +145,8 @@ class CheckTradesJob implements ShouldQueue
     private function checkOrdersStatus($orders, BotConfig $bot): void
     {
         try {
+            $logger = app(BotActivityLogger::class);
+
             // دریافت NobitexService از service container
             /** @var NobitexService $nobitexService */
             $nobitexService = app(NobitexService::class);
@@ -160,7 +162,13 @@ class CheckTradesJob implements ShouldQueue
             Log::info("CheckTradesJob: Checking status for " . count($orderIds) . " orders from Nobitex API");
 
             // دریافت وضعیت سفارشات از نوبیتکس (batch request برای بهینه‌سازی)
+            $apiStart = microtime(true);
             $statusDtos = $nobitexService->getOrdersStatus($orderIds);
+            $apiTime = (int) ((microtime(true) - $apiStart) * 1000);
+
+            // Log API call and orders received
+            $logger->logApiCall($bot->id, 'orders/status', ['order_ids' => $orderIds], ['orders' => $statusDtos], $apiTime);
+            $logger->logOrdersReceived($bot->id, count($statusDtos));
 
             // ایجاد نقشه برای دسترسی سریع به DTOها
             $statusMap = collect($statusDtos)->keyBy('orderId');
@@ -364,12 +372,19 @@ class CheckTradesJob implements ShouldQueue
                 ->first();
 
             if ($buyOrder) {
+                // محاسبه سود
+                $profit = ($order->price - $buyOrder->price) * $buyOrder->amount;
+
                 // ایجاد CompletedTrade
                 $this->recordCompletedTrade($buyOrder, $order, $bot);
 
                 // مارک کردن این دو سفارش به عنوان paired
                 $buyOrder->update(['paired_order_id' => $order->id]);
                 $order->update(['paired_order_id' => $buyOrder->id]);
+
+                // Log pairing
+                $logger = app(BotActivityLogger::class);
+                $logger->logOrderPaired($bot->id, $buyOrder->id, $order->id, $profit);
 
                 Log::info("CheckTradesJob: Created completed trade for buy order {$buyOrder->id} and sell order {$order->id}");
             }
@@ -384,12 +399,19 @@ class CheckTradesJob implements ShouldQueue
                 ->first();
 
             if ($sellOrder) {
+                // محاسبه سود
+                $profit = ($sellOrder->price - $order->price) * $order->amount;
+
                 // ایجاد CompletedTrade
                 $this->recordCompletedTrade($order, $sellOrder, $bot);
 
                 // مارک کردن این دو سفارش به عنوان paired
                 $order->update(['paired_order_id' => $sellOrder->id]);
                 $sellOrder->update(['paired_order_id' => $order->id]);
+
+                // Log pairing
+                $logger = app(BotActivityLogger::class);
+                $logger->logOrderPaired($bot->id, $order->id, $sellOrder->id, $profit);
 
                 Log::info("CheckTradesJob: Created completed trade for buy order {$order->id} and sell order {$sellOrder->id}");
             }
