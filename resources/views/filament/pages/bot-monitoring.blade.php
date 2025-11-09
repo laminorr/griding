@@ -231,8 +231,7 @@
                             </div>
                         </div>
 
-                        <!-- Activity Timeline - Temporarily disabled until bot_activity_logs table is created -->
-                        <!--
+                        <!-- Activity Timeline -->
                         <div class="glass-card rounded-xl p-6">
                             <div class="flex items-center justify-between mb-6">
                                 <div class="flex items-center gap-2">
@@ -326,7 +325,6 @@
                                 </div>
                             </div>
                         </div>
-                        -->
 
                     </div>
                 </template>
