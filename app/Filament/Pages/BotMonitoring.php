@@ -5,6 +5,7 @@ namespace App\Filament\Pages;
 use App\Models\BotConfig;
 use App\Models\GridOrder;
 use App\Models\CompletedTrade;
+use App\Models\BotActivityLog;
 use Filament\Pages\Page;
 use Illuminate\Support\Facades\DB;
 
@@ -104,6 +105,24 @@ class BotMonitoring extends Page
                 ? (($profit24h - $profitPrevious24h) / $profitPrevious24h) * 100
                 : 0;
 
+            // Get latest activity logs
+            $activityLogs = BotActivityLog::where('bot_config_id', $bot->id)
+                ->orderBy('created_at', 'desc')
+                ->limit(100)
+                ->get()
+                ->map(fn($log) => [
+                    'id' => $log->id,
+                    'action_type' => $log->action_type,
+                    'level' => $log->level,
+                    'message' => $log->message,
+                    'details' => $log->details,
+                    'api_request' => $log->api_request,
+                    'api_response' => $log->api_response,
+                    'execution_time' => $log->execution_time,
+                    'created_at' => $log->created_at->toIso8601String(),
+                    'time_ago' => $log->created_at->diffForHumans(),
+                ]);
+
             $data[] = [
                 'id' => $bot->id,
                 'name' => $bot->name,
@@ -132,6 +151,9 @@ class BotMonitoring extends Page
                 'fill_distribution' => $fillDistribution,
                 'avg_cycle_duration' => round($avgCycleDuration, 1),
                 'total_cycles' => count($cycleDurations),
+
+                // Activity logs
+                'activity_logs' => $activityLogs,
             ];
         }
 
