@@ -109,23 +109,23 @@ class BotMonitoring extends Page
             try {
                 $activityLogs = BotActivityLog::where('bot_config_id', $bot->id)
                     ->orderBy('created_at', 'desc')
-                    ->limit(100)
-                    ->get()
-                    ->map(fn($log) => [
-                        'id' => $log->id,
-                        'action_type' => $log->action_type,
-                        'level' => $log->level,
-                        'message' => $log->message,
-                        'details' => $log->details,
-                        'api_request' => $log->api_request,
-                        'api_response' => $log->api_response,
-                        'execution_time' => $log->execution_time,
-                        'created_at' => $log->created_at->toIso8601String(),
-                        'time_ago' => $log->created_at->diffForHumans(),
-                    ]);
+                    ->limit(150)
+                    ->get();
+
+                // Group logs into cycles and calculate statistics
+                $cycleData = $this->groupLogsToCycles($activityLogs);
             } catch (\Exception $e) {
-                // Table doesn't exist yet - return empty array
-                $activityLogs = collect([]);
+                // Table doesn't exist yet - return empty data
+                $cycleData = [
+                    'cycles' => [],
+                    'summary' => [
+                        'last_cycle_status' => null,
+                        'avg_cycle_duration' => 0,
+                        'avg_api_latency' => 0,
+                        'cycles_count_24h' => 0,
+                        'error_count_24h' => 0,
+                    ],
+                ];
             }
 
             $data[] = [
@@ -157,11 +157,246 @@ class BotMonitoring extends Page
                 'avg_cycle_duration' => round($avgCycleDuration, 1),
                 'total_cycles' => count($cycleDurations),
 
-                // Activity logs
-                'activity_logs' => $activityLogs,
+                // Activity logs - new cycle-based structure
+                'activity_cycles' => $cycleData['cycles'],
+                'activity_summary' => $cycleData['summary'],
             ];
         }
 
         return $data;
+    }
+
+    /**
+     * Group activity logs into cycles (CHECK_TRADES_START to CHECK_TRADES_END)
+     * and calculate summary statistics.
+     */
+    private function groupLogsToCycles($logs)
+    {
+        if ($logs->isEmpty()) {
+            return [
+                'cycles' => [],
+                'summary' => [
+                    'last_cycle_status' => null,
+                    'avg_cycle_duration' => 0,
+                    'avg_api_latency' => 0,
+                    'cycles_count_24h' => 0,
+                    'error_count_24h' => 0,
+                ],
+            ];
+        }
+
+        // Reverse to process chronologically (oldest first)
+        $logsArray = $logs->reverse()->values();
+        $cycles = [];
+        $currentCycle = null;
+        $ungroupedEvents = [];
+
+        foreach ($logsArray as $log) {
+            $event = [
+                'id' => $log->id,
+                'type' => $log->action_type,
+                'level' => $log->level,
+                'message' => $log->message,
+                'time' => $log->created_at,
+                'time_iso' => $log->created_at->toIso8601String(),
+                'details' => $log->details,
+                'api_request' => $log->api_request,
+                'api_response' => $log->api_response,
+                'execution_time' => $log->execution_time,
+            ];
+
+            if ($log->action_type === 'CHECK_TRADES_START') {
+                // Start a new cycle
+                if ($currentCycle !== null) {
+                    // Close previous unclosed cycle as incomplete
+                    $cycles[] = $this->finalizeCycle($currentCycle);
+                }
+
+                $currentCycle = [
+                    'id' => 'cycle-' . $log->id,
+                    'started_at' => $log->created_at,
+                    'started_at_iso' => $log->created_at->toIso8601String(),
+                    'ended_at' => null,
+                    'ended_at_iso' => null,
+                    'duration_ms' => null,
+                    'status' => 'in_progress',
+                    'summary' => [
+                        'orders_active' => 0,
+                        'api_calls' => 0,
+                        'errors' => 0,
+                        'orders_filled' => 0,
+                        'trades_completed' => 0,
+                    ],
+                    'events' => [$event],
+                ];
+            } elseif ($log->action_type === 'CHECK_TRADES_END' && $currentCycle !== null) {
+                // Close the current cycle
+                $currentCycle['ended_at'] = $log->created_at;
+                $currentCycle['ended_at_iso'] = $log->created_at->toIso8601String();
+                $currentCycle['duration_ms'] = $currentCycle['started_at']->diffInMilliseconds($log->created_at);
+                $currentCycle['events'][] = $event;
+
+                $cycles[] = $this->finalizeCycle($currentCycle);
+                $currentCycle = null;
+            } else {
+                // Add event to current cycle or ungrouped
+                if ($currentCycle !== null) {
+                    $currentCycle['events'][] = $event;
+
+                    // Update summary based on event type
+                    if ($log->action_type === 'API_CALL') {
+                        $currentCycle['summary']['api_calls']++;
+                    } elseif ($log->action_type === 'ORDERS_RECEIVED') {
+                        // Extract order count from message or details
+                        if (preg_match('/(\d+)\s*سفارش/', $log->message, $matches)) {
+                            $currentCycle['summary']['orders_active'] = (int)$matches[1];
+                        }
+                    } elseif ($log->action_type === 'ORDER_FILLED') {
+                        $currentCycle['summary']['orders_filled']++;
+                    } elseif ($log->action_type === 'TRADE_COMPLETED') {
+                        $currentCycle['summary']['trades_completed']++;
+                    } elseif ($log->level === 'ERROR') {
+                        $currentCycle['summary']['errors']++;
+                    }
+                } else {
+                    $ungroupedEvents[] = $event;
+                }
+            }
+        }
+
+        // If there's an unclosed cycle at the end, add it as in-progress
+        if ($currentCycle !== null) {
+            $cycles[] = $this->finalizeCycle($currentCycle);
+        }
+
+        // Add ungrouped events as a separate "cycle" at the end if any exist
+        if (!empty($ungroupedEvents)) {
+            $cycles[] = [
+                'id' => 'cycle-ungrouped',
+                'started_at' => $ungroupedEvents[0]['time'],
+                'started_at_iso' => $ungroupedEvents[0]['time_iso'],
+                'ended_at' => null,
+                'ended_at_iso' => null,
+                'duration_ms' => null,
+                'status' => 'ungrouped',
+                'summary' => [
+                    'orders_active' => 0,
+                    'api_calls' => 0,
+                    'errors' => 0,
+                    'orders_filled' => 0,
+                    'trades_completed' => 0,
+                ],
+                'events' => $ungroupedEvents,
+            ];
+        }
+
+        // Reverse cycles to show newest first
+        $cycles = array_reverse($cycles);
+
+        // Calculate summary statistics
+        $summary = $this->calculateSummaryStats($cycles);
+
+        return [
+            'cycles' => $cycles,
+            'summary' => $summary,
+        ];
+    }
+
+    /**
+     * Finalize a cycle by determining its status based on events.
+     */
+    private function finalizeCycle($cycle)
+    {
+        // Determine status
+        if ($cycle['summary']['errors'] > 0) {
+            $cycle['status'] = 'error';
+        } elseif ($cycle['ended_at'] === null) {
+            $cycle['status'] = 'in_progress';
+        } else {
+            // Check for slow API calls or long duration
+            $hasSlowApi = false;
+            foreach ($cycle['events'] as $event) {
+                if ($event['type'] === 'API_CALL' && $event['execution_time'] > 1000) {
+                    $hasSlowApi = true;
+                    break;
+                }
+            }
+
+            if ($hasSlowApi || ($cycle['duration_ms'] !== null && $cycle['duration_ms'] > 5000)) {
+                $cycle['status'] = 'warning';
+            } else {
+                $cycle['status'] = 'success';
+            }
+        }
+
+        return $cycle;
+    }
+
+    /**
+     * Calculate summary statistics across all cycles.
+     */
+    private function calculateSummaryStats($cycles)
+    {
+        if (empty($cycles)) {
+            return [
+                'last_cycle_status' => null,
+                'avg_cycle_duration' => 0,
+                'avg_api_latency' => 0,
+                'cycles_count_24h' => 0,
+                'error_count_24h' => 0,
+            ];
+        }
+
+        // Filter for valid cycles (not ungrouped, not in-progress)
+        $completedCycles = array_filter($cycles, fn($c) =>
+            $c['status'] !== 'ungrouped' &&
+            $c['status'] !== 'in_progress' &&
+            $c['duration_ms'] !== null
+        );
+
+        $cycles24h = array_filter($cycles, fn($c) =>
+            $c['started_at'] >= now()->subHours(24)
+        );
+
+        // Calculate average cycle duration
+        $avgDuration = 0;
+        if (!empty($completedCycles)) {
+            $totalDuration = array_sum(array_column($completedCycles, 'duration_ms'));
+            $avgDuration = $totalDuration / count($completedCycles);
+        }
+
+        // Calculate average API latency
+        $apiLatencies = [];
+        foreach ($cycles as $cycle) {
+            foreach ($cycle['events'] as $event) {
+                if ($event['type'] === 'API_CALL' && $event['execution_time'] !== null) {
+                    $apiLatencies[] = $event['execution_time'];
+                }
+            }
+        }
+        $avgApiLatency = !empty($apiLatencies) ? array_sum($apiLatencies) / count($apiLatencies) : 0;
+
+        // Count errors in last 24h
+        $errorCount = 0;
+        foreach ($cycles24h as $cycle) {
+            $errorCount += $cycle['summary']['errors'];
+        }
+
+        // Get last cycle status
+        $lastCycleStatus = null;
+        foreach ($cycles as $cycle) {
+            if ($cycle['status'] !== 'ungrouped') {
+                $lastCycleStatus = $cycle['status'];
+                break;
+            }
+        }
+
+        return [
+            'last_cycle_status' => $lastCycleStatus,
+            'avg_cycle_duration' => round($avgDuration, 1),
+            'avg_api_latency' => round($avgApiLatency, 1),
+            'cycles_count_24h' => count($cycles24h),
+            'error_count_24h' => $errorCount,
+        ];
     }
 }
