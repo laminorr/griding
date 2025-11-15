@@ -382,17 +382,21 @@ class BotMonitoring extends Page
             $errorCount += $cycle['summary']['errors'];
         }
 
-        // Get last cycle status
+        // Get last cycle status and time
         $lastCycleStatus = null;
+        $lastCycleTime = null;
         foreach ($cycles as $cycle) {
             if ($cycle['status'] !== 'ungrouped') {
                 $lastCycleStatus = $cycle['status'];
+                $lastCycleTime = $cycle['started_at'];
                 break;
             }
         }
 
         return [
             'last_cycle_status' => $lastCycleStatus,
+            'last_cycle_time' => $lastCycleTime,
+            'last_cycle_duration' => isset($cycles[0]) && $cycles[0]['duration_ms'] ? $cycles[0]['duration_ms'] : null,
             'avg_cycle_duration' => round($avgDuration, 1),
             'avg_api_latency' => round($avgApiLatency, 1),
             'cycles_count_24h' => count($cycles24h),
