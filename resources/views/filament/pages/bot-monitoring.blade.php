@@ -46,6 +46,105 @@
         .custom-scrollbar::-webkit-scrollbar-thumb:hover {
             background: rgba(59, 130, 246, 0.7);
         }
+
+        /* KPI Card Structure */
+        .kpi-card {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            transition: transform 150ms ease, box-shadow 150ms ease, border-color 150ms ease;
+        }
+
+        .kpi-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3), 0 2px 8px rgba(0, 0, 0, 0.2);
+        }
+
+        .kpi-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.5rem;
+        }
+
+        .kpi-main {
+            margin: 0.25rem 0;
+        }
+
+        .kpi-value {
+            font-size: 1.375rem;
+            font-weight: 700;
+            line-height: 1.2;
+        }
+
+        .kpi-sub-row {
+            display: flex;
+            align-items: flex-end;
+            justify-content: space-between;
+            gap: 0.75rem;
+            margin-top: auto;
+        }
+
+        .kpi-subtext {
+            font-size: 0.6875rem;
+            line-height: 1.3;
+            color: rgb(107, 114, 128);
+            flex-shrink: 0;
+        }
+
+        .kpi-sparkline {
+            height: 24px;
+            width: 60px;
+            flex-shrink: 0;
+            overflow: hidden;
+            opacity: 0.25;
+        }
+
+        /* Filter Chips - Refined */
+        .filter-chip {
+            height: 36px;
+            padding: 0 1rem;
+            border-radius: 0.75rem;
+            font-size: 0.8125rem;
+            font-weight: 600;
+            transition: transform 150ms ease, border-color 150ms ease, background-color 150ms ease;
+            white-space: nowrap;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.375rem;
+        }
+
+        .filter-chip:hover {
+            transform: translateY(-1px);
+        }
+
+        /* Cycle Card Hover */
+        .cycle-card-header {
+            transition: background-color 150ms ease, transform 150ms ease;
+        }
+
+        .cycle-card-header:hover {
+            background-color: rgba(31, 41, 55, 0.3);
+            transform: translateY(-1px);
+        }
+
+        /* KPI Strip Container */
+        .kpi-strip {
+            background: rgba(10, 15, 25, 0.5);
+            border-radius: 1.25rem;
+            padding: 1.25rem;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            margin-bottom: 1.5rem;
+        }
+
+        .kpi-strip-label {
+            font-size: 0.6875rem;
+            color: rgb(156, 163, 175);
+            margin-bottom: 1rem;
+            font-weight: 500;
+            letter-spacing: 0.025em;
+        }
     </style>
 
     <div x-data="botMonitoring()" x-init="init()" class="min-h-screen">
@@ -232,182 +331,176 @@
                         </div>
 
                         <!-- Activity Log - Apple-level Redesign -->
-                        <div class="glass-card rounded-3xl p-8 shadow-2xl border-white/5" x-data="activityLog()">
+                        <div class="glass-card rounded-2xl p-6 shadow-2xl border-white/5" x-data="activityLog()">
                             <!-- Header Section -->
-                            <div class="mb-10">
-                                <div class="flex items-center justify-between mb-3">
-                                    <div class="flex items-center gap-4">
-                                        <div class="w-14 h-14 bg-gradient-to-br from-blue-500/10 to-purple-500/10 rounded-2xl flex items-center justify-center border border-white/5 shadow-inner">
-                                            <span class="text-3xl">📊</span>
+                            <div class="mb-6">
+                                <div class="flex items-center justify-between mb-2">
+                                    <div class="flex items-center gap-3">
+                                        <div class="w-10 h-10 bg-gradient-to-br from-blue-500/10 to-purple-500/10 rounded-xl flex items-center justify-center border border-white/5">
+                                            <span class="text-2xl">📊</span>
                                         </div>
                                         <div>
-                                            <h3 class="text-2xl font-bold text-white mb-1">گزارش فعالیت‌ها</h3>
-                                            <p class="text-sm text-gray-400">۱۰۰ رویداد آخر · به‌روزرسانی خودکار هر ۳۰ ثانیه</p>
+                                            <h3 class="text-xl font-bold text-white mb-0.5">گزارش فعالیت‌ها</h3>
+                                            <p class="text-xs text-gray-400">۱۰۰ رویداد آخر · به‌روزرسانی خودکار هر ۳۰ ثانیه</p>
                                         </div>
                                     </div>
-                                    <div class="flex items-center gap-2 px-4 py-2 rounded-xl bg-green-500/10 border border-green-500/20">
-                                        <div class="w-2 h-2 bg-green-400 rounded-full pulse-slow shadow-lg shadow-green-500/50"></div>
+                                    <div class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-green-500/10 border border-green-500/20">
+                                        <div class="w-1.5 h-1.5 bg-green-400 rounded-full pulse-slow shadow-lg shadow-green-500/50"></div>
                                         <span class="text-xs font-medium text-green-400">زنده</span>
                                     </div>
                                 </div>
                             </div>
 
-                            <!-- KPI Strip - 4 Premium Cards -->
-                            <div x-show="bot.activity_summary && bot.activity_summary.last_cycle_status"
-                                class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
+                            <!-- KPI Strip - 4 Premium Cards with Clear Structure -->
+                            <div x-show="bot.activity_summary && bot.activity_summary.last_cycle_status" class="kpi-strip">
+                                <div class="kpi-strip-label">گزارش فعالیت‌ها · ۱۰۰ رویداد آخر · به‌روزرسانی خودکار هر ۳۰ ثانیه</div>
 
-                                <!-- Card 1: Last Cycle Status -->
-                                <div class="group relative overflow-hidden rounded-2xl bg-gradient-to-br from-gray-800/60 to-gray-900/60 p-6 border border-white/5 hover:border-white/10 transition-all duration-300 hover:scale-[1.02] hover:shadow-xl">
-                                    <div class="relative z-10">
-                                        <div class="flex items-center gap-2 mb-3">
-                                            <div class="w-8 h-8 rounded-xl flex items-center justify-center"
+                                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+
+                                    <!-- Card 1: Last Cycle Status -->
+                                    <div class="kpi-card group relative overflow-hidden rounded-xl bg-gradient-to-br from-gray-800/60 to-gray-900/60 p-4 border border-white/5 hover:border-white/10">
+                                        <div class="kpi-header">
+                                            <span class="text-xs font-medium text-gray-400">وضعیت آخرین چرخه</span>
+                                            <div class="px-2 py-0.5 rounded-md text-xs font-bold"
                                                 :class="{
-                                                    'bg-green-500/20': bot.activity_summary.last_cycle_status === 'success',
-                                                    'bg-yellow-500/20': bot.activity_summary.last_cycle_status === 'warning',
-                                                    'bg-red-500/20': bot.activity_summary.last_cycle_status === 'error',
-                                                    'bg-blue-500/20': bot.activity_summary.last_cycle_status === 'in_progress'
-                                                }">
-                                                <span class="text-lg" x-text="{
-                                                    'success': '✓',
-                                                    'warning': '⚠',
-                                                    'error': '✗',
-                                                    'in_progress': '⟳'
-                                                }[bot.activity_summary.last_cycle_status]"></span>
+                                                    'bg-green-500/20 text-green-400': bot.activity_summary.last_cycle_status === 'success',
+                                                    'bg-yellow-500/20 text-yellow-400': bot.activity_summary.last_cycle_status === 'warning',
+                                                    'bg-red-500/20 text-red-400': bot.activity_summary.last_cycle_status === 'error',
+                                                    'bg-blue-500/20 text-blue-400': bot.activity_summary.last_cycle_status === 'in_progress'
+                                                }"
+                                                x-text="{
+                                                    'success': '✓ موفق',
+                                                    'warning': '⚠ هشدار',
+                                                    'error': '✗ خطا',
+                                                    'in_progress': '⟳ در حال اجرا'
+                                                }[bot.activity_summary.last_cycle_status]"></div>
+                                        </div>
+
+                                        <div class="kpi-main">
+                                            <div class="kpi-value"
+                                                :class="{
+                                                    'text-green-400': bot.activity_summary.last_cycle_status === 'success',
+                                                    'text-yellow-400': bot.activity_summary.last_cycle_status === 'warning',
+                                                    'text-red-400': bot.activity_summary.last_cycle_status === 'error',
+                                                    'text-blue-400': bot.activity_summary.last_cycle_status === 'in_progress'
+                                                }"
+                                                x-text="{
+                                                    'success': 'موفق',
+                                                    'warning': 'هشدار',
+                                                    'error': 'ناموفق',
+                                                    'in_progress': 'در حال اجرا'
+                                                }[bot.activity_summary.last_cycle_status] || '-'"></div>
+                                        </div>
+
+                                        <div class="kpi-sub-row">
+                                            <span class="kpi-subtext" x-show="bot.activity_summary.last_cycle_time" x-text="formatTimeAgo(bot.activity_summary.last_cycle_time)"></span>
+                                        </div>
+                                    </div>
+
+                                    <!-- Card 2: Average Cycle Duration -->
+                                    <div class="kpi-card group relative overflow-hidden rounded-xl bg-gradient-to-br from-gray-800/60 to-gray-900/60 p-4 border border-white/5 hover:border-white/10">
+                                        <div class="kpi-header">
+                                            <span class="text-xs font-medium text-gray-400">میانگین زمان چرخه</span>
+                                            <div class="w-6 h-6 bg-blue-500/20 rounded-lg flex items-center justify-center">
+                                                <span class="text-sm">⚡</span>
                                             </div>
                                         </div>
-                                        <div class="text-xs font-medium text-gray-400 mb-2">وضعیت آخرین چرخه</div>
-                                        <div class="text-xl font-bold mb-1"
-                                            :class="{
-                                                'text-green-400': bot.activity_summary.last_cycle_status === 'success',
-                                                'text-yellow-400': bot.activity_summary.last_cycle_status === 'warning',
-                                                'text-red-400': bot.activity_summary.last_cycle_status === 'error',
-                                                'text-blue-400': bot.activity_summary.last_cycle_status === 'in_progress'
-                                            }"
-                                            x-text="{
-                                                'success': 'موفق',
-                                                'warning': 'هشدار',
-                                                'error': 'ناموفق',
-                                                'in_progress': 'در حال اجرا'
-                                            }[bot.activity_summary.last_cycle_status] || '-'"></div>
-                                        <div class="text-xs text-gray-500" x-show="bot.activity_summary.last_cycle_time" x-text="'بررسی ' + formatTimeAgo(bot.activity_summary.last_cycle_time)"></div>
-                                    </div>
-                                    <!-- Subtle background gradient -->
-                                    <div class="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300"
-                                        :class="{
-                                            'bg-gradient-to-br from-green-500/5 to-transparent': bot.activity_summary.last_cycle_status === 'success',
-                                            'bg-gradient-to-br from-yellow-500/5 to-transparent': bot.activity_summary.last_cycle_status === 'warning',
-                                            'bg-gradient-to-br from-red-500/5 to-transparent': bot.activity_summary.last_cycle_status === 'error',
-                                            'bg-gradient-to-br from-blue-500/5 to-transparent': bot.activity_summary.last_cycle_status === 'in_progress'
-                                        }"></div>
-                                </div>
 
-                                <!-- Card 2: Average Cycle Duration -->
-                                <div class="group relative overflow-hidden rounded-2xl bg-gradient-to-br from-gray-800/60 to-gray-900/60 p-6 border border-white/5 hover:border-white/10 transition-all duration-300 hover:scale-[1.02] hover:shadow-xl">
-                                    <div class="relative z-10">
-                                        <div class="flex items-center gap-2 mb-3">
-                                            <div class="w-8 h-8 bg-blue-500/20 rounded-xl flex items-center justify-center">
-                                                <span class="text-lg">⚡</span>
+                                        <div class="kpi-main">
+                                            <div class="kpi-value text-white en-font" x-text="formatCycleDuration(bot.activity_summary.avg_cycle_duration)"></div>
+                                        </div>
+
+                                        <div class="kpi-sub-row">
+                                            <span class="kpi-subtext">میانگین ۲۴ ساعت گذشته</span>
+                                            <div class="kpi-sparkline">
+                                                <svg class="w-full h-full" viewBox="0 0 100 50" preserveAspectRatio="none">
+                                                    <path d="M0,40 L20,35 L40,38 L60,30 L80,32 L100,28" fill="none" stroke="currentColor" stroke-width="2" class="text-blue-400"/>
+                                                </svg>
                                             </div>
                                         </div>
-                                        <div class="text-xs font-medium text-gray-400 mb-2">میانگین زمان چرخه</div>
-                                        <div class="text-xl font-bold text-white en-font mb-1">
-                                            <span x-text="formatCycleDuration(bot.activity_summary.avg_cycle_duration)"></span>
-                                        </div>
-                                        <div class="text-xs text-gray-500">میانگین ۲۴ ساعت گذشته</div>
                                     </div>
-                                    <!-- Mini sparkline indicator -->
-                                    <div class="absolute bottom-0 right-0 w-24 h-12 opacity-20">
-                                        <svg class="w-full h-full" viewBox="0 0 100 50" preserveAspectRatio="none">
-                                            <path d="M0,40 L20,35 L40,38 L60,30 L80,32 L100,28" fill="none" stroke="currentColor" stroke-width="2" class="text-blue-400"/>
-                                            <path d="M0,40 L20,35 L40,38 L60,30 L80,32 L100,28 L100,50 L0,50 Z" fill="url(#gradient-blue)" class="text-blue-400"/>
-                                        </svg>
-                                    </div>
-                                    <svg width="0" height="0">
-                                        <defs>
-                                            <linearGradient id="gradient-blue" x1="0%" y1="0%" x2="0%" y2="100%">
-                                                <stop offset="0%" style="stop-color:rgb(59, 130, 246);stop-opacity:0.3" />
-                                                <stop offset="100%" style="stop-color:rgb(59, 130, 246);stop-opacity:0" />
-                                            </linearGradient>
-                                        </defs>
-                                    </svg>
-                                </div>
 
-                                <!-- Card 3: Average API Response Time -->
-                                <div class="group relative overflow-hidden rounded-2xl bg-gradient-to-br from-gray-800/60 to-gray-900/60 p-6 border border-white/5 hover:border-white/10 transition-all duration-300 hover:scale-[1.02] hover:shadow-xl">
-                                    <div class="relative z-10">
-                                        <div class="flex items-center gap-2 mb-3">
-                                            <div class="w-8 h-8 rounded-xl flex items-center justify-center"
+                                    <!-- Card 3: Average API Response Time -->
+                                    <div class="kpi-card group relative overflow-hidden rounded-xl bg-gradient-to-br from-gray-800/60 to-gray-900/60 p-4 border border-white/5 hover:border-white/10">
+                                        <div class="kpi-header">
+                                            <span class="text-xs font-medium text-gray-400">میانگین پاسخ نوبیتکس</span>
+                                            <div class="w-6 h-6 rounded-lg flex items-center justify-center"
                                                 :class="bot.activity_summary.avg_api_latency > 1000 ? 'bg-yellow-500/20' : 'bg-green-500/20'">
-                                                <span class="text-lg">📡</span>
+                                                <span class="text-sm">📡</span>
                                             </div>
                                         </div>
-                                        <div class="text-xs font-medium text-gray-400 mb-2">میانگین پاسخ نوبیتکس</div>
-                                        <div class="text-xl font-bold en-font mb-1"
-                                            :class="bot.activity_summary.avg_api_latency > 1000 ? 'text-yellow-400' : 'text-green-400'">
-                                            <span x-text="bot.activity_summary.avg_api_latency.toFixed(0) + 'ms'"></span>
-                                        </div>
-                                        <div class="text-xs text-gray-500">براساس فراخوانی‌های API</div>
-                                    </div>
-                                    <!-- Mini sparkline -->
-                                    <div class="absolute bottom-0 right-0 w-24 h-12 opacity-20">
-                                        <svg class="w-full h-full" viewBox="0 0 100 50" preserveAspectRatio="none">
-                                            <path d="M0,35 L20,32 L40,36 L60,28 L80,30 L100,25" fill="none" stroke="currentColor" stroke-width="2"
-                                                :class="bot.activity_summary.avg_api_latency > 1000 ? 'text-yellow-400' : 'text-green-400'"/>
-                                        </svg>
-                                    </div>
-                                </div>
 
-                                <!-- Card 4: Cycles in Last 24h -->
-                                <div class="group relative overflow-hidden rounded-2xl bg-gradient-to-br from-gray-800/60 to-gray-900/60 p-6 border border-white/5 hover:border-white/10 transition-all duration-300 hover:scale-[1.02] hover:shadow-xl">
-                                    <div class="relative z-10">
-                                        <div class="flex items-center gap-2 mb-3">
-                                            <div class="w-8 h-8 bg-purple-500/20 rounded-xl flex items-center justify-center">
-                                                <span class="text-lg">🔄</span>
+                                        <div class="kpi-main">
+                                            <div class="kpi-value en-font"
+                                                :class="bot.activity_summary.avg_api_latency > 1000 ? 'text-yellow-400' : 'text-green-400'"
+                                                x-text="bot.activity_summary.avg_api_latency.toFixed(0) + 'ms'"></div>
+                                        </div>
+
+                                        <div class="kpi-sub-row">
+                                            <span class="kpi-subtext">براساس فراخوانی‌های API</span>
+                                            <div class="kpi-sparkline">
+                                                <svg class="w-full h-full" viewBox="0 0 100 50" preserveAspectRatio="none">
+                                                    <path d="M0,35 L20,32 L40,36 L60,28 L80,30 L100,25" fill="none" stroke="currentColor" stroke-width="2"
+                                                        :class="bot.activity_summary.avg_api_latency > 1000 ? 'text-yellow-400' : 'text-green-400'"/>
+                                                </svg>
                                             </div>
                                         </div>
-                                        <div class="text-xs font-medium text-gray-400 mb-2">چرخه‌ها (۲۴ ساعت)</div>
-                                        <div class="text-xl font-bold text-white mb-1">
-                                            <span x-text="bot.activity_summary.cycles_count_24h"></span>
+                                    </div>
+
+                                    <!-- Card 4: Cycles in Last 24h -->
+                                    <div class="kpi-card group relative overflow-hidden rounded-xl bg-gradient-to-br from-gray-800/60 to-gray-900/60 p-4 border border-white/5 hover:border-white/10">
+                                        <div class="kpi-header">
+                                            <span class="text-xs font-medium text-gray-400">چرخه‌ها (۲۴ ساعت)</span>
+                                            <div class="w-6 h-6 bg-purple-500/20 rounded-lg flex items-center justify-center">
+                                                <span class="text-sm">🔄</span>
+                                            </div>
                                         </div>
-                                        <div class="text-xs text-gray-500">تعداد اجراهای CheckTradesJob</div>
+
+                                        <div class="kpi-main">
+                                            <div class="kpi-value text-white" x-text="bot.activity_summary.cycles_count_24h"></div>
+                                        </div>
+
+                                        <div class="kpi-sub-row">
+                                            <span class="kpi-subtext">تعداد اجراهای CheckTradesJob</span>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
 
                             <!-- Filter Bar - Refined Chips -->
-                            <div x-show="bot.activity_cycles && bot.activity_cycles.length > 0" class="mb-8">
-                                <div class="flex items-center gap-3 overflow-x-auto pb-2">
+                            <div x-show="bot.activity_cycles && bot.activity_cycles.length > 0" class="mb-6">
+                                <div class="flex items-center gap-2 overflow-x-auto pb-1">
                                     <button @click="activeFilter = 'all'"
-                                        class="px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 whitespace-nowrap"
+                                        class="filter-chip"
                                         :class="activeFilter === 'all'
-                                            ? 'bg-blue-500/20 text-blue-300 border-2 border-blue-500/40 shadow-lg shadow-blue-500/10'
+                                            ? 'bg-blue-500/20 text-blue-300 border-2 border-blue-500/40'
                                             : 'bg-gray-800/40 text-gray-400 border border-gray-700/40 hover:bg-gray-700/60 hover:border-gray-600/50'">
                                         همه لاگ‌ها
-                                        <span class="text-xs opacity-60 mr-1.5" x-text="'(' + bot.activity_cycles.length + ')'"></span>
+                                        <span class="text-xs opacity-60" x-text="'(' + bot.activity_cycles.length + ')'"></span>
                                     </button>
                                     <button @click="activeFilter = 'errors'"
-                                        class="px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 whitespace-nowrap"
+                                        class="filter-chip"
                                         :class="activeFilter === 'errors'
-                                            ? 'bg-red-500/20 text-red-300 border-2 border-red-500/40 shadow-lg shadow-red-500/10'
+                                            ? 'bg-red-500/20 text-red-300 border-2 border-red-500/40'
                                             : 'bg-gray-800/40 text-gray-400 border border-gray-700/40 hover:bg-gray-700/60 hover:border-gray-600/50'">
                                         فقط خطاها
-                                        <span class="text-xs opacity-60 mr-1.5" x-text="'(' + getErrorCyclesCount(bot.activity_cycles) + ')'"></span>
+                                        <span class="text-xs opacity-60" x-text="'(' + getErrorCyclesCount(bot.activity_cycles) + ')'"></span>
                                     </button>
                                     <button @click="activeFilter = 'api'"
-                                        class="px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 whitespace-nowrap"
+                                        class="filter-chip"
                                         :class="activeFilter === 'api'
-                                            ? 'bg-yellow-500/20 text-yellow-300 border-2 border-yellow-500/40 shadow-lg shadow-yellow-500/10'
+                                            ? 'bg-yellow-500/20 text-yellow-300 border-2 border-yellow-500/40'
                                             : 'bg-gray-800/40 text-gray-400 border border-gray-700/40 hover:bg-gray-700/60 hover:border-gray-600/50'">
                                         فراخوانی‌های API
-                                        <span class="text-xs opacity-60 mr-1.5" x-text="'(' + getApiCallsCount(bot.activity_cycles) + ')'"></span>
+                                        <span class="text-xs opacity-60" x-text="'(' + getApiCallsCount(bot.activity_cycles) + ')'"></span>
                                     </button>
                                     <button @click="activeFilter = 'cycles'"
-                                        class="px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 whitespace-nowrap"
+                                        class="filter-chip"
                                         :class="activeFilter === 'cycles'
-                                            ? 'bg-purple-500/20 text-purple-300 border-2 border-purple-500/40 shadow-lg shadow-purple-500/10'
+                                            ? 'bg-purple-500/20 text-purple-300 border-2 border-purple-500/40'
                                             : 'bg-gray-800/40 text-gray-400 border border-gray-700/40 hover:bg-gray-700/60 hover:border-gray-600/50'">
                                         چرخه‌ها
-                                        <span class="text-xs opacity-60 mr-1.5" x-text="'(' + bot.activity_cycles.filter(c => c.status !== 'ungrouped').length + ')'"></span>
+                                        <span class="text-xs opacity-60" x-text="'(' + bot.activity_cycles.filter(c => c.status !== 'ungrouped').length + ')'"></span>
                                     </button>
                                 </div>
                             </div>
@@ -423,46 +516,38 @@
 
                             <!-- Cycles List - Polished Timeline -->
                             <div x-show="bot.activity_cycles && bot.activity_cycles.length > 0"
-                                class="space-y-5 max-h-[700px] overflow-y-auto custom-scrollbar pr-2">
+                                class="space-y-3 max-h-[700px] overflow-y-auto custom-scrollbar pr-2">
                                 <template x-for="cycle in getFilteredCycles(bot.activity_cycles)" :key="cycle.id">
-                                    <div class="group relative bg-gradient-to-br from-gray-800/30 to-gray-900/30 rounded-2xl border border-white/5 overflow-hidden backdrop-blur-sm hover:border-white/10 transition-all duration-300 hover:shadow-2xl"
+                                    <div class="group relative bg-gradient-to-br from-gray-800/30 to-gray-900/30 rounded-xl border border-white/5 overflow-hidden backdrop-blur-sm hover:border-white/10 transition-all duration-300 hover:shadow-lg"
                                         x-data="{ expanded: false }">
 
                                         <!-- Cycle Header (Clickable) -->
-                                        <div @click="expanded = !expanded" class="p-6 cursor-pointer hover:bg-gray-800/20 transition-all duration-200">
+                                        <div @click="expanded = !expanded" class="cycle-card-header p-4 cursor-pointer">
                                             <div class="flex items-center justify-between gap-6">
                                                 <!-- Left: Status & Info -->
-                                                <div class="flex items-center gap-5 flex-1 min-w-0">
-                                                    <!-- Status Icon with Glow -->
-                                                    <div class="relative w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0 shadow-lg"
+                                                <div class="flex items-center gap-3 flex-1 min-w-0">
+                                                    <!-- Status Icon - Compact -->
+                                                    <div class="relative w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0"
                                                         :class="{
-                                                            'bg-green-500/15 shadow-green-500/20': cycle.status === 'success',
-                                                            'bg-yellow-500/15 shadow-yellow-500/20': cycle.status === 'warning',
-                                                            'bg-red-500/15 shadow-red-500/20': cycle.status === 'error',
-                                                            'bg-blue-500/15 shadow-blue-500/20': cycle.status === 'in_progress',
+                                                            'bg-green-500/15': cycle.status === 'success',
+                                                            'bg-yellow-500/15': cycle.status === 'warning',
+                                                            'bg-red-500/15': cycle.status === 'error',
+                                                            'bg-blue-500/15': cycle.status === 'in_progress',
                                                             'bg-gray-500/15': cycle.status === 'ungrouped'
                                                         }">
-                                                        <span class="text-2xl" x-text="{
+                                                        <span class="text-lg" x-text="{
                                                             'success': '✓',
                                                             'warning': '⚠',
                                                             'error': '✗',
                                                             'in_progress': '⟳',
                                                             'ungrouped': '•'
                                                         }[cycle.status]"></span>
-                                                        <!-- Glow ring on hover -->
-                                                        <div class="absolute inset-0 rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-300"
-                                                            :class="{
-                                                                'ring-2 ring-green-500/30': cycle.status === 'success',
-                                                                'ring-2 ring-yellow-500/30': cycle.status === 'warning',
-                                                                'ring-2 ring-red-500/30': cycle.status === 'error',
-                                                                'ring-2 ring-blue-500/30': cycle.status === 'in_progress'
-                                                            }"></div>
                                                     </div>
 
-                                                    <!-- Cycle Info -->
+                                                    <!-- Cycle Info - Compact -->
                                                     <div class="flex-1 min-w-0">
-                                                        <div class="flex items-center gap-3 mb-2">
-                                                            <span class="text-base font-bold"
+                                                        <div class="flex items-center gap-2 mb-1">
+                                                            <span class="text-sm font-bold"
                                                                 :class="{
                                                                     'text-green-400': cycle.status === 'success',
                                                                     'text-yellow-400': cycle.status === 'warning',
@@ -478,38 +563,25 @@
                                                                     'ungrouped': 'لاگ‌های متفرقه'
                                                                 }[cycle.status]"></span>
                                                         </div>
-                                                        <!-- Summary Pills Row -->
-                                                        <div class="flex items-center gap-3 flex-wrap">
-                                                            <div class="flex items-center gap-2 text-xs text-gray-400">
-                                                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                                                                </svg>
-                                                                <span x-text="formatTimeAgo(cycle.started_at_iso)"></span>
-                                                            </div>
-                                                            <span x-show="cycle.duration_ms" class="text-xs text-gray-600">•</span>
-                                                            <div x-show="cycle.duration_ms" class="px-2.5 py-1 rounded-lg bg-blue-500/10 border border-blue-500/20">
-                                                                <span class="text-xs font-medium text-blue-400 en-font" x-text="'زمان: ' + formatCycleDuration(cycle.duration_ms)"></span>
-                                                            </div>
-                                                            <span x-show="cycle.summary.orders_active > 0" class="text-xs text-gray-600">•</span>
-                                                            <div x-show="cycle.summary.orders_active > 0" class="px-2.5 py-1 rounded-lg bg-cyan-500/10 border border-cyan-500/20">
-                                                                <span class="text-xs font-medium text-cyan-400" x-text="cycle.summary.orders_active + ' سفارش فعال'"></span>
-                                                            </div>
-                                                            <span x-show="cycle.summary.api_calls > 0" class="text-xs text-gray-600">•</span>
-                                                            <div x-show="cycle.summary.api_calls > 0" class="px-2.5 py-1 rounded-lg bg-yellow-500/10 border border-yellow-500/20">
-                                                                <span class="text-xs font-medium text-yellow-400" x-text="cycle.summary.api_calls + ' فراخوانی API'"></span>
-                                                            </div>
-                                                            <span x-show="cycle.summary.errors > 0" class="text-xs text-gray-600">•</span>
-                                                            <div x-show="cycle.summary.errors > 0" class="px-2.5 py-1 rounded-lg bg-red-500/10 border border-red-500/20">
-                                                                <span class="text-xs font-medium text-red-400" x-text="cycle.summary.errors + ' خطا'"></span>
-                                                            </div>
+                                                        <!-- Summary Pills Row - Compact -->
+                                                        <div class="flex items-center gap-2 flex-wrap text-xs text-gray-400">
+                                                            <span x-text="formatTimeAgo(cycle.started_at_iso)"></span>
+                                                            <span x-show="cycle.duration_ms" class="text-gray-600">•</span>
+                                                            <span x-show="cycle.duration_ms" class="px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 en-font" x-text="formatCycleDuration(cycle.duration_ms)"></span>
+                                                            <span x-show="cycle.summary.orders_active > 0" class="text-gray-600">•</span>
+                                                            <span x-show="cycle.summary.orders_active > 0" class="px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-400" x-text="cycle.summary.orders_active + ' سفارش'"></span>
+                                                            <span x-show="cycle.summary.api_calls > 0" class="text-gray-600">•</span>
+                                                            <span x-show="cycle.summary.api_calls > 0" class="px-1.5 py-0.5 rounded bg-yellow-500/10 text-yellow-400" x-text="cycle.summary.api_calls + ' API'"></span>
+                                                            <span x-show="cycle.summary.errors > 0" class="text-gray-600">•</span>
+                                                            <span x-show="cycle.summary.errors > 0" class="px-1.5 py-0.5 rounded bg-red-500/10 text-red-400" x-text="cycle.summary.errors + ' خطا'"></span>
                                                         </div>
                                                     </div>
                                                 </div>
 
                                                 <!-- Right: Status Badge + Expand Icon -->
-                                                <div class="flex items-center gap-4 flex-shrink-0">
-                                                    <!-- Status Pill -->
-                                                    <div class="px-4 py-2 rounded-xl border font-semibold text-sm whitespace-nowrap"
+                                                <div class="flex items-center gap-3 flex-shrink-0">
+                                                    <!-- Status Pill - Compact -->
+                                                    <div class="px-3 py-1 rounded-lg border text-xs font-semibold whitespace-nowrap"
                                                         :class="{
                                                             'bg-green-500/15 border-green-500/30 text-green-400': cycle.status === 'success',
                                                             'bg-yellow-500/15 border-yellow-500/30 text-yellow-400': cycle.status === 'warning',
@@ -518,15 +590,15 @@
                                                             'bg-gray-500/15 border-gray-500/30 text-gray-400': cycle.status === 'ungrouped'
                                                         }"
                                                         x-text="{
-                                                            'success': 'موفق ✓',
+                                                            'success': 'موفق',
                                                             'warning': 'هشدار',
-                                                            'error': 'ناموفق ✗',
+                                                            'error': 'ناموفق',
                                                             'in_progress': 'در حال اجرا',
                                                             'ungrouped': 'متفرقه'
                                                         }[cycle.status]"></div>
-                                                    <!-- Expand Icon -->
-                                                    <div class="w-10 h-10 rounded-xl bg-gray-700/30 flex items-center justify-center group-hover:bg-gray-700/50 transition-all">
-                                                        <svg class="w-5 h-5 text-gray-400 transition-transform duration-300"
+                                                    <!-- Expand Icon - Compact -->
+                                                    <div class="w-8 h-8 rounded-lg bg-gray-700/30 flex items-center justify-center group-hover:bg-gray-700/50 transition-all">
+                                                        <svg class="w-4 h-4 text-gray-400 transition-transform duration-300"
                                                             :class="{ 'rotate-180': expanded }"
                                                             fill="none"
                                                             stroke="currentColor"
@@ -541,16 +613,16 @@
                                         <!-- Cycle Timeline (Expandable) -->
                                         <div x-show="expanded"
                                             x-collapse
-                                            class="px-8 pb-6 pt-2 border-t border-white/5 bg-black/10">
+                                            class="px-5 pb-4 pt-2 border-t border-white/5 bg-black/10">
 
                                             <!-- Timeline -->
-                                            <div class="space-y-4 mt-5">
+                                            <div class="space-y-3 mt-3">
                                                 <template x-for="(event, idx) in cycle.events" :key="event.id">
-                                                    <div class="flex gap-5" x-data="{ showApiDetails: false }">
+                                                    <div class="flex gap-4" x-data="{ showApiDetails: false }">
                                                         <!-- Timeline Line -->
                                                         <div class="flex flex-col items-center flex-shrink-0">
                                                             <!-- Icon -->
-                                                            <div class="w-10 h-10 rounded-xl flex items-center justify-center text-base shadow-lg backdrop-blur-sm"
+                                                            <div class="w-8 h-8 rounded-lg flex items-center justify-center text-sm shadow backdrop-blur-sm"
                                                                 :class="{
                                                                     'bg-blue-500/20 shadow-blue-500/10': event.type.includes('CHECK'),
                                                                     'bg-green-500/20 shadow-green-500/10': event.level === 'SUCCESS',
@@ -576,11 +648,11 @@
                                                             </div>
                                                             <!-- Connecting Line -->
                                                             <div x-show="idx < cycle.events.length - 1"
-                                                                class="w-0.5 h-10 bg-gradient-to-b from-gray-600/50 to-gray-700/20 mt-2 rounded-full"></div>
+                                                                class="w-0.5 h-8 bg-gradient-to-b from-gray-600/50 to-gray-700/20 mt-1.5 rounded-full"></div>
                                                         </div>
 
                                                         <!-- Event Content -->
-                                                        <div class="flex-1 min-w-0 pb-3">
+                                                        <div class="flex-1 min-w-0 pb-2">
                                                             <div class="flex items-start justify-between gap-4">
                                                                 <div class="flex-1 min-w-0">
                                                                     <!-- Type Badge -->
@@ -649,7 +721,7 @@
                                                                 </div>
 
                                                                 <!-- Timestamp -->
-                                                                <div class="flex-shrink-0 px-3 py-1.5 rounded-lg bg-gray-700/30 border border-gray-600/30">
+                                                                <div class="flex-shrink-0 px-2 py-1 rounded bg-gray-700/30">
                                                                     <div class="text-xs text-gray-400 en-font font-mono"
                                                                         x-text="new Date(event.time_iso).toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })"></div>
                                                                 </div>
