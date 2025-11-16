@@ -227,6 +227,74 @@
                                     <div class="text-xs text-gray-500">هزار تومان</div>
                                 </div>
                             </div>
+
+                            <!-- Debug Info Section (Collapsible) -->
+                            <div class="mt-6" x-data="{ debugOpen: false }">
+                                <button @click="debugOpen = !debugOpen" class="w-full glass-card rounded-lg p-4 hover:bg-gray-800/40 transition-all text-left">
+                                    <div class="flex items-center justify-between">
+                                        <div class="flex items-center gap-2">
+                                            <span class="text-yellow-400">🔍</span>
+                                            <span class="text-sm font-semibold text-yellow-400">اطلاعات Debug (برای بررسی)</span>
+                                        </div>
+                                        <svg class="w-5 h-5 text-gray-400 transition-transform" :class="{ 'rotate-180': debugOpen }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                                        </svg>
+                                    </div>
+                                </button>
+
+                                <div x-show="debugOpen" x-collapse class="mt-3 glass-card rounded-lg p-5">
+                                    <div class="grid grid-cols-2 gap-4 text-sm">
+                                        <div class="bg-gray-800/50 rounded-lg p-3">
+                                            <div class="text-xs text-gray-400 mb-1">تعداد کل Orders</div>
+                                            <div class="text-xl font-bold text-white" x-text="bot.debug.total_orders"></div>
+                                        </div>
+                                        <div class="bg-gray-800/50 rounded-lg p-3">
+                                            <div class="text-xs text-gray-400 mb-1">Orders با status=active/placed</div>
+                                            <div class="text-xl font-bold text-white" x-text="bot.debug.total_with_status_active"></div>
+                                        </div>
+                                        <div class="bg-gray-800/50 rounded-lg p-3">
+                                            <div class="text-xs text-gray-400 mb-1">Orders که fill نشده (filled_at=null)</div>
+                                            <div class="text-xl font-bold text-white" x-text="bot.debug.total_not_executed"></div>
+                                        </div>
+                                        <div class="bg-gray-800/50 rounded-lg p-3">
+                                            <div class="text-xs text-gray-400 mb-1">Orders که pair نشده (paired_order_id=null)</div>
+                                            <div class="text-xl font-bold text-white" x-text="bot.debug.total_not_paired"></div>
+                                        </div>
+                                        <div class="bg-gray-800/50 rounded-lg p-3">
+                                            <div class="text-xs text-gray-400 mb-1">Orders که fill شده (status=filled)</div>
+                                            <div class="text-xl font-bold text-white" x-text="bot.debug.total_filled"></div>
+                                        </div>
+                                        <div class="bg-green-900/30 border border-green-500/30 rounded-lg p-3">
+                                            <div class="text-xs text-green-400 mb-1">کل Completed Trades</div>
+                                            <div class="text-xl font-bold text-green-400" x-text="bot.debug.completed_trades_total"></div>
+                                        </div>
+                                        <div class="bg-green-900/30 border border-green-500/30 rounded-lg p-3">
+                                            <div class="text-xs text-green-400 mb-1">Completed Trades (24h)</div>
+                                            <div class="text-xl font-bold text-green-400" x-text="bot.debug.completed_trades_24h_actual"></div>
+                                        </div>
+                                        <div class="bg-green-900/30 border border-green-500/30 rounded-lg p-3">
+                                            <div class="text-xs text-green-400 mb-1">سود کل (تومان)</div>
+                                            <div class="text-lg font-bold text-green-400 en-font" x-text="(bot.debug.profit_total / 1000).toFixed(0) + 'K'"></div>
+                                        </div>
+                                        <div class="bg-blue-900/30 border border-blue-500/30 rounded-lg p-3 col-span-2">
+                                            <div class="text-xs text-blue-400 mb-1">سود 24 ساعت (واقعی - تومان)</div>
+                                            <div class="text-2xl font-bold text-blue-400 en-font" x-text="(bot.debug.profit_24h_actual / 1000).toFixed(0) + 'K'"></div>
+                                        </div>
+                                    </div>
+
+                                    <div class="mt-4 p-3 bg-yellow-900/20 border border-yellow-500/30 rounded-lg">
+                                        <div class="flex items-start gap-2">
+                                            <span class="text-yellow-400">💡</span>
+                                            <div class="text-xs text-yellow-200">
+                                                <strong>توضیحات:</strong><br>
+                                                • سفارشات فعال = Orders با status=active/placed که filled_at=null و paired_order_id=null<br>
+                                                • معاملات تکمیل شده از جدول completed_trades خوانده می‌شود<br>
+                                                • اگر اعداد بالا با اعداد نمایش داده شده در کارت‌ها تفاوت دارند، ممکن است مشکلی در محاسبات باشد
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
 
                         <!-- Active Orders Grid Visualization -->

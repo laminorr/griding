@@ -28,10 +28,14 @@ class BotMonitoring extends Page
         $data = [];
 
         foreach ($bots as $bot) {
+            // Active orders: فقط سفارشاتی که واقعاً فعال هستند (هنوز fill نشده و pair نشده)
             $activeOrders = $bot->gridOrders()
                 ->whereIn('status', ['placed', 'active'])
+                ->whereNull('filled_at')        // هنوز fill نشده
+                ->whereNull('paired_order_id')  // هنوز pair نشده
                 ->get();
 
+            // Filled orders in last 24h
             $filledOrders = $bot->gridOrders()
                 ->where('status', 'filled')
                 ->where('filled_at', '>=', now()->subHours(24))
@@ -128,6 +132,19 @@ class BotMonitoring extends Page
                 ];
             }
 
+            // Debug data
+            $debugData = [
+                'total_orders' => $bot->gridOrders()->count(),
+                'total_with_status_active' => $bot->gridOrders()->whereIn('status', ['placed', 'active'])->count(),
+                'total_not_executed' => $bot->gridOrders()->whereNull('filled_at')->count(),
+                'total_not_paired' => $bot->gridOrders()->whereNull('paired_order_id')->count(),
+                'total_filled' => $bot->gridOrders()->where('status', 'filled')->count(),
+                'completed_trades_total' => $bot->completedTrades()->count(),
+                'completed_trades_24h_actual' => $bot->completedTrades()->where('created_at', '>=', now()->subHours(24))->count(),
+                'profit_total' => $bot->completedTrades()->sum('profit'),
+                'profit_24h_actual' => $bot->completedTrades()->where('created_at', '>=', now()->subHours(24))->sum('profit'),
+            ];
+
             $data[] = [
                 'id' => $bot->id,
                 'name' => $bot->name,
@@ -160,6 +177,9 @@ class BotMonitoring extends Page
                 // Activity logs - new cycle-based structure
                 'activity_cycles' => $cycleData['cycles'],
                 'activity_summary' => $cycleData['summary'],
+
+                // Debug data
+                'debug' => $debugData,
             ];
         }
 
