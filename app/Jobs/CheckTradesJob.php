@@ -361,6 +361,8 @@ class CheckTradesJob implements ShouldQueue
         // چک کن آیا این سفارش، جفت یک سفارش دیگر است که قبلاً پر شده
         // مثلاً اگر این sell است، باید یک buy پر شده قبلی پیدا کنیم
 
+        Log::info("CheckTradesJob: Checking for pair for {$order->type} order #{$order->id} at price {$order->price}");
+
         if ($order->type === 'sell') {
             // پیدا کردن آخرین سفارش خرید پر شده که قیمتش کمتر از این فروش است
             $buyOrder = GridOrder::where('bot_config_id', $bot->id)
@@ -375,6 +377,8 @@ class CheckTradesJob implements ShouldQueue
                 // محاسبه سود
                 $profit = ($order->price - $buyOrder->price) * $buyOrder->amount;
 
+                Log::info("CheckTradesJob: Found buy pair for sell order #{$order->id} -> buy order #{$buyOrder->id}, profit: {$profit}");
+
                 // ایجاد CompletedTrade
                 $this->recordCompletedTrade($buyOrder, $order, $bot);
 
@@ -386,7 +390,9 @@ class CheckTradesJob implements ShouldQueue
                 $logger = app(BotActivityLogger::class);
                 $logger->logOrderPaired($bot->id, $buyOrder->id, $order->id, $profit);
 
-                Log::info("CheckTradesJob: Created completed trade for buy order {$buyOrder->id} and sell order {$order->id}");
+                Log::info("CheckTradesJob: ✅ Created completed trade for buy order {$buyOrder->id} and sell order {$order->id}");
+            } else {
+                Log::info("CheckTradesJob: ⚠️ No unpaired buy order found for sell order #{$order->id}");
             }
         } elseif ($order->type === 'buy') {
             // پیدا کردن آخرین سفارش فروش پر شده که قیمتش بیشتر از این خرید است
@@ -402,6 +408,8 @@ class CheckTradesJob implements ShouldQueue
                 // محاسبه سود
                 $profit = ($sellOrder->price - $order->price) * $order->amount;
 
+                Log::info("CheckTradesJob: Found sell pair for buy order #{$order->id} -> sell order #{$sellOrder->id}, profit: {$profit}");
+
                 // ایجاد CompletedTrade
                 $this->recordCompletedTrade($order, $sellOrder, $bot);
 
@@ -413,7 +421,9 @@ class CheckTradesJob implements ShouldQueue
                 $logger = app(BotActivityLogger::class);
                 $logger->logOrderPaired($bot->id, $order->id, $sellOrder->id, $profit);
 
-                Log::info("CheckTradesJob: Created completed trade for buy order {$order->id} and sell order {$sellOrder->id}");
+                Log::info("CheckTradesJob: ✅ Created completed trade for buy order {$order->id} and sell order {$sellOrder->id}");
+            } else {
+                Log::info("CheckTradesJob: ⚠️ No unpaired sell order found for buy order #{$order->id}");
             }
         }
     }
@@ -559,30 +569,52 @@ class CheckTradesJob implements ShouldQueue
         $totalFee = (($buyPrice * $amount) + ($sellPrice * $amount)) * $feeRate;
         $netProfit = $grossProfit - $totalFee;
 
-        $trade = CompletedTrade::create([
-            'bot_config_id' => $bot->id,
-            'buy_order_id' => $buyOrder->id,
-            'sell_order_id' => $sellOrder->id,
+        // ✅ DEBUG: Log before creating trade
+        Log::info("Recording completed trade: Buy #{$buyOrder->id} with Sell #{$sellOrder->id}, Profit: {$netProfit}", [
             'buy_price' => $buyPrice,
             'sell_price' => $sellPrice,
             'amount' => $amount,
-            'profit' => $netProfit,
+            'gross_profit' => $grossProfit,
             'fee' => $totalFee,
+            'net_profit' => $netProfit,
         ]);
 
-        Log::info("Recorded completed trade {$trade->id}: Buy at {$buyPrice}, Sell at {$sellPrice}, Profit: {$netProfit}");
+        try {
+            $trade = CompletedTrade::create([
+                'bot_config_id' => $bot->id,
+                'buy_order_id' => $buyOrder->id,
+                'sell_order_id' => $sellOrder->id,
+                'buy_price' => $buyPrice,
+                'sell_price' => $sellPrice,
+                'amount' => $amount,
+                'profit' => $netProfit,
+                'fee' => $totalFee,
+            ]);
 
-        // Log completed trade
-        $logger->logTradeCompleted($bot->id, [
-            'trade_id' => $trade->id,
-            'buy_order_id' => $buyOrder->id,
-            'sell_order_id' => $sellOrder->id,
-            'buy_price' => $buyPrice,
-            'sell_price' => $sellPrice,
-            'amount' => $amount,
-            'profit' => $netProfit,
-            'fee' => $totalFee,
-        ]);
+            Log::info("✅ Successfully recorded completed trade {$trade->id}: Buy at {$buyPrice}, Sell at {$sellPrice}, Profit: {$netProfit}");
+
+            // Log completed trade
+            $logger->logTradeCompleted($bot->id, [
+                'trade_id' => $trade->id,
+                'buy_order_id' => $buyOrder->id,
+                'sell_order_id' => $sellOrder->id,
+                'buy_price' => $buyPrice,
+                'sell_price' => $sellPrice,
+                'amount' => $amount,
+                'profit' => $netProfit,
+                'fee' => $totalFee,
+            ]);
+
+            return $trade;
+        } catch (\Exception $e) {
+            Log::error("❌ Failed to record completed trade: " . $e->getMessage(), [
+                'buy_order_id' => $buyOrder->id,
+                'sell_order_id' => $sellOrder->id,
+                'exception' => get_class($e),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            throw $e;
+        }
     }
 
     /**
