@@ -563,35 +563,43 @@ class CheckTradesJob implements ShouldQueue
         $sellPrice = $sellOrder->price;
         $amount = $buyOrder->amount;
 
-        // محاسبه سود/زیان
+        // محاسبه سود/زیان برای logging
         $grossProfit = ($sellPrice - $buyPrice) * $amount;
         $feeRate = 0.0035; // 0.35% Nobitex fee
         $totalFee = (($buyPrice * $amount) + ($sellPrice * $amount)) * $feeRate;
         $netProfit = $grossProfit - $totalFee;
 
-        // ✅ DEBUG: Log before creating trade
-        Log::info("Recording completed trade: Buy #{$buyOrder->id} with Sell #{$sellOrder->id}, Profit: {$netProfit}", [
+        // ✅ DEBUG: Log before creating trade with all details
+        Log::info("🔄 Attempting to create completed trade from orders", [
+            'bot_id' => $bot->id,
+            'bot_name' => $bot->name,
+            'buy_order_id' => $buyOrder->id,
+            'sell_order_id' => $sellOrder->id,
             'buy_price' => $buyPrice,
             'sell_price' => $sellPrice,
             'amount' => $amount,
             'gross_profit' => $grossProfit,
-            'fee' => $totalFee,
             'net_profit' => $netProfit,
+            'total_fee' => $totalFee,
+            'execution_time' => $sellOrder->updated_at->diffInSeconds($buyOrder->created_at),
         ]);
 
         try {
-            $trade = CompletedTrade::create([
-                'bot_config_id' => $bot->id,
-                'buy_order_id' => $buyOrder->id,
-                'sell_order_id' => $sellOrder->id,
-                'buy_price' => $buyPrice,
-                'sell_price' => $sellPrice,
-                'amount' => $amount,
-                'profit' => $netProfit,
-                'fee' => $totalFee,
-            ]);
+            // استفاده از متد createFromOrders که همه فیلدهای پیشرفته رو هم ست می‌کنه
+            $trade = CompletedTrade::createFromOrders($buyOrder, $sellOrder);
 
-            Log::info("✅ Successfully recorded completed trade {$trade->id}: Buy at {$buyPrice}, Sell at {$sellPrice}, Profit: {$netProfit}");
+            Log::info("✅ Successfully created completed trade ID: {$trade->id}", [
+                'trade_id' => $trade->id,
+                'buy_price' => $trade->buy_price,
+                'sell_price' => $trade->sell_price,
+                'profit' => $trade->profit,
+                'net_profit' => $trade->net_profit,
+                'profit_percentage' => $trade->profit_percentage,
+                'execution_time_seconds' => $trade->execution_time_seconds,
+                'trade_type' => $trade->trade_type,
+                'grid_level_buy' => $trade->grid_level_buy,
+                'grid_level_sell' => $trade->grid_level_sell,
+            ]);
 
             // Log completed trade
             $logger->logTradeCompleted($bot->id, [
@@ -607,10 +615,14 @@ class CheckTradesJob implements ShouldQueue
 
             return $trade;
         } catch (\Exception $e) {
-            Log::error("❌ Failed to record completed trade: " . $e->getMessage(), [
+            Log::error("❌ CRITICAL: Failed to create completed trade", [
+                'error_message' => $e->getMessage(),
+                'sql_state' => $e->getCode(),
                 'buy_order_id' => $buyOrder->id,
                 'sell_order_id' => $sellOrder->id,
-                'exception' => get_class($e),
+                'exception_class' => get_class($e),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
                 'trace' => $e->getTraceAsString(),
             ]);
             throw $e;
