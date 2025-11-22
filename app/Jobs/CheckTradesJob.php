@@ -509,7 +509,6 @@ class CheckTradesJob implements ShouldQueue
                 'type' => $newType,
                 'status' => 'placed',
                 'nobitex_order_id' => (string) $nobitexOrderId,
-                'paired_order_id' => $filledOrder->id,
             ]);
 
             Log::channel('trading')->info('PAIR_ORDER_POST_CREATE', [
@@ -517,9 +516,6 @@ class CheckTradesJob implements ShouldQueue
                 'stored_price' => $newOrder->price,
                 'price_match' => ($newOrder->price == $newPrice) ? 'YES' : 'NO',
             ]);
-
-            // به‌روزرسانی سفارش قبلی با ID سفارش جفت
-            $filledOrder->update(['paired_order_id' => $newOrder->id]);
 
             Log::info("CheckTradesJob: Successfully created pair order {$newOrder->id} (Nobitex ID: {$nobitexOrderId}) - Type: {$newType}, Price: {$newPrice} for filled order {$filledOrder->id}");
 
