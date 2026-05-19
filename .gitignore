@@ -12,6 +12,7 @@
 /storage/framework/*
 /storage/logs/*
 /bootstrap/cache/*
+/.phpunit.result.cache
 
 # OS / IDE
 .DS_Store
