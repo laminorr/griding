@@ -3,7 +3,6 @@
 namespace App\Filament\Resources\BotConfigResource\Pages;
 
 use App\Filament\Resources\BotConfigResource;
-use App\Services\TradingEngineService;
 use App\Services\GridCalculatorService;
 use App\Services\NobitexService;
 use Filament\Actions;
@@ -45,34 +44,6 @@ class EditBotConfig extends EditRecord
     protected function getHeaderActions(): array
     {
         return [
-            // 1. گزارش عملکرد
-            Action::make('performance_report')
-                ->label('گزارش عملکرد')
-                ->icon('heroicon-o-chart-bar')
-                ->color('info')
-                ->modalHeading(fn () => 'گزارش عملکرد ' . $this->record->name)
-                ->modalContent(function () {
-                    try {
-                        $tradingEngine = app(TradingEngineService::class);
-                        $performance = $tradingEngine->getBotPerformanceReport($this->record);
-                        $stats = $this->record->getTradingStats();
-                        
-                        return view('filament.modals.bot-performance-detailed', [
-                            'record' => $this->record,
-                            'performance' => $performance,
-                            'stats' => $stats
-                        ]);
-                    } catch (\Exception $e) {
-                        return view('filament.modals.error', [
-                            'title' => 'خطا در بارگذاری گزارش',
-                            'message' => $e->getMessage()
-                        ]);
-                    }
-                })
-                ->modalSubmitAction(false)
-                ->modalCancelActionLabel('بستن')
-                ->slideOver(),
-
             // 2. تحلیل ریسک
             Action::make('risk_analysis')
                 ->label('تحلیل ریسک')
