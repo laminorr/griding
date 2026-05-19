@@ -87,7 +87,7 @@ class AdjustGridJob implements ShouldQueue
                 }
 
                 try {
-                    $simulate = (bool)($bot->is_simulation ?? false);
+                    $simulate = (bool) $bot->simulation;
 
                     Log::channel('trading')->info('ADJUST_GRID_BOT_START', [
                         'bot_id' => $bot->id,
