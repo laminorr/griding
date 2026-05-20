@@ -10,7 +10,7 @@ class GridOrder extends Model
     protected $table = 'grid_orders';
 
     protected $fillable = [
-        'run_id','client_order_id','exchange_order_id','side','status',
+        'client_order_id','exchange_order_id','status',
         'price_irt','amount','matched','unmatched','raw_json',
         'bot_config_id','price','type','nobitex_order_id','paired_order_id','filled_at',
     ];
@@ -49,6 +49,28 @@ class GridOrder extends Model
                 throw new \InvalidArgumentException("Price exceeds DECIMAL(20,0) limit: {$order->price}");
             }
         });
+    }
+
+    /**
+     * Build a deterministic client_order_id for a grid order.
+     * Format: grid:{botId}:{SYMBOL}:{side}:{priceIrt}:L{gridLevel}
+     * Max length ≤ 64 chars to fit common exchange limits.
+     */
+    public static function buildClientOrderId(
+        int $botId,
+        string $symbol,
+        string $side,
+        int $priceIrt,
+        int $gridLevel
+    ): string {
+        return sprintf(
+            'grid:%d:%s:%s:%d:L%d',
+            $botId,
+            strtoupper($symbol),
+            strtolower($side),
+            $priceIrt,
+            $gridLevel
+        );
     }
 
     public function run(): BelongsTo
