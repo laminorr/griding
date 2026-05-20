@@ -184,44 +184,46 @@ class NobitexWebSocketService
                 $framesPrinted++;
             }
 
-            // Decode; we expect JSON
-            $data = json_decode($raw, true);
-            if ($data === null && json_last_error() !== JSON_ERROR_NONE) {
-                // Could be "{}" (still valid), or a non-JSON glitch. Try to see if it's literally "{}"
-                if (trim($raw) === '{}') {
-                    // Ping from server – respond with {}
-                    $client->send('{}');
+            // Centrifugo can batch multiple JSON messages per frame, separated by \n.
+            $lines = preg_split('/\r?\n/', trim((string) $raw));
+            foreach ($lines as $line) {
+                $line = trim($line);
+                if ($line === '') {
                     continue;
                 }
-                $this->out('[WS] Non-JSON frame', ['raw' => $raw], 'warning');
-                continue;
+                $data = json_decode($line, true);
+                if (!is_array($data)) {
+                    $this->out('[WS] Non-JSON line', ['raw' => $line], 'warning');
+                    continue;
+                }
+                $this->handleCentrifugoMessage($data, $client);
             }
-
-            // If it is an empty object, treat as ping and respond "{}"
-            if (is_array($data) && count($data) === 0) {
-                $client->send('{}'); // pong
-                continue;
-            }
-
-            // Handle Centrifugo "push" envelope (publications)
-            // Example per doc:
-            // { "push": { "channel": "public:orderbook-BTCIRT", "pub": { "data": "{...json...}", "offset": 123 }}}
-            if (isset($data['push']['channel'])) {
-                $channel = (string) $data['push']['channel'];
-                $payload = $data['push']['pub']['data'] ?? null; // can be string JSON or already array
-                $this->processPublicationPayload($channel, $payload);
-                continue;
-            }
-
-            // Some impls may send direct {channel, data}
-            if (isset($data['channel']) && array_key_exists('data', $data)) {
-                $this->processPublicationPayload((string) $data['channel'], $data['data']);
-                continue;
-            }
-
-            // Unknown frame – log at debug
-            $this->out('[WS] Frame', ['data' => $data], 'debug');
         }
+    }
+
+    private function handleCentrifugoMessage(array $data, \WebSocket\Client $client): void
+    {
+        // Empty object {} = server ping; respond with pong
+        if (count($data) === 0) {
+            $client->send('{}');
+            return;
+        }
+
+        // Centrifugo push envelope: {"push":{"channel":"...","pub":{"data":...}}}
+        if (isset($data['push']['channel'])) {
+            $channel = (string) $data['push']['channel'];
+            $payload = $data['push']['pub']['data'] ?? null;
+            $this->processPublicationPayload($channel, $payload);
+            return;
+        }
+
+        // Direct {channel, data} variant
+        if (isset($data['channel']) && array_key_exists('data', $data)) {
+            $this->processPublicationPayload((string) $data['channel'], $data['data']);
+            return;
+        }
+
+        $this->out('[WS] Frame', ['data' => $data], 'debug');
     }
 
     /* ============================== Subscriptions ============================= */
