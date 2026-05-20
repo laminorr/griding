@@ -6,7 +6,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
-PHP_BIN="$(command -v php || echo /usr/local/bin/php)"
+# Prefer ea-php83 (cPanel guarantees this stays at PHP 8.3).
+# Fall back to ea-php84, then generic php in PATH.
+if [ -x "/usr/local/bin/ea-php83" ]; then
+    PHP_BIN="/usr/local/bin/ea-php83"
+elif [ -x "/usr/local/bin/ea-php84" ]; then
+    PHP_BIN="/usr/local/bin/ea-php84"
+else
+    PHP_BIN="$(command -v php || echo /usr/local/bin/php)"
+fi
 
 # Check if WS consumer is already running
 if pgrep -f "ws-consumer" > /dev/null; then
