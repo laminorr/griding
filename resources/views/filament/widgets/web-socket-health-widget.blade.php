@@ -4,16 +4,15 @@
         <h3 class="text-sm font-semibold text-gray-950 dark:text-white">وضعیت WebSocket</h3>
         @if ($error === null && $health !== null)
             @php
-                $overallDot = match ($health['status']) {
-                    'active' => 'bg-green-500',
-                    'stale'  => 'bg-yellow-500',
-                    'down'   => 'bg-red-500',
-                    default  => 'bg-gray-400',
+                $overallEmoji = match ($health['status']) {
+                    'active' => '🟢',
+                    'stale'  => '🟡',
+                    'down'   => '🔴',
+                    default  => '⚪',
                 };
             @endphp
-            <span class="inline-flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
-                <span class="inline-block w-2 h-2 rounded-full {{ $overallDot }}"></span>
-                {{ $health['label'] }}
+            <span class="inline-flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
+                {{ $overallEmoji }} {{ $health['label'] }}
             </span>
         @endif
     </div>
