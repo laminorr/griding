@@ -671,7 +671,7 @@ class NobitexService implements ExchangeClient
      * متد کمکی «سریع» برای ثبت سفارش با ورودی نماد/جهت/قیمت/حجم (array‑based)
      * side: 'buy'|'sell' — execution: 'limit' فقط
      */
-    public function placeOrder(string $symbol, string $side, int $price, string $quantity): array
+    public function placeOrder(string $symbol, string $side, int $price, string $quantity, ?string $clientRef = null): array
     {
         $s = strtolower(str_replace('-', '', trim($symbol)));
         if (str_ends_with($s, 'irt')) {
@@ -692,6 +692,10 @@ class NobitexService implements ExchangeClient
             'amount'      => (string)$quantity,
             'price'       => (string)$price,
         ];
+
+        if ($clientRef !== null) {
+            $payload['client_ref'] = $clientRef;
+        }
 
         return $this->request('POST', '/market/orders/add', [], $payload);
     }

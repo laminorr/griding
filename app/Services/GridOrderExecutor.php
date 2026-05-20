@@ -6,6 +6,7 @@ namespace App\Services;
 use App\DTOs\CreateOrderDto;
 use App\Enums\ExecutionType;
 use App\Enums\OrderSide;
+use App\Models\GridOrder;
 use App\Support\OrderRegistry;
 use Illuminate\Support\Facades\Log;
 
@@ -34,33 +35,22 @@ class GridOrderExecutor
      * @param array $diff خروجی GridOrderSync::diff
      * @param bool  $simulation اگر true باشد، فقط لاگ ثبت می‌شود (بدون تماس واقعی با API)
      */
-    // TODO: Add applyForBot($botId, $diff, $simulation) method
-    // This should pass bot_id to order creation for proper scoping
-    //
-    // TODO: Add clientOrderId for idempotency:
-    // $clientOrderId = "grid:{$botId}:{$symbol}:{$side}:{$price}";
-    //
-    // TODO: Add deduplication check before creating order:
-    // if (Order::where('bot_config_id', $botId)
-    //     ->where('symbol', $symbol)
-    //     ->where('side', $side)
-    //     ->where('price', $price)
-    //     ->where('status', 'placed')
-    //     ->exists()) {
-    //     return; // Skip duplicate
-    // }
-    public function apply(array $diff, bool $simulation = true): void
+    /**
+     * Primary entry point — scoped to a specific bot.
+     * Creates GridOrder records, performs dedup checks, and uses a deterministic
+     * client_order_id so timeout-retries cannot produce duplicate exchange orders.
+     */
+    public function applyForBot(int $botId, array $diff, bool $simulation = true): void
     {
         $symbol = (string) ($diff['symbol'] ?? 'UNKNOWN');
         $tick   = max(1, (int) ($diff['tick'] ?? 1));
 
-        // Hard-coded fallback for min_order_value_irt to handle config loading issues
         $minIrt = (int) ($diff['min_order_value_irt'] ?? null);
         if (empty($minIrt)) {
             $minIrt = (int) config('trading.min_order_value_irt');
             if (empty($minIrt)) {
                 Log::channel('trading')->warning('GridOrderExecutor: min_order_value_irt not loaded from config, using fallback: 3,000,000 IRT');
-                $minIrt = 3_000_000; // 3M IRT = 300K Toman
+                $minIrt = 3_000_000;
             }
         }
 
@@ -70,7 +60,7 @@ class GridOrderExecutor
          * 1) لغو سفارش‌هایی که «در پلن جدید نیستند»
          * ============================================================= */
         foreach ((array) ($diff['to_cancel'] ?? []) as $o) {
-            $oid = is_array($o) ? (string) ($o['id'] ?? '') : (string) $o; // اجازهٔ ورودی ساده
+            $oid = is_array($o) ? (string) ($o['id'] ?? '') : (string) $o;
             if ($oid === '') {
                 Log::channel('trading')->warning('EXEC_CANCEL_SKIP_NO_ID', ['symbol'=>$symbol,'order'=>$o]);
                 continue;
@@ -87,7 +77,7 @@ class GridOrderExecutor
                 $this->reg->forget($symbol, $oid);
                 $cancelled++;
                 Log::channel('trading')->info('EXEC_CANCEL_OK', ['symbol'=>$symbol,'id'=>$oid]);
-                usleep(250_000); // soft rate-limit
+                usleep(250_000);
             } catch (\Throwable $e) {
                 $errors++;
                 Log::channel('trading')->error('EXEC_CANCEL_ERR', ['symbol'=>$symbol,'err'=>$e->getMessage(),'order'=>$o]);
@@ -97,15 +87,13 @@ class GridOrderExecutor
         /* =============================================================
          * 2) ثبت سفارش‌های «در پلن»
          * ============================================================= */
-        foreach ((array) ($diff['to_place'] ?? []) as $p) {
+        foreach ((array) ($diff['to_place'] ?? []) as $levelIdx => $p) {
             $side     = strtolower((string)($p['side'] ?? ''));
             $price    = (int)   ($p['price'] ?? 0);
             $quantity = (string)($p['quantity'] ?? '0');
 
-            // notional را اگر نبود، خودمان محاسبه می‌کنیم تا گارد حداقل کار کند
             $notional = (int)   ($p['notional'] ?? 0);
             if ($notional <= 0 && $price > 0 && (float)$quantity > 0) {
-                // دقت بالا نداریم؛ همین حد کفایت می‌کند چون فقط برای گارد مینیمم است
                 $notional = (int) floor($price * (float) $quantity);
             }
 
@@ -115,16 +103,187 @@ class GridOrderExecutor
                 continue;
             }
 
-            // گارد ۱: حداقل ارزش ریالی
             if ($notional < $minIrt) {
                 Log::channel('trading')->warning('EXEC_SKIP_BELOW_MIN', compact('symbol','side','price','quantity','notional','minIrt'));
                 continue;
             }
 
-            // گارد ۲: tick-size → رُند کردن قیمت
             $price = $this->roundToTick($price, $tick);
+            [$src, $dst] = $this->splitSymbol($symbol);
 
-            // نگاشت نماد به src/dst برای API خصوصی (IRT → RLS)
+            // Deterministic identifier — $levelIdx is the per-to_place loop index.
+            $clientOrderId = GridOrder::buildClientOrderId($botId, $symbol, $side, $price, $levelIdx);
+
+            if ($simulation) {
+                Log::channel('trading')->info('EXEC_SIM_PLACE', [
+                    'symbol'=>$symbol,'side'=>$side,'price'=>$price,'quantity'=>$quantity,'notional'=>$notional,
+                    'src'=>$src,'dst'=>$dst,'client_order_id'=>$clientOrderId,
+                ]);
+                $placed++;
+                continue;
+            }
+
+            // Dedup guard — skip if an active order with this id already exists.
+            $existing = GridOrder::where('bot_config_id', $botId)
+                ->where('client_order_id', $clientOrderId)
+                ->whereIn('status', ['pending', 'placed', 'filled', 'partially_filled'])
+                ->first();
+
+            if ($existing) {
+                Log::channel('trading')->info('DEDUP_SKIP', [
+                    'bot_id'           => $botId,
+                    'client_order_id'  => $clientOrderId,
+                    'existing_order_id'=> $existing->id,
+                    'existing_status'  => $existing->status,
+                ]);
+                continue;
+            }
+
+            $gridOrder = null;
+            try {
+                // Persist intent row BEFORE calling the exchange so a timeout retry
+                // will find this record and skip instead of creating a duplicate.
+                $gridOrder = GridOrder::create([
+                    'bot_config_id'   => $botId,
+                    'price'           => $price,
+                    'amount'          => $quantity,
+                    'type'            => $side,
+                    'status'          => 'pending',
+                    'client_order_id' => $clientOrderId,
+                ]);
+
+                $sideEnum = $side === 'buy' ? OrderSide::BUY : OrderSide::SELL;
+
+                $dto = new CreateOrderDto(
+                    side:        $sideEnum,
+                    execution:   ExecutionType::LIMIT,
+                    srcCurrency: $src,
+                    dstCurrency: $dst,
+                    amountBase:  $quantity,
+                    priceIRT:    $price,
+                    clientRef:   $clientOrderId,
+                );
+
+                $resp    = $this->svc->createOrder($dto);
+                $orderId = $resp->orderId ?? null;
+
+                $gridOrder->update([
+                    'status'           => 'placed',
+                    'nobitex_order_id' => $orderId ? (string) $orderId : null,
+                ]);
+
+                if ($orderId) {
+                    $this->reg->remember($symbol, [
+                        'id'       => (string) $orderId,
+                        'side'     => $side,
+                        'price'    => $price,
+                        'quantity' => $quantity,
+                    ]);
+                }
+
+                $placed++;
+                Log::channel('trading')->info('EXEC_PLACE_OK', [
+                    'symbol'=>$symbol,'side'=>$side,'price'=>$price,'quantity'=>$quantity,
+                    'orderId'=>$orderId,'client_order_id'=>$clientOrderId,
+                ]);
+                usleep(300_000);
+
+            } catch (\Throwable $e) {
+                $errors++;
+                if ($gridOrder && $gridOrder->exists) {
+                    $gridOrder->update(['status' => 'cancelled']);
+                }
+                Log::channel('trading')->error('EXEC_PLACE_ERR', ['symbol'=>$symbol,'err'=>$e->getMessage(),'plan'=>$p]);
+            }
+        }
+
+        Log::channel('trading')->info('EXEC_APPLY_SUMMARY', [
+            'bot_id'    => $botId,
+            'symbol'    => $symbol,
+            'placed'    => $placed,
+            'cancelled' => $cancelled,
+            'errors'    => $errors,
+            'simulation'=> $simulation,
+        ]);
+
+        if ($simulation) {
+            Log::channel('trading')->info('EXEC_DRY_RUN', [
+                'symbol'    => $symbol,
+                'to_place'  => count($diff['to_place'] ?? []),
+                'to_cancel' => count($diff['to_cancel'] ?? []),
+                'note'      => 'simulation=true → no real orders',
+            ]);
+        }
+    }
+
+    /**
+     * Legacy entry point kept for backward compatibility.
+     * Does not create GridOrder records or perform dedup checks.
+     * Production code should call applyForBot() instead.
+     */
+    public function apply(array $diff, bool $simulation = true): void
+    {
+        $symbol = (string) ($diff['symbol'] ?? 'UNKNOWN');
+        $tick   = max(1, (int) ($diff['tick'] ?? 1));
+
+        $minIrt = (int) ($diff['min_order_value_irt'] ?? null);
+        if (empty($minIrt)) {
+            $minIrt = (int) config('trading.min_order_value_irt');
+            if (empty($minIrt)) {
+                Log::channel('trading')->warning('GridOrderExecutor: min_order_value_irt not loaded from config, using fallback: 3,000,000 IRT');
+                $minIrt = 3_000_000;
+            }
+        }
+
+        $placed = 0; $cancelled = 0; $errors = 0;
+
+        foreach ((array) ($diff['to_cancel'] ?? []) as $o) {
+            $oid = is_array($o) ? (string) ($o['id'] ?? '') : (string) $o;
+            if ($oid === '') {
+                Log::channel('trading')->warning('EXEC_CANCEL_SKIP_NO_ID', ['symbol'=>$symbol,'order'=>$o]);
+                continue;
+            }
+
+            if ($simulation) {
+                Log::channel('trading')->info('EXEC_SIM_CANCEL', ['symbol'=>$symbol,'id'=>$oid,'price'=>is_array($o) ? ($o['price'] ?? null) : null]);
+                $cancelled++;
+                continue;
+            }
+
+            try {
+                $this->svc->cancelOrder($oid);
+                $this->reg->forget($symbol, $oid);
+                $cancelled++;
+                Log::channel('trading')->info('EXEC_CANCEL_OK', ['symbol'=>$symbol,'id'=>$oid]);
+                usleep(250_000);
+            } catch (\Throwable $e) {
+                $errors++;
+                Log::channel('trading')->error('EXEC_CANCEL_ERR', ['symbol'=>$symbol,'err'=>$e->getMessage(),'order'=>$o]);
+            }
+        }
+
+        foreach ((array) ($diff['to_place'] ?? []) as $p) {
+            $side     = strtolower((string)($p['side'] ?? ''));
+            $price    = (int)   ($p['price'] ?? 0);
+            $quantity = (string)($p['quantity'] ?? '0');
+
+            $notional = (int)   ($p['notional'] ?? 0);
+            if ($notional <= 0 && $price > 0 && (float)$quantity > 0) {
+                $notional = (int) floor($price * (float) $quantity);
+            }
+
+            if ($side === '' || $price <= 0 || (float)$quantity <= 0.0) {
+                $errors++;
+                Log::channel('trading')->error('EXEC_PLACE_INVALID', ['symbol'=>$symbol,'plan'=>$p]);
+                continue;
+            }
+
+            if ($notional < $minIrt) {
+                Log::channel('trading')->warning('EXEC_SKIP_BELOW_MIN', compact('symbol','side','price','quantity','notional','minIrt'));
+                continue;
+            }
+
+            $price = $this->roundToTick($price, $tick);
             [$src, $dst] = $this->splitSymbol($symbol);
 
             if ($simulation) {
@@ -136,19 +295,16 @@ class GridOrderExecutor
                 continue;
             }
 
-            // اجرای واقعی
             try {
                 $sideEnum = $side === 'buy' ? OrderSide::BUY : OrderSide::SELL;
-                $clientRef = $this->buildClientRef($symbol, $side, $price);
 
                 $dto = new CreateOrderDto(
                     side:        $sideEnum,
                     execution:   ExecutionType::LIMIT,
-                    srcCurrency: $src,                // e.g. 'btc'
-                    dstCurrency: $dst,                // 'rls' برای بازار ریالی
-                    amountBase:  (string) $quantity,  // رشتهٔ ده‌دهی با دقت کوین
-                    priceIRT:    $price,              // عدد صحیح IRT
-                    clientRef:   $clientRef,
+                    srcCurrency: $src,
+                    dstCurrency: $dst,
+                    amountBase:  (string) $quantity,
+                    priceIRT:    $price,
                 );
 
                 $resp = $this->svc->createOrder($dto);
@@ -167,7 +323,7 @@ class GridOrderExecutor
                 Log::channel('trading')->info('EXEC_PLACE_OK', [
                     'symbol'=>$symbol,'side'=>$side,'price'=>$price,'quantity'=>$quantity,'orderId'=>$orderId,
                 ]);
-                usleep(300_000); // soft rate-limit
+                usleep(300_000);
 
             } catch (\Throwable $e) {
                 $errors++;
@@ -175,7 +331,6 @@ class GridOrderExecutor
             }
         }
 
-        // خلاصه
         Log::channel('trading')->info('EXEC_APPLY_SUMMARY', [
             'symbol'    => $symbol,
             'placed'    => $placed,
@@ -224,9 +379,4 @@ class GridOrderExecutor
         return (int) (floor($price / $tick) * $tick);
     }
 
-    /** ساخت clientRef استاندارد برای رهگیری */
-    protected function buildClientRef(string $symbol, string $side, int $price): string
-    {
-        return sprintf('grid:%s:%s:%d:%d', strtoupper($symbol), $side === 'buy' ? 'B' : 'S', time(), $price);
-    }
 }
