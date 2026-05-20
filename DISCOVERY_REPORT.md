@@ -1,9 +1,25 @@
 # DISCOVERY_REPORT
 
 پروژه: Grid Trading Bot برای نوبیتکس (Laravel)
-شاخه: `claude/review-trading-bot-AFMpS`
-تاریخ: 2026-05-19
-وضعیت: گزارش فقط‌خواندنی — هیچ فایلی تغییر نکرده است.
+تاریخ گزارش اولیه: 2026-05-19
+تاریخ به‌روزرسانی: 2026-05-20
+وضعیت: گزارش به‌روز شده پس از اعمال اصلاحات پرامپت A و پرامپت B.
+
+> این فایل در ابتدا یک گزارش discovery فقط‌خواندنی بود که وضعیت پروژه را قبل از هر اصلاحی توصیف می‌کرد. در نسخه‌ی فعلی، هر بخش با جعبه‌ی «UPDATE» وضعیت پس از اصلاحات را نشان می‌دهد.
+
+---
+
+## خلاصه‌ی وضعیت فعلی (به‌روز شده 2026-05-20)
+
+| موضوع | وضعیت اولیه | اصلاح‌شده در | وضعیت فعلی |
+|------|--------------|----------------|-------------|
+| مسیر موازی ساخت سفارش (TradingEngineService dead code با باگ نهفته) | باگ بحرانی | پرامپت A — PR #84 | ✅ حل شد |
+| ناهماهنگی فیلد `is_simulation` در AdjustGridJob | باگ بحرانی | پرامپت A — PR #84 | ✅ حل شد |
+| باگ `getBotPerformanceReport` در EditBotConfig | باگ runtime | پرامپت A — PR #84 | ✅ حل شد |
+| Idempotency (نبود client_order_id و dedup-check) | ریسک بحرانی | پرامپت B — PR #85 | ✅ حل شد |
+| `buildClientRef` بی‌فایده با `time()` | بی‌اثر | پرامپت B — PR #85 | ✅ حذف شد |
+| Locking در CheckTradesJob | ریسک متوسط در صورت multi-server | بحث در پرامپت B | ⚠️ تصمیم آگاهانه: تک‌سرور → فقط `withoutOverlapping` + unique index در DB کافی است |
+| Schema ناهماهنگ GridOrder (fillable با ستون‌های ناموجود) | کیفیت کد | پرامپت B — PR #85 | ✅ بخشی حل شد (`side`, `run_id` حذف؛ سایر فیلدهای مشکوک listed) |
 
 ---
 
@@ -29,7 +45,7 @@
 | 14 | `routes/web.php` | 298–332 | روت تشخیصی `/test-trading-engine` که فقط `class_exists`, `app()`, و `get_class_methods()` صدا می‌زند؛ هیچ متد تجاری اجرا نمی‌شود. |
 | 15 | `app/Contracts/TradingEngine.php` | 18 | اینترفیس `initializeGrid` تعریف کرده ولی `TradingEngineService` آن را پیاده‌سازی نکرده است (`class TradingEngineService` بدون `implements TradingEngine`). |
 
-### ب) وضعیت متدهای داخلی
+### ب) وضعیت متدهای داخلی (وضعیت اولیه)
 
 | متد | دسترسی | محل تعریف | از خارج کلاس صدا زده می‌شود؟ |
 |-----|--------|-----------|------------------------------|
@@ -40,8 +56,6 @@
 | `initializeGrid` | public | TradingEngineService:52 | بله — از سه Filament page (Create/List/Resource). **live code**. |
 | `stopGrid` | public | TradingEngineService:249 | فقط داخلی (executeEmergencyStop, handleCriticalError) و آن‌ها از manageGridTrading → عملاً dead. |
 | `getBotStatus`, `getPerformanceReport`, `forceRebalance`, `systemHealthCheck` | public | TradingEngineService | هیچ‌جا صدا زده نمی‌شود (به جز فراخوانی اشتباه `getBotPerformanceReport` در EditBotConfig:57 که نام را غلط می‌نویسد). |
-
-**نتیجه:** کلِ زنجیره‌ی «پایش وضعیت سفارش → ساخت سفارش جایگزین» در `TradingEngineService` (manageGridTrading / processOrderStatusUpdate / checkForCompleteTrade / createReplacementOrder) از هیچ‌جا فراخوانی نمی‌شود. مسیر زنده‌ی فعلی برای ساخت سفارش مخالف فقط `CheckTradesJob::createPairOrder` است.
 
 ### ج) مقایسه `TradingEngineService::createReplacementOrder` با `CheckTradesJob::createPairOrder`
 
@@ -63,7 +77,15 @@
 **یافته‌ی مهم — احتمال باگ منطقی در createReplacementOrder:**
 خط 573 `'type' => $filledOrder->type` به جای جهت مخالف — اگر هیچ‌گاه با مسیر زنده‌ای فراخوانی شود، چرخه grid را می‌شکند.
 
-**نتیجه‌گیری در یک خط:** عملاً مسیر موازی دومی فعال نیست (فقط `CheckTradesJob::createPairOrder` کار می‌کند)، ولی منطق dead در `TradingEngineService` یک باگ نهفته دارد و باید قبل از refactor یا حذف شود یا اصلاح؛ ابقای آن «امن نیست» چون هر زمان کسی `manageGridTrading` را وصل کند، سفارش هم‌جهت ساخته خواهد شد.
+**نتیجه‌گیری در یک خط (نسخه‌ی اولیه):** عملاً مسیر موازی دومی فعال نیست (فقط `CheckTradesJob::createPairOrder` کار می‌کند)، ولی منطق dead در `TradingEngineService` یک باگ نهفته دارد و باید قبل از refactor یا حذف شود یا اصلاح؛ ابقای آن «امن نیست» چون هر زمان کسی `manageGridTrading` را وصل کند، سفارش هم‌جهت ساخته خواهد شد.
+
+> **✅ UPDATE 2026-05-20 (پرامپت A — PR #84):**
+> کل زنجیره‌ی dead code از `TradingEngineService` حذف شد. ۱۰۸۴ خط کد پاک شد. متدهای حذف‌شده:
+> - public: `manageGridTrading`, `stopGrid`, `getBotStatus`, `getPerformanceReport`, `forceRebalance`, `systemHealthCheck`
+> - private/protected: `checkAndProcessOrders`, `processOrderStatusUpdate`, `checkForCompleteTrade`, `findPairOrder`, `createCompletedTrade`, `createReplacementOrder`, `performRiskManagementChecks`, `executeEmergencyStop`, `checkRebalanceNeeds`, `executeRebalance`, `cancelAllActiveOrders`, `calculateTradeFee`, `calculateReplacementPrice`, `calculateCurrentDrawdown`, `calculatePriceDeviation`, `performHealthCheck`, `handleCriticalError`, `updatePerformanceMetrics`, `generatePerformanceSummary`, `calculateWinRate`
+> - 8 ثابت (constant) و 2 import که فقط توسط متدهای حذف‌شده استفاده می‌شدند.
+>
+> باگ نهفته در `createReplacementOrder` (خط 573) با حذف خود متد برطرف شد. کلاس الان فقط یک wrapper نازک حول `initializeGrid` است که از Filament call sites استفاده می‌شود. تأیید با تست دستی پنل ادمین: صفحه‌های Create و Edit ربات بدون خطا باز می‌شوند.
 
 ---
 
@@ -104,7 +126,17 @@
   - یعنی **AdjustGridJob همیشه با `simulation=false` (live) اجرا می‌شود**، حتی اگر کاربر در UI تیک «simulation» را روشن گذاشته باشد.
 - در مقابل، `TradingEngineService` همه‌جا از `$botConfig->simulation` استفاده می‌کند که با ستون migration و مدل هماهنگ است.
 
-**نتیجه‌گیری در یک خط:** نامِ فیلد در `AdjustGridJob.php:90` غلط است (`is_simulation` به‌جای `simulation`) و این باعث می‌شود کاربر فکر کند dry-run است در حالی که real order ثبت می‌شود — **امن نیست، باید فوراً اصلاح شود**.
+**نتیجه‌گیری در یک خط (نسخه‌ی اولیه):** نامِ فیلد در `AdjustGridJob.php:90` غلط است (`is_simulation` به‌جای `simulation`) و این باعث می‌شود کاربر فکر کند dry-run است در حالی که real order ثبت می‌شود — **امن نیست، باید فوراً اصلاح شود**.
+
+> **✅ UPDATE 2026-05-20 (پرامپت A — PR #84):**
+> خط 90 از `AdjustGridJob.php` اصلاح شد:
+> ```diff
+> -    $simulate = (bool)($bot->is_simulation ?? false);
+> +    $simulate = (bool) $bot->simulation;
+> ```
+> `?? false` حذف شد چون migration ستون را با `default(true)` ساخته و `creating` event هم default را `true` می‌گذارد، پس null-fallback غیرضروری و گمراه‌کننده است. grep گسترده در کل پروژه (به جز این فایل) هیچ مورد دیگری از `is_simulation` پیدا نکرد. تأیید با تست دستی: ربات #2 با simulation=true ساخته شد و در پنل toggle درست نمایش داده می‌شود.
+>
+> **شواهد جانبی:** قبل از این اصلاح، در همان branch هاست تو `routes/console.php` با کامنت `// TEMPORARILY DISABLED - Still creating orders` کل `AdjustGridJob` غیرفعال شده بود. این تأیید عملی بود که باگ در محیط واقعی هم آسیب می‌زد و کاربر مجبور شده بود به‌صورت موقت job را خاموش کند. بعد از اصلاح، این workaround دیگر لازم نیست.
 
 ---
 
@@ -146,7 +178,37 @@
 
 ضمناً همان فایل (خط 142) یک `$clientRef = $this->buildClientRef($symbol, $side, $price)` می‌سازد و در `CreateOrderDto` پاس می‌دهد — اما (الف) شامل `time()` است (خط 230: `sprintf('grid:%s:%s:%d:%d', ..., time(), $price)`) پس بین فراخوانی‌های پشت‌سرهم هم unique است → **برای idempotency سمت کلاینت بی‌فایده است**؛ (ب) هرگز در DB ذخیره نمی‌شود.
 
-**نتیجه‌گیری در یک خط:** Idempotency واقعی وجود ندارد — نه ستون DB، نه dedup-check، و clientRef موجود به دلیل داشتن `time()` در ساختار، در عمل برای جلوگیری از تکراری کار نمی‌کند؛ **امن نیست، نیاز به تغییر دارد**.
+**نتیجه‌گیری در یک خط (نسخه‌ی اولیه):** Idempotency واقعی وجود ندارد — نه ستون DB، نه dedup-check، و clientRef موجود به دلیل داشتن `time()` در ساختار، در عمل برای جلوگیری از تکراری کار نمی‌کند؛ **امن نیست، نیاز به تغییر دارد**.
+
+> **✅ UPDATE 2026-05-20 (پرامپت B — PR #85):**
+>
+> **(1) ستون‌های جدید روی `grid_orders` — migration اعمال شد:**
+> - فایل: `database/migrations/2026_05_20_000001_add_idempotency_columns_to_grid_orders.php`
+> - `client_order_id` — string nullable + **unique index** (`grid_orders_client_order_id_unique`)
+> - `exchange_order_id` — string nullable + index معمولی
+> - migration روی production اعمال شد در 2026-05-20 (`64.21ms DONE`).
+>
+> **(2) Schema ناهماهنگ مدل GridOrder بخشی حل شد:**
+> - `side` و `run_id` از `$fillable` حذف شدند.
+> - `client_order_id` و `exchange_order_id` در `$fillable` بودند، الان با ستون‌های واقعی DB هماهنگ شدند.
+> - فیلدهای مشکوک باقی‌مانده (در `$fillable` ولی بدون ستون متناظر در migrations): `price_irt`, `matched`, `unmatched`, `raw_json`. Eloquent این‌ها را در writes silently drop می‌کند، پس بی‌اثرند ولی dead.
+>
+> **(3) buildClientOrderId deterministic ساخته شد:**
+> - متد static روی `GridOrder` model.
+> - فرمت: `grid:{botId}:{SYMBOL}:{side}:{priceIrt}:L{gridLevel}` (مثال: `grid:13:BTCIRT:buy:1390000000:L1`).
+> - بدون `time()`، بدون random، خالصاً تابعی از ورودی‌ها. حداکثر ~50 کاراکتر.
+>
+> **(4) dedup-check قبل از createOrder در دو محل اضافه شد:**
+> - `GridOrderExecutor::applyForBot()` (متد جدید جایگزین `apply()` برای مسیر AdjustGridJob): قبل از API call، با کوئری `client_order_id` چک می‌کند و اگر ردیف active (در status `pending`, `placed`, `filled`, `partially_filled`) وجود داشت، با لاگ `DEDUP_SKIP` رد می‌شود. علاوه بر این، ردیف `GridOrder` با `status=pending` و `client_order_id` **قبل** از API call ساخته می‌شود تا در صورت timeout/retry، تلاش بعدی همان ردیف را پیدا کرده و skip کند.
+> - `CheckTradesJob::createPairOrder()`: همان dedup-check قبل از `placeOrder()`.
+> - `TradingEngineService::placeGridOrders()`: dedup-check اضافه نشد (طبق تصمیم آگاهانه — این متد فقط از `initializeGrid` صدا زده می‌شود که با `cleanupExistingOrders` شروع می‌شود، پس dedup در آن redundant است و می‌تواند باگ‌ها را پنهان کند) ولی `client_order_id` به ردیف جدید نوشته می‌شود.
+>
+> **(5) `buildClientRef` با `time()` کاملاً حذف شد:**
+> - grep تأیید کرد: zero matches در `app/`.
+> - `client_ref` فقط در دو محل صحیح باقی ماند: `CreateOrderDto:87` و `NobitexService:697`. هر دو deterministic `client_order_id` را به نوبیتکس می‌فرستند.
+>
+> **(6) لایه‌ی دفاعی دوم: unique index در DB:**
+> حتی اگر dedup-check در سطح کد به هر دلیلی شکست بخورد (race condition, bug, etc.)، unique index روی `client_order_id` در سطح دیتابیس INSERT دوم را با خطا رد می‌کند. این یعنی سفارش تکراری در DB غیرممکن است.
 
 ---
 
@@ -180,15 +242,83 @@
 | `AdjustGridJob` | سه لایه: `withoutOverlapping(20)` + `onOneServer()` + MySQL `GET_LOCK` داخلی. | امن — حتی اگر دو cron همزمان trigger کنند، GET_LOCK سراسری مانع می‌شود. |
 | `ReadMarketStatsJob` | فقط `withoutOverlapping(2)`. عملیات read-only، خطر مالی ندارد. | خطر بی‌اهمیت. |
 
-**نتیجه‌گیری در یک خط:** `AdjustGridJob` محافظت کافی دارد ولی `CheckTradesJob` (که اتفاقاً سفارش مالی ثبت می‌کند) فقط به `withoutOverlapping` cache-based متکی است و در صورت دو-instance یا cache=file ناامن است — **نیاز به تغییر دارد** (افزودن `onOneServer()` و/یا `GET_LOCK` داخلی).
+**نتیجه‌گیری در یک خط (نسخه‌ی اولیه):** `AdjustGridJob` محافظت کافی دارد ولی `CheckTradesJob` (که اتفاقاً سفارش مالی ثبت می‌کند) فقط به `withoutOverlapping` cache-based متکی است و در صورت دو-instance یا cache=file ناامن است — **نیاز به تغییر دارد** (افزودن `onOneServer()` و/یا `GET_LOCK` داخلی).
+
+> **⚠️ UPDATE 2026-05-20 (تصمیم آگاهانه — هیچ تغییر کدی اعمال نشد):**
+> پس از تأیید کاربر مبنی بر اینکه پروژه روی **یک سرور** اجرا می‌شود و در آینده‌ی نزدیک scale نمی‌شود، تصمیم گرفته شد فعلاً به همان `withoutOverlapping()` cache-based اکتفا شود.
+>
+> **چرا این تصمیم الان امن‌تر از قبل است؟**
+> پرامپت B دو لایه‌ی دفاعی جدید برای مسئله‌ی duplicate-order اضافه کرد که قبلاً وجود نداشت:
+> 1. **Dedup-check در `CheckTradesJob::createPairOrder()`** — قبل از هر `placeOrder` کوئری روی `client_order_id` می‌زند.
+> 2. **Unique index در DB روی `client_order_id`** — حتی اگر race condition در سطح کد رخ دهد، INSERT دوم با خطا رد می‌شود.
+>
+> یعنی حتی اگر فردا (با وجود اینکه setup تک‌سرور است) دو instance همزمان CheckTradesJob به‌طور غیرمنتظره trigger شوند، **DB-level constraint جلوی duplicate را می‌گیرد**. این یک trade-off آگاهانه است: ساده‌ترین تنظیم scheduler به اضافه‌ی محافظت چندلایه در سطح dedup. اگر روزی پروژه multi-server شد، اضافه کردن `onOneServer()` یا `GET_LOCK` داخلی فقط چند خط است.
 
 ---
 
-## خلاصه‌ی کلی
+## ۵) باگ runtime در `EditBotConfig`
 
-| موضوع | وضعیت |
-|------|-------|
-| مسیر موازی ساخت سفارش | TradingEngineService dead است ولی باگ نهفته دارد → **پیش از refactor بررسی/حذف شود** |
-| ناهماهنگی simulation | `AdjustGridJob` نام غلط `is_simulation` می‌خواند → **باگ بحرانی، اصلاح فوری** |
-| Idempotency | هیچ مکانیزم واقعی وجود ندارد → **نیاز به اضافه‌کردن client_order_id + dedup-check** |
-| Locking | `AdjustGridJob` امن، `CheckTradesJob` ضعیف → **`onOneServer()` یا GET_LOCK داخلی اضافه شود** |
+> این بخش در گزارش اولیه به‌عنوان «یافته‌ی جانبی» ذکر شده بود (در سطر 21 جدول call-siteها). برای روشن‌تر بودن، در نسخه‌ی به‌روز جداگانه نوشته می‌شود.
+
+**وضعیت اولیه:**
+- در `app/Filament/Resources/BotConfigResource/Pages/EditBotConfig.php` خط 57، header action ای به نام `performance_report` بود که `$tradingEngine->getBotPerformanceReport($this->record)` را صدا می‌زد.
+- اما متدی با این اسم در `TradingEngineService` وجود نداشت. متد مشابه (`getPerformanceReport` بدون `Bot`) بود.
+- هر کلیک روی این دکمه → `BadMethodCallException` در runtime.
+- علاوه بر این، view هایی که action قرار بود رندر کند (`filament.modals.bot-performance-detailed` و `filament.modals.error`) **در پروژه وجود نداشتند** — کل دایرکتوری `resources/views/filament/modals/` غایب بود. یعنی این action از روز اول هم نمی‌توانست کار کند.
+
+> **✅ UPDATE 2026-05-20 (پرامپت A — PR #84):**
+> طبق دستور پرامپت ("delete, not re-route") کل header action `performance_report` و import متناظر `TradingEngineService` از `EditBotConfig.php` حذف شد. این تصمیم با دستور دیگر پرامپت ("do not invent new methods to keep the old call alive") هم سازگار بود. تأیید عملی: در اسکرین‌شات تست دستی، صفحه‌ی Edit ربات بدون خطا باز شد و فقط دو دکمه‌ی `بررسی سلامت` و `تحلیل ریسک` در header باقی ماندند.
+
+---
+
+## ۶) موارد باقی‌مانده / کارهای آینده
+
+این موارد در پرامپت‌های فعلی **عمداً** بسته نشدند یا نیاز به اقدام در آینده دارند:
+
+1. **حذف کامل `apply()` legacy از `GridOrderExecutor`:** متد قدیمی `apply()` با dead `else` branch در `AdjustGridJob.php:162` هنوز در کد است. الان unreachable است (`method_exists($exec, 'applyForBot')` همیشه true است)، ولی dead code محسوب می‌شود. می‌توان در یک cleanup بعدی حذف شود.
+
+2. **فیلدهای مشکوک در `GridOrder::$fillable`:** `price_irt`, `matched`, `unmatched`, `raw_json` در fillable هستند ولی ستون متناظر در migrations جدول `grid_orders` ندارند. Eloquent این‌ها را در writes silently drop می‌کند. در پرامپت B عمداً دست نخوردند (rule: «conservative — only remove entries you are confident are unused»). برای تصمیم در آینده: یا migration برای ایجادشان، یا حذف از fillable.
+
+3. **پر کردن `exchange_order_id`:** ستون اضافه شد ولی هیچ مسیر کدی هنوز آن را نمی‌نویسد. فعلاً forward-looking است (برای پشتیبانی چند صرافی در آینده).
+
+4. **سود `CompletedTrade` با کارمزد واقعی:** بحث در گزارش اولیه (بخش ۸ نسخه‌ی قدیم) که سود فعلی `(sellPrice - buyPrice) * amount` با کارمزد ثابت `0.0035` hard-coded محاسبه می‌شود؛ این باید با نرخ واقعی fee صرافی و amount واقعی fill (نه amount درخواست) محاسبه شود. نیاز به یک پرامپت جداگانه دارد.
+
+5. **مدیریت partial fill و timeout:** سناریوهای A11 و A12 از ضمیمه‌ی تفصیلی A در `Saves Description` هنوز سناریوی رسمی ندارند. الان با وجود `client_order_id` و dedup-check، خطر duplicate در timeout بسیار کمتر شده، ولی منطق partial fill (وقتی فقط بخشی از مقدار پر می‌شود) هنوز در `CheckTradesJob` فقط FILLED کامل را پردازش می‌کند.
+
+6. **Locking در `CheckTradesJob` در صورت multi-server شدن آینده:** اگر روزی تصمیم گرفته شد پروژه روی چند سرور اجرا شود، یا `onOneServer()` به scheduler اضافه شود یا `GET_LOCK` داخلی مشابه `AdjustGridJob` اضافه شود.
+
+---
+
+## ۷) چک‌لیست به‌روز شده
+
+- [x] آیا در پنل، simulation دقیقاً روشن/خاموش می‌شود؟ → **بله** (پرامپت A با اصلاح `is_simulation`)
+- [x] آیا همه فایل‌ها از یک نام فیلد simulation استفاده می‌کنند؟ → **بله** (تنها مورد ناهماهنگ `is_simulation` اصلاح شد)
+- [x] آیا TradingEngineService واقعاً جایی صدا زده می‌شود؟ → **فقط `initializeGrid` از سه Filament page** (پرامپت A بقیه را پاک کرد)
+- [ ] آیا با grid=4 همیشه ۲ buy و ۲ sell ساخته می‌شود؟ → **نیاز به تست عملی T1**
+- [ ] بعد از buy filled، فقط یک sell جدید ساخته می‌شود؟ → **dedup-check + unique index الان این را تضمین می‌کند، ولی T2 لازم است**
+- [ ] بعد از sell filled، فقط یک buy جدید ساخته می‌شود؟ → **همان**، T3 لازم
+- [x] اگر CheckTradesJob دو بار پشت سر هم اجرا شود، duplicate نمی‌سازد؟ → **بله** (dedup-check + unique index)
+- [x] اگر API timeout بدهد، ربات دوباره سفارش نمی‌سازد؟ → **بله** (`pending` row با `client_order_id` قبل از API call ساخته می‌شود؛ retry آن را پیدا و skip می‌کند)
+- [ ] اگر قیمت شدیداً از گرید خارج شود، pairedها چه می‌شوند؟ → **هنوز تصمیم محصولی روشن نشده**
+- [ ] سود CompletedTrade با کارمزد واقعی هم‌خوان است؟ → **هنوز نه** (مورد ۴ از موارد باقی‌مانده)
+
+---
+
+## ۸) جمع‌بندی مدیریتی (به‌روز شده)
+
+ربات از نظر ایده‌ی اصلی، چرخه‌ی Grid Trading را داشت و دارد:
+- گرید اولیه می‌سازد.
+- سفارش خرید که پر شود، فروش بالاتر می‌گذارد.
+- سفارش فروش که پر شود، خرید پایین‌تر می‌گذارد.
+- اگر دو سمت مناسب پیدا کند، CompletedTrade می‌سازد.
+
+**در گزارش اولیه** پنج نگرانی اصلی برای راه‌اندازی با سرمایه‌ی واقعی شناسایی شده بود:
+1. مسیر TradingEngineService باید تعیین تکلیف می‌شد. → ✅ حل شد
+2. simulation باید یکپارچه و بدون ابهام می‌شد. → ✅ حل شد
+3. duplicate order باید با تست idempotency کنترل می‌شد. → ✅ حل شد (client_order_id + dedup + unique index)
+4. partial fill و timeout باید سناریوی رسمی داشتند. → ⚠️ timeout حل شده، partial fill هنوز نه
+5. سود CompletedTrade باید با fee/slippage واقعی مقایسه می‌شد. → ⚠️ هنوز نه
+
+**مرحله‌ی بعد (پیشنهاد):** اجرای سناریوهای تست T0 تا T7 از برنامه‌ی تست اولیه روی محیط واقعی، با ربات Grid Bot #2 (با simulation=true). اگر T0 تا T7 پاس شدند، می‌توان به test live محدود (T8) با سرمایه‌ی خیلی کم رفت.
+
+پایان نسخه‌ی به‌روز شده.
