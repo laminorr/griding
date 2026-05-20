@@ -440,97 +440,106 @@ class CheckTradesJob implements ShouldQueue
      */
     private function createPairOrder(GridOrder $filledOrder, BotConfig $bot): void
     {
-        DB::beginTransaction();
         $logger = app(BotActivityLogger::class);
 
+        $newType     = $filledOrder->type === 'buy' ? 'sell' : 'buy';
+        $priceChange = $bot->grid_spacing / 100;
+        $newPrice    = $newType === 'sell'
+            ? (int) round($filledOrder->price * (1 + $priceChange))
+            : (int) round($filledOrder->price * (1 - $priceChange));
+
+        $symbol = $bot->symbol ?? 'BTCIRT';
+
+        // grid_level is not yet a persisted column on grid_orders; default to 0
+        // until a future migration adds it and existing rows are back-filled.
+        $gridLevel     = $filledOrder->grid_level ?? 0;
+        $clientOrderId = GridOrder::buildClientOrderId($bot->id, $symbol, $newType, $newPrice, $gridLevel);
+
+        Log::info("CheckTradesJob: Creating pair order - Type: {$newType}, Price: {$newPrice} for filled order {$filledOrder->id}");
+
+        // Dedup guard — abort before opening a transaction if this pair was already placed.
+        $existingOrder = GridOrder::where('bot_config_id', $bot->id)
+            ->where('client_order_id', $clientOrderId)
+            ->whereIn('status', ['pending', 'placed', 'filled', 'partially_filled'])
+            ->first();
+
+        if ($existingOrder) {
+            Log::channel('trading')->info('DEDUP_SKIP', [
+                'bot_id'            => $bot->id,
+                'client_order_id'   => $clientOrderId,
+                'existing_order_id' => $existingOrder->id,
+                'existing_status'   => $existingOrder->status,
+            ]);
+            return;
+        }
+
+        /** @var NobitexService $nobitexService */
+        $nobitexService = app(NobitexService::class);
+
+        DB::beginTransaction();
         try {
-            // اگر سفارش خرید بود، سفارش فروش بساز و برعکس
-            $newType = $filledOrder->type === 'buy' ? 'sell' : 'buy';
-            $priceChange = $bot->grid_spacing / 100;
+            // Persist the intent row BEFORE the API call so a timeout-retry sees
+            // the 'pending' record and the dedup guard above blocks the duplicate.
+            Log::channel('trading')->info('PAIR_ORDER_PRE_CREATE', [
+                'bot_id'          => $bot->id,
+                'type'            => $newType,
+                'calculated_price'=> $newPrice,
+                'filled_order_id' => $filledOrder->id,
+                'client_order_id' => $clientOrderId,
+            ]);
 
-            // محاسبه قیمت سفارش جدید بر اساس grid spacing
-            if ($newType === 'sell') {
-                // سفارش فروش باید گران‌تر از خرید باشد
-                $newPrice = $filledOrder->price * (1 + $priceChange);
-            } else {
-                // سفارش خرید باید ارزان‌تر از فروش باشد
-                $newPrice = $filledOrder->price * (1 - $priceChange);
-            }
+            $newOrder = GridOrder::create([
+                'bot_config_id'   => $bot->id,
+                'price'           => $newPrice,
+                'amount'          => $filledOrder->amount,
+                'type'            => $newType,
+                'status'          => 'pending',
+                'client_order_id' => $clientOrderId,
+                'paired_order_id' => $filledOrder->id,
+            ]);
 
-            // گرد کردن قیمت
-            $newPrice = (int) round($newPrice);
-
-            Log::info("CheckTradesJob: Creating pair order - Type: {$newType}, Price: {$newPrice} for filled order {$filledOrder->id}");
-
-            // دریافت NobitexService از service container
-            /** @var NobitexService $nobitexService */
-            $nobitexService = app(NobitexService::class);
-
-            // تعیین symbol (پیش‌فرض BTCIRT)
-            $symbol = $bot->symbol ?? 'BTCIRT';
-
-            // ثبت سفارش در نوبیتکس
-            $startTime = microtime(true);
+            // Call exchange API
+            $startTime   = microtime(true);
             $apiResponse = $nobitexService->placeOrder(
                 $symbol,
                 $newType,
                 $newPrice,
-                (string) $filledOrder->amount
+                (string) $filledOrder->amount,
+                $clientOrderId
             );
             $executionTime = (int) ((microtime(true) - $startTime) * 1000);
 
-            // بررسی موفقیت‌آمیز بودن ثبت سفارش
             if (($apiResponse['status'] ?? null) !== 'ok') {
                 throw new \RuntimeException('Nobitex order placement failed: ' . ($apiResponse['message'] ?? 'Unknown error'));
             }
 
-            // دریافت ID سفارش از پاسخ نوبیتکس
             $nobitexOrderId = $apiResponse['order']['id'] ?? null;
-
             if (!$nobitexOrderId) {
                 throw new \RuntimeException('Nobitex order ID not found in response');
             }
 
-            // ایجاد رکورد سفارش جدید در دیتابیس
-            // Enhanced logging to catch any price corruption
-            Log::channel('trading')->info('PAIR_ORDER_PRE_CREATE', [
-                'bot_id' => $bot->id,
-                'type' => $newType,
-                'calculated_price' => $newPrice,
-                'price_type' => gettype($newPrice),
-                'filled_order_id' => $filledOrder->id,
-                'nobitex_order_id' => $nobitexOrderId,
-            ]);
-
-            $newOrder = GridOrder::create([
-                'bot_config_id' => $bot->id,
-                'price' => $newPrice,  // Mutator will convert to string
-                'amount' => $filledOrder->amount,
-                'type' => $newType,
-                'status' => 'placed',
+            $newOrder->update([
+                'status'           => 'placed',
                 'nobitex_order_id' => (string) $nobitexOrderId,
-                'paired_order_id' => $filledOrder->id,
             ]);
 
             Log::channel('trading')->info('PAIR_ORDER_POST_CREATE', [
-                'order_id' => $newOrder->id,
-                'stored_price' => $newOrder->price,
+                'order_id'    => $newOrder->id,
+                'stored_price'=> $newOrder->price,
                 'price_match' => ($newOrder->price == $newPrice) ? 'YES' : 'NO',
             ]);
 
-            // به‌روزرسانی سفارش قبلی با ID سفارش جفت
             $filledOrder->update(['paired_order_id' => $newOrder->id]);
 
             Log::info("CheckTradesJob: Successfully created pair order {$newOrder->id} (Nobitex ID: {$nobitexOrderId}) - Type: {$newType}, Price: {$newPrice} for filled order {$filledOrder->id}");
 
-            // Log API call and order placement
             $logger->logApiCall($bot->id, '/market/orders/add', null, $apiResponse, $executionTime);
             $logger->logOrderPlaced($bot->id, [
-                'order_id' => $newOrder->id,
-                'type' => $newType,
-                'price' => $newPrice,
-                'amount' => $filledOrder->amount,
-                'nobitex_order_id' => $nobitexOrderId,
+                'order_id'        => $newOrder->id,
+                'type'            => $newType,
+                'price'           => $newPrice,
+                'amount'          => $filledOrder->amount,
+                'nobitex_order_id'=> $nobitexOrderId,
             ]);
 
             DB::commit();
@@ -538,17 +547,13 @@ class CheckTradesJob implements ShouldQueue
         } catch (\Exception $e) {
             DB::rollBack();
 
-            // Log error
             $logger->logError($bot->id, 'خطا در ایجاد سفارش جفت: ' . $e->getMessage(), [
                 'filled_order_id' => $filledOrder->id,
-                'exception' => get_class($e),
+                'exception'       => get_class($e),
             ]);
 
             Log::error("CheckTradesJob: Failed to create pair order for filled order {$filledOrder->id}: " . $e->getMessage());
             Log::error($e->getTraceAsString());
-
-            // ثبت خطا در دیتابیس برای پیگیری
-            // می‌توانیم یک فیلد error_message در جدول اضافه کنیم یا در لاگ ذخیره کنیم
         }
     }
     

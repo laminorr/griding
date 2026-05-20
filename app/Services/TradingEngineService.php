@@ -325,15 +325,23 @@ class TradingEngineService
             $results['total']++;
 
             try {
+                $initSymbol      = $botConfig->symbol ?? 'BTCIRT';
+                $initClientId    = GridOrder::buildClientOrderId(
+                    $botConfig->id,
+                    $initSymbol,
+                    $level['type'],
+                    (int) round($level['price']),
+                    (int) ($level['level'] ?? 0)
+                );
+
                 // ایجاد رکورد محلی
                 $gridOrder = GridOrder::create([
-                    'bot_config_id' => $botConfig->id,
-                    'price' => $level['price'],
-                    'amount' => $orderSize,
-                    'type' => $level['type'],
-                    'status' => 'pending',
-                    'level' => $level['level'] ?? null,
-                    'priority' => $level['priority'] ?? 5
+                    'bot_config_id'   => $botConfig->id,
+                    'price'           => $level['price'],
+                    'amount'          => $orderSize,
+                    'type'            => $level['type'],
+                    'status'          => 'pending',
+                    'client_order_id' => $initClientId,
                 ]);
 
                 // ثبت در نوبیتکس
