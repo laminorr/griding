@@ -1,24 +1,47 @@
 @php
-    $dot     = 'bg-gray-400';
-    $label   = 'WS نامشخص';
-    $tooltip = '';
+    $dotColor  = '#9ca3af'; // gray fallback
+    $isActive  = false;
+    $label     = 'WS نامشخص';
+    $tooltip   = '';
 
     if ($status !== null) {
-        $dot = match ($status['status'] ?? '') {
-            'active' => 'bg-green-500',
-            'stale'  => 'bg-yellow-500',
-            'down'   => 'bg-red-500',
-            default  => 'bg-gray-400',
+        $dotColor = match ($status['status'] ?? '') {
+            'active' => '#22c55e',
+            'stale'  => '#eab308',
+            'down'   => '#ef4444',
+            default  => '#9ca3af',
         };
-        $label   = 'WS ' . ($status['label'] ?? 'نامشخص');
-        $age     = $status['newest_age_seconds'] ?? null;
-        $tooltip = $age !== null ? 'آخرین به‌روزرسانی: ' . $age . ' ثانیه پیش' : '';
+        $isActive = ($status['status'] ?? '') === 'active';
+        $label    = 'WS ' . ($status['label'] ?? 'نامشخص');
+        $age      = $status['newest_age_seconds'] ?? null;
+        $tooltip  = $age !== null ? 'آخرین به‌روزرسانی: ' . $age . ' ثانیه پیش' : '';
     }
+
+    $dotStyle = implode(';', [
+        'display:inline-block',
+        'width:8px',
+        'height:8px',
+        'border-radius:9999px',
+        'background-color:' . $dotColor,
+        'margin-inline-end:6px',
+        'flex-shrink:0',
+        $isActive ? 'box-shadow:0 0 4px ' . $dotColor : '',
+    ]);
 @endphp
 
+@if ($isActive)
+<style>
+    @keyframes ws-dot-pulse {
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50%       { opacity: .65; transform: scale(.85); }
+    }
+    .ws-dot-active { animation: ws-dot-pulse 2s ease-in-out infinite; }
+</style>
+@endif
+
 <a href="/admin"
-   class="inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-xs text-gray-400 hover:text-white hover:bg-white/10 transition-colors duration-150 select-none"
+   class="inline-flex items-center px-2 py-1 rounded-full text-xs text-gray-400 hover:text-white hover:bg-white/10 transition-colors duration-150 select-none"
    @if ($tooltip) title="{{ $tooltip }}" @endif>
-    <span class="inline-block w-2 h-2 rounded-full shrink-0 {{ $dot }}"></span>
+    <span style="{{ $dotStyle }}" @if ($isActive) class="ws-dot-active" @endif></span>
     <span>{{ $label }}</span>
 </a>
