@@ -7,8 +7,8 @@ use Illuminate\Support\Facades\Cache;
 
 class WebSocketHealthService
 {
-    private const ACTIVE_THRESHOLD = 30;
-    private const STALE_THRESHOLD  = 120;
+    private const ACTIVE_THRESHOLD = 15;
+    private const STALE_THRESHOLD  = 30;
 
     private const LABELS = [
         'active' => 'فعال',
