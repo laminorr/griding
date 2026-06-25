@@ -53,23 +53,24 @@ class GridOrder extends Model
 
     /**
      * Build a deterministic client_order_id for a grid order.
-     * Format: grid:{botId}:{SYMBOL}:{side}:{priceIrt}:L{gridLevel}
+     * Format: grid:{botId}:{SYMBOL}:{side}:{priceIrt}
+     * Identity is bot+symbol+side+price — the stable properties of a grid
+     * level — not a transient array index, so retries/re-runs of the same
+     * level always produce the same id.
      * Max length ≤ 64 chars to fit common exchange limits.
      */
     public static function buildClientOrderId(
         int $botId,
         string $symbol,
         string $side,
-        int $priceIrt,
-        int $gridLevel
+        int $priceIrt
     ): string {
         return sprintf(
-            'grid:%d:%s:%s:%d:L%d',
+            'grid:%d:%s:%s:%d',
             $botId,
             strtoupper($symbol),
             strtolower($side),
-            $priceIrt,
-            $gridLevel
+            $priceIrt
         );
     }
 

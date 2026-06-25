@@ -130,8 +130,9 @@ class GridOrderExecutor
             $price = $this->roundToTick($price, $tick);
             [$src, $dst] = $this->splitSymbol($symbol);
 
-            // Deterministic identifier — $levelIdx is the per-to_place loop index.
-            $clientOrderId = GridOrder::buildClientOrderId($botId, $symbol, $side, $price, $levelIdx);
+            // Deterministic identifier based on the grid level's stable identity
+            // (bot+symbol+side+price), not the transient $levelIdx loop index.
+            $clientOrderId = GridOrder::buildClientOrderId($botId, $symbol, $side, $price);
 
             if ($simulation) {
                 Log::channel('trading')->info('EXEC_SIM_PLACE', [
@@ -387,7 +388,7 @@ class GridOrderExecutor
      *
      * برای endpoint های خصوصی ثبت/لغو سفارش، بازار ریالی باید "rls" باشد.
      */
-    protected function splitSymbol(string $symbol): array
+    public static function splitSymbol(string $symbol): array
     {
         $s = strtolower(str_replace('-', '', trim($symbol)));
         if ($s === '' || strlen($s) < 6) {

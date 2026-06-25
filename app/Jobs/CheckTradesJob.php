@@ -450,10 +450,7 @@ class CheckTradesJob implements ShouldQueue
 
         $symbol = $bot->symbol ?? 'BTCIRT';
 
-        // grid_level is not yet a persisted column on grid_orders; default to 0
-        // until a future migration adds it and existing rows are back-filled.
-        $gridLevel     = $filledOrder->grid_level ?? 0;
-        $clientOrderId = GridOrder::buildClientOrderId($bot->id, $symbol, $newType, $newPrice, $gridLevel);
+        $clientOrderId = GridOrder::buildClientOrderId($bot->id, $symbol, $newType, $newPrice);
 
         Log::info("CheckTradesJob: Creating pair order - Type: {$newType}, Price: {$newPrice} for filled order {$filledOrder->id}");
 

@@ -374,8 +374,7 @@ class TradingEngineService
                     $botConfig->id,
                     $initSymbol,
                     $level['type'],
-                    (int) round($level['price']),
-                    (int) ($level['level'] ?? 0)
+                    (int) round($level['price'])
                 );
 
                 // ایجاد رکورد محلی
@@ -409,9 +408,11 @@ class TradingEngineService
                 } else {
                     // LIVE MODE - Create real order
                     $symbol = $botConfig->symbol ?? 'BTCIRT';
-                    // Parse symbol to get src/dst currencies (e.g., 'BTCIRT' -> 'btc', 'irt')
-                    $srcCurrency = strtolower(substr($symbol, 0, -3)); // Remove last 3 chars (IRT)
-                    $dstCurrency = strtolower(substr($symbol, -3));    // Get last 3 chars (IRT)
+                    // Reuse GridOrderExecutor's symbol/currency splitting (handles
+                    // the IRT -> rls conversion and variable-length quote currencies
+                    // like USDT) so this path sends the exact same currency codes
+                    // to Nobitex as the rebalance path.
+                    [$srcCurrency, $dstCurrency] = GridOrderExecutor::splitSymbol($symbol);
 
                     // Get precision for this symbol from config (default 8 for BTC)
                     $precision = config("trading.exchange.precision.{$symbol}.qty_decimals") ?? 8;
@@ -427,7 +428,8 @@ class TradingEngineService
                         srcCurrency: $srcCurrency,
                         dstCurrency: $dstCurrency,
                         amountBase: $amountStr,  // String: "0.0001678"
-                        priceIRT: (int) round($level['price'])  // Pass as int, will be converted to clean string in DTO
+                        priceIRT: (int) round($level['price']),  // Pass as int, will be converted to clean string in DTO
+                        clientRef: $initClientId,
                     );
 
                     // Log attempt before calling Nobitex
