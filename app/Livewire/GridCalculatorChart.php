@@ -720,7 +720,7 @@ class GridCalculatorChart extends Component
             '4h' => 240,
             '1d' => 1440,
             default => 60
-        ];
+        };
     }
 
     private function updateCurrentPriceLine(): void
