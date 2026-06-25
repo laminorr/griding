@@ -225,14 +225,19 @@ class TradingEngineService
      */
     private function cleanupExistingOrders(BotConfig $botConfig): array
     {
-        try {
-            $existingOrders = GridOrder::where('bot_config_id', $botConfig->id)
-                                     ->whereIn('status', ['placed', 'pending'])
-                                     ->get();
+        // Intentionally no try/catch swallowing here: if cancelling an existing
+        // order fails, the exception must propagate to the caller (initializeGrid)
+        // so the grid is NOT initialized on top of stale, still-open orders. Two
+        // grids running simultaneously on the same capital is far worse than an
+        // initialization failure that gets surfaced and retried.
+        $existingOrders = GridOrder::where('bot_config_id', $botConfig->id)
+                                 ->whereIn('status', ['placed', 'pending'])
+                                 ->get();
 
-            $cancelledCount = 0;
+        $cancelledCount = 0;
 
-            foreach ($existingOrders as $order) {
+        foreach ($existingOrders as $order) {
+            try {
                 if ($order->nobitex_order_id) {
                     if ($botConfig->simulation) {
                         // SIMULATION MODE - Log only, don't cancel real order
@@ -255,17 +260,26 @@ class TradingEngineService
                 ]);
 
                 sleep(1);
+            } catch (Exception $e) {
+                Log::error("Cleanup of existing grid order failed", [
+                    'bot_id' => $botConfig->id,
+                    'symbol' => $botConfig->symbol ?? null,
+                    'grid_order_id' => $order->id,
+                    'nobitex_order_id' => $order->nobitex_order_id,
+                    'error' => $e->getMessage(),
+                ]);
+
+                throw new Exception(
+                    "Failed to cancel existing order #{$order->id} during cleanup for bot {$botConfig->id}: {$e->getMessage()}",
+                    previous: $e
+                );
             }
-
-            return [
-                'total_orders' => $existingOrders->count(),
-                'cancelled' => $cancelledCount
-            ];
-
-        } catch (Exception $e) {
-            Log::error("Cleanup failed", ['error' => $e->getMessage()]);
-            return ['total_orders' => 0, 'cancelled' => 0];
         }
+
+        return [
+            'total_orders' => $existingOrders->count(),
+            'cancelled' => $cancelledCount
+        ];
     }
 
     /**
