@@ -46,6 +46,7 @@ return [
         'precision' => [
             'BTCIRT'  => ['price_decimals' => 0, 'qty_decimals' => 8],
             'ETHIRT'  => ['price_decimals' => 0, 'qty_decimals' => 6],
+            'LTCIRT'  => ['price_decimals' => 0, 'qty_decimals' => 6],
             'USDTIRT' => ['price_decimals' => 0, 'qty_decimals' => 2],
         ],
     ],

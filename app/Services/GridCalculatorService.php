@@ -22,7 +22,6 @@ class GridCalculatorService
     private NobitexService $nobitexService;
     
     // Nobitex Exchange Constants
-    const NOBITEX_MIN_ORDER_IRT = 3000000; // 3M IRT minimum
     const NOBITEX_MIN_BTC_AMOUNT = 0.000001;
     const NOBITEX_FEE_RATE = 0.25; // 0.25% per trade
     const EXCHANGE_SLIPPAGE = 0.1; // 0.1% estimated slippage
@@ -47,6 +46,28 @@ class GridCalculatorService
     public function __construct(NobitexService $nobitexService)
     {
         $this->nobitexService = $nobitexService;
+    }
+
+    /**
+     * حداقل ارزش سفارش (ریال) — منبع واحد: config/trading.php
+     */
+    private function minOrderIrt(): int
+    {
+        $minIrt = (int) config('trading.min_order_value_irt');
+        if (empty($minIrt)) {
+            Log::warning('GridCalculatorService: min_order_value_irt not loaded from config, using fallback: 3,000,000 IRT');
+            $minIrt = 3_000_000;
+        }
+
+        return $minIrt;
+    }
+
+    /**
+     * تعداد اعشار مقدار کریپتو برای هر symbol — منبع واحد: config/trading.php
+     */
+    private function qtyDecimals(string $symbol): int
+    {
+        return (int) (config("trading.exchange.precision.{$symbol}.qty_decimals") ?? 8);
     }
 
     /**
@@ -372,7 +393,7 @@ $profitMargin = $grossProfitPerCycle > 0
         $activeCapital = $totalCapital * ($activePercent / 100);
         $orderSize = $activeCapital / $levels;
         
-        if ($orderSize < self::NOBITEX_MIN_ORDER_IRT) {
+        if ($orderSize < $this->minOrderIrt()) {
             throw new Exception('اندازه سفارش خیلی کم است. تعداد سطوح را کم کنید یا درصد سرمایه فعال را افزایش دهید');
         }
     }
@@ -529,13 +550,7 @@ $profitMargin = $grossProfitPerCycle > 0
     {
         $cryptoAmount = $irtAmount / $price;
         
-        $precision = match($symbol) {
-            'BTCIRT' => 8,
-            'ETHIRT' => 6,
-            'LTCIRT' => 6,
-            'USDTIRT' => 2,
-            default => 8
-        };
+        $precision = $this->qtyDecimals($symbol);
         
         return round($cryptoAmount, $precision);
     }
@@ -545,7 +560,7 @@ $profitMargin = $grossProfitPerCycle > 0
      */
     private function optimizeOrderSize(float $irtAmount, float $cryptoAmount, string $symbol): array
     {
-        $optimizedIRT = max($irtAmount, self::NOBITEX_MIN_ORDER_IRT);
+        $optimizedIRT = max($irtAmount, $this->minOrderIrt());
         $optimizedCrypto = max($cryptoAmount, self::NOBITEX_MIN_BTC_AMOUNT);
         
         // اگر ریال افزایش یافت، کریپتو را دوباره محاسبه کن
@@ -568,7 +583,7 @@ $profitMargin = $grossProfitPerCycle > 0
         $warnings = [];
         $recommendations = [];
         
-        $isValidIRT = $optimizedSizes['irt_value'] >= self::NOBITEX_MIN_ORDER_IRT;
+        $isValidIRT = $optimizedSizes['irt_value'] >= $this->minOrderIrt();
         $isValidCrypto = $optimizedSizes['crypto_amount'] >= self::NOBITEX_MIN_BTC_AMOUNT;
         
         if (!$isValidIRT) {
@@ -617,7 +632,7 @@ $profitMargin = $grossProfitPerCycle > 0
     {
         return [
             'exchange' => 'Nobitex',
-            'min_order_check' => $optimizedSizes['irt_value'] >= self::NOBITEX_MIN_ORDER_IRT,
+            'min_order_check' => $optimizedSizes['irt_value'] >= $this->minOrderIrt(),
             'precision_check' => true,
             'estimated_fee' => round($optimizedSizes['irt_value'] * (self::NOBITEX_FEE_RATE / 100), 0),
             'execution_feasible' => true
@@ -1568,20 +1583,20 @@ public function healthCheck(): array
         $expectedOrderSize = $activeCapital / $baseSettings['levels'];
         
         // اگر اندازه سفارش خیلی کم است
-        if ($expectedOrderSize < self::NOBITEX_MIN_ORDER_IRT) {
+        if ($expectedOrderSize < $this->minOrderIrt()) {
             // ابتدا تعداد سطوح را کم کن
             while ($adjusted['levels'] > self::MIN_GRID_LEVELS) {
                 $adjusted['levels'] -= 2;
                 $newOrderSize = $activeCapital / $adjusted['levels'];
-                if ($newOrderSize >= self::NOBITEX_MIN_ORDER_IRT) {
+                if ($newOrderSize >= $this->minOrderIrt()) {
                     break;
                 }
             }
             
             // اگر هنوز کم است، درصد فعال را افزایش ده
             $finalOrderSize = ($capital * ($adjusted['active_percent'] / 100)) / $adjusted['levels'];
-            if ($finalOrderSize < self::NOBITEX_MIN_ORDER_IRT) {
-                $requiredActivePercent = ($adjusted['levels'] * self::NOBITEX_MIN_ORDER_IRT) / $capital * 100;
+            if ($finalOrderSize < $this->minOrderIrt()) {
+                $requiredActivePercent = ($adjusted['levels'] * $this->minOrderIrt()) / $capital * 100;
                 $adjusted['active_percent'] = min(60, ceil($requiredActivePercent + 10));
             }
         }
