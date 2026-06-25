@@ -24,7 +24,6 @@ class GridStatsCards extends Component
     public float $totalCapital = 0;
     public float $activeCapitalPercent = 0;
     public float $gridSpacing = 0;
-    public int $gridLevels = 0;
     public float $currentPrice = 0;
     public string $strategyType = 'balanced';
     
