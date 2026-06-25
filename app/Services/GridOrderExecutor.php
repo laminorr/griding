@@ -388,7 +388,7 @@ class GridOrderExecutor
      *
      * برای endpoint های خصوصی ثبت/لغو سفارش، بازار ریالی باید "rls" باشد.
      */
-    protected function splitSymbol(string $symbol): array
+    public static function splitSymbol(string $symbol): array
     {
         $s = strtolower(str_replace('-', '', trim($symbol)));
         if ($s === '' || strlen($s) < 6) {

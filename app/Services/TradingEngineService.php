@@ -408,9 +408,11 @@ class TradingEngineService
                 } else {
                     // LIVE MODE - Create real order
                     $symbol = $botConfig->symbol ?? 'BTCIRT';
-                    // Parse symbol to get src/dst currencies (e.g., 'BTCIRT' -> 'btc', 'irt')
-                    $srcCurrency = strtolower(substr($symbol, 0, -3)); // Remove last 3 chars (IRT)
-                    $dstCurrency = strtolower(substr($symbol, -3));    // Get last 3 chars (IRT)
+                    // Reuse GridOrderExecutor's symbol/currency splitting (handles
+                    // the IRT -> rls conversion and variable-length quote currencies
+                    // like USDT) so this path sends the exact same currency codes
+                    // to Nobitex as the rebalance path.
+                    [$srcCurrency, $dstCurrency] = GridOrderExecutor::splitSymbol($symbol);
 
                     // Get precision for this symbol from config (default 8 for BTC)
                     $precision = config("trading.exchange.precision.{$symbol}.qty_decimals") ?? 8;
