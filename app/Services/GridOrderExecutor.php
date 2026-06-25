@@ -140,6 +140,7 @@ class GridOrderExecutor
             }
 
             $gridOrder = null;
+            $apiCallAttempted = false;
             try {
                 // Persist intent row BEFORE calling the exchange so a timeout retry
                 // will find this record and skip instead of creating a duplicate.
@@ -164,6 +165,7 @@ class GridOrderExecutor
                     clientRef:   $clientOrderId,
                 );
 
+                $apiCallAttempted = true;
                 $resp    = $this->svc->createOrder($dto);
                 $orderId = $resp->orderId ?? null;
 
@@ -191,9 +193,21 @@ class GridOrderExecutor
             } catch (\Throwable $e) {
                 $errors++;
                 if ($gridOrder && $gridOrder->exists) {
-                    $gridOrder->update(['status' => 'cancelled']);
+                    // If the exchange API call was never reached (e.g. DTO build failed,
+                    // or the order never left our process), it is safe to mark 'cancelled'.
+                    // If the call was attempted, we cannot tell whether Nobitex received
+                    // and placed the order before the exception (timeout, dropped
+                    // response, etc.), so the local record must NOT be marked 'cancelled' —
+                    // that would risk a duplicate order being placed later for what is
+                    // actually still a live exchange order. Such rows are left in
+                    // 'submission_unknown' and require manual or automated reconciliation
+                    // (checking directly with Nobitex) before being treated as cancelled
+                    // or active. Building that reconciliation job is out of scope here.
+                    $gridOrder->update([
+                        'status' => $apiCallAttempted ? 'submission_unknown' : 'cancelled',
+                    ]);
                 }
-                Log::channel('trading')->error('EXEC_PLACE_ERR', ['symbol'=>$symbol,'err'=>$e->getMessage(),'plan'=>$p]);
+                Log::channel('trading')->error('EXEC_PLACE_ERR', ['symbol'=>$symbol,'err'=>$e->getMessage(),'plan'=>$p,'api_call_attempted'=>$apiCallAttempted]);
             }
         }
 
