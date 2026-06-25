@@ -73,12 +73,31 @@ class GridOrderExecutor
             }
 
             try {
+                // Exchange cancel call happens first, outside of any DB transaction.
+                // The local GridOrder record is only flipped to 'cancelled' once the
+                // exchange has confirmed the cancellation, immediately afterward —
+                // never before, and never if the call below throws.
                 $this->svc->cancelOrder($oid);
                 $this->reg->forget($symbol, $oid);
+
+                $updated = GridOrder::where('bot_config_id', $botId)
+                    ->where('nobitex_order_id', $oid)
+                    ->update(['status' => 'cancelled']);
+
+                if ($updated === 0) {
+                    Log::channel('trading')->warning('EXEC_CANCEL_NO_LOCAL_RECORD', [
+                        'symbol' => $symbol, 'bot_id' => $botId, 'id' => $oid,
+                    ]);
+                }
+
                 $cancelled++;
                 Log::channel('trading')->info('EXEC_CANCEL_OK', ['symbol'=>$symbol,'id'=>$oid]);
                 usleep(250_000);
             } catch (\Throwable $e) {
+                // Cancel call failed or was ambiguous (e.g. timeout) — leave the
+                // local GridOrder record in its current state and log for
+                // investigation. Do NOT mark it 'cancelled' here: we don't know
+                // whether the exchange actually cancelled it.
                 $errors++;
                 Log::channel('trading')->error('EXEC_CANCEL_ERR', ['symbol'=>$symbol,'err'=>$e->getMessage(),'order'=>$o]);
             }
@@ -140,6 +159,7 @@ class GridOrderExecutor
             }
 
             $gridOrder = null;
+            $apiCallAttempted = false;
             try {
                 // Persist intent row BEFORE calling the exchange so a timeout retry
                 // will find this record and skip instead of creating a duplicate.
@@ -164,6 +184,7 @@ class GridOrderExecutor
                     clientRef:   $clientOrderId,
                 );
 
+                $apiCallAttempted = true;
                 $resp    = $this->svc->createOrder($dto);
                 $orderId = $resp->orderId ?? null;
 
@@ -191,9 +212,21 @@ class GridOrderExecutor
             } catch (\Throwable $e) {
                 $errors++;
                 if ($gridOrder && $gridOrder->exists) {
-                    $gridOrder->update(['status' => 'cancelled']);
+                    // If the exchange API call was never reached (e.g. DTO build failed,
+                    // or the order never left our process), it is safe to mark 'cancelled'.
+                    // If the call was attempted, we cannot tell whether Nobitex received
+                    // and placed the order before the exception (timeout, dropped
+                    // response, etc.), so the local record must NOT be marked 'cancelled' —
+                    // that would risk a duplicate order being placed later for what is
+                    // actually still a live exchange order. Such rows are left in
+                    // 'submission_unknown' and require manual or automated reconciliation
+                    // (checking directly with Nobitex) before being treated as cancelled
+                    // or active. Building that reconciliation job is out of scope here.
+                    $gridOrder->update([
+                        'status' => $apiCallAttempted ? 'submission_unknown' : 'cancelled',
+                    ]);
                 }
-                Log::channel('trading')->error('EXEC_PLACE_ERR', ['symbol'=>$symbol,'err'=>$e->getMessage(),'plan'=>$p]);
+                Log::channel('trading')->error('EXEC_PLACE_ERR', ['symbol'=>$symbol,'err'=>$e->getMessage(),'plan'=>$p,'api_call_attempted'=>$apiCallAttempted]);
             }
         }
 
