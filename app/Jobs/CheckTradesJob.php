@@ -49,16 +49,27 @@ class CheckTradesJob implements ShouldQueue
         }
         
         Log::info('CheckTradesJob: Starting check for ' . $activeBots->count() . ' active bots');
-        
+
+        $failures = [];
+
         foreach ($activeBots as $bot) {
             try {
                 $this->processBot($bot);
             } catch (\Exception $e) {
                 Log::error("CheckTradesJob: Error checking bot {$bot->name}: " . $e->getMessage());
                 Log::error($e->getTraceAsString());
+                $failures[] = "{$bot->name} ({$bot->id}): " . $e->getMessage();
             }
         }
-        
+
+        if (!empty($failures)) {
+            // At least one bot failed to process — let the Queue's retry/backoff
+            // mechanism engage instead of silently reporting overall success.
+            throw new \RuntimeException(
+                'CheckTradesJob: ' . count($failures) . ' bot(s) failed to process: ' . implode(' | ', $failures)
+            );
+        }
+
         Log::info('CheckTradesJob: Completed successfully');
     }
 
@@ -116,7 +127,12 @@ class CheckTradesJob implements ShouldQueue
 
             Log::error("CheckTradesJob: [CATCH] Error for bot {$bot->name}: " . $e->getMessage());
             Log::error($e->getTraceAsString());
-            // Don't rethrow - let finally block run
+
+            // Re-thrown below (after the finally block runs) so handle()'s
+            // per-bot catch can record this as a failure and ultimately let
+            // the Queue's retry mechanism engage. finally still executes
+            // before the rethrow propagates.
+            $caught = $e;
         } finally {
             // ✅ ADD: Log at start of finally
             Log::info("CheckTradesJob: [FINALLY] Updating timestamp for bot {$bot->name}");
@@ -137,6 +153,10 @@ class CheckTradesJob implements ShouldQueue
                 Log::error("CheckTradesJob: [FINALLY ERROR] Failed to update timestamp: " . $e->getMessage());
                 Log::error($e->getTraceAsString());
             }
+        }
+
+        if (isset($caught)) {
+            throw $caught;
         }
 
         // ✅ ADD: Log at very end
