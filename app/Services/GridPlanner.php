@@ -56,6 +56,11 @@ class GridPlanner
         if ($stepPct <= 0) {
             throw new \InvalidArgumentException('stepPct must be > 0');
         }
+        // در حالت 'both' باید levels زوج باشد، چون هر سمت (خرید/فروش) نیمی از آن را می‌گیرد.
+        // عدد فرد یعنی یک لول به‌صورت خاموش حذف می‌شود؛ به‌جای آن خطای واضح می‌دهیم.
+        if ($mode === 'both' && $levels % 2 !== 0) {
+            throw new \InvalidArgumentException("levels must be even when mode is 'both' (got {$levels})");
+        }
         $tick = max(1, $tick);
 
         // --- قیمت مرجع

@@ -115,7 +115,7 @@ class AdjustGridJob implements ShouldQueue
 
                     // ✅ Only adjust grid if price moved significantly outside current grid range
                     if (!empty($existingOrders)) {
-                        $currentPrice = (int) ($plan['current_price'] ?? 0);
+                        $currentPrice = (int) ($plan['mid'] ?? 0);
                         $prices = array_column($existingOrders, 'price');
                         $minPrice = min($prices);
                         $maxPrice = max($prices);

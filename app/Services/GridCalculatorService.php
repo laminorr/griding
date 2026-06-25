@@ -1688,10 +1688,10 @@ public function healthCheck(): array
     /**
      * آنالیز سریع بازار برای تصمیم‌گیری
      */
-public function quickMarketAnalysis(): array
+public function quickMarketAnalysis(string $symbol): array
 {
     try {
-        $currentPrice = $this->getCurrentPriceWithValidation('BTCIRT');
+        $currentPrice = $this->getCurrentPriceWithValidation($symbol);
 
         // مقادیر پیش‌فرض امن
         $dayChange = 5.0;
@@ -1699,7 +1699,7 @@ public function quickMarketAnalysis(): array
         $spreadPercent = 0.2;
 
         if (method_exists($this->nobitexService, 'getMarketStats')) {
-            $marketStats = $this->nobitexService->getMarketStats('BTCIRT');
+            $marketStats = $this->nobitexService->getMarketStats($symbol);
             if (is_array($marketStats)) {
                 $dayChange = isset($marketStats['dayChange']) ? abs((float)$marketStats['dayChange']) : $dayChange;
                 $spread = isset($marketStats['spread']) ? (float)$marketStats['spread'] : $spread;
