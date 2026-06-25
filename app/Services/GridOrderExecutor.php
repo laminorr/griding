@@ -73,12 +73,31 @@ class GridOrderExecutor
             }
 
             try {
+                // Exchange cancel call happens first, outside of any DB transaction.
+                // The local GridOrder record is only flipped to 'cancelled' once the
+                // exchange has confirmed the cancellation, immediately afterward —
+                // never before, and never if the call below throws.
                 $this->svc->cancelOrder($oid);
                 $this->reg->forget($symbol, $oid);
+
+                $updated = GridOrder::where('bot_config_id', $botId)
+                    ->where('nobitex_order_id', $oid)
+                    ->update(['status' => 'cancelled']);
+
+                if ($updated === 0) {
+                    Log::channel('trading')->warning('EXEC_CANCEL_NO_LOCAL_RECORD', [
+                        'symbol' => $symbol, 'bot_id' => $botId, 'id' => $oid,
+                    ]);
+                }
+
                 $cancelled++;
                 Log::channel('trading')->info('EXEC_CANCEL_OK', ['symbol'=>$symbol,'id'=>$oid]);
                 usleep(250_000);
             } catch (\Throwable $e) {
+                // Cancel call failed or was ambiguous (e.g. timeout) — leave the
+                // local GridOrder record in its current state and log for
+                // investigation. Do NOT mark it 'cancelled' here: we don't know
+                // whether the exchange actually cancelled it.
                 $errors++;
                 Log::channel('trading')->error('EXEC_CANCEL_ERR', ['symbol'=>$symbol,'err'=>$e->getMessage(),'order'=>$o]);
             }
