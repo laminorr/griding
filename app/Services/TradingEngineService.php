@@ -469,30 +469,6 @@ class TradingEngineService
     }
 
     /**
-     * استخراج ارز پایه از نماد (مثل ETHIRT -> eth)
-     * منطق مشابه GridOrderExecutor::splitSymbol برای حفظ یکنواختی.
-     */
-    private function baseCurrency(string $symbol): string
-    {
-        $s = strtolower(str_replace('-', '', trim($symbol)));
-
-        if ($s === '' || strlen($s) < 6) {
-            throw new Exception("Bad symbol: {$symbol}");
-        }
-        if (str_ends_with($s, 'irt')) {
-            return substr($s, 0, -3);
-        }
-        if (str_ends_with($s, 'usdt')) {
-            return substr($s, 0, -4);
-        }
-        if (strlen($s) === 6) {
-            return substr($s, 0, 3);
-        }
-
-        throw new Exception("Unsupported symbol: {$symbol}");
-    }
-
-    /**
      * ثبت سفارشات گرید
      */
     private function placeGridOrders(BotConfig $botConfig, Collection $gridLevels, float $orderSize): array
@@ -506,7 +482,7 @@ class TradingEngineService
         ];
 
         // Get base currency balance once before loop (for SELL orders)
-        $baseCurrency = $this->baseCurrency($botConfig->symbol ?? 'BTCIRT');
+        $baseCurrency = GridOrderExecutor::splitSymbol($botConfig->symbol ?? 'BTCIRT')[0];
         $btcBalance = null;
         $needsBalanceCheck = $gridLevels->contains('type', 'sell');
 
