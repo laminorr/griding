@@ -8,7 +8,6 @@ use App\Enums\OrderSide;
 use App\Models\GridOrder;
 use App\Models\BotConfig;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Collection;
 use Exception;
 
@@ -40,8 +39,6 @@ class TradingEngineService
     public function initializeGrid(BotConfig $botConfig, array $options = []): array
     {
         try {
-            DB::beginTransaction();
-
             Log::info("Starting grid initialization", ['bot_id' => $botConfig->id]);
 
             // 1. بررسی‌های اولیه
@@ -107,8 +104,6 @@ class TradingEngineService
                 'last_rebalance_at' => now()
             ]);
 
-            DB::commit();
-
             Log::info("Grid initialization completed successfully", [
                 'bot_id' => $botConfig->id,
                 'center_price' => $centerPrice,
@@ -129,8 +124,14 @@ class TradingEngineService
             ];
 
         } catch (Exception $e) {
-            DB::rollBack();
-
+            // No DB transaction to roll back here: external Nobitex API calls must
+            // never be wrapped in a long-running DB transaction (an order can be
+            // successfully created on the exchange before a later step fails, and
+            // a rollback would erase the local record while the order stays open
+            // on the exchange — an orphaned order). Each GridOrder row is persisted
+            // immediately after its own exchange call succeeds (see placeGridOrders()
+            // and cleanupExistingOrders()), so orders already placed before the
+            // failure remain correctly recorded locally.
             Log::error("Grid initialization failed", [
                 'bot_id' => $botConfig->id,
                 'error' => $e->getMessage()
