@@ -2,9 +2,6 @@
 
 namespace App\Services;
 
-use App\DTOs\CreateOrderDto;
-use App\Enums\ExecutionType;
-use App\Enums\OrderSide;
 use App\Models\GridOrder;
 use App\Models\BotConfig;
 use Illuminate\Support\Facades\Log;
@@ -27,15 +24,24 @@ class TradingEngineService
     private NobitexService $nobitexService;
     private GridCalculatorService $gridCalculator;
     private BotActivityLogger $activityLogger;
+    private GridPlanner $gridPlanner;
+    private GridOrderSync $gridOrderSync;
+    private GridOrderExecutor $gridOrderExecutor;
 
     public function __construct(
         NobitexService $nobitexService,
         GridCalculatorService $gridCalculator,
-        BotActivityLogger $activityLogger
+        BotActivityLogger $activityLogger,
+        GridPlanner $gridPlanner,
+        GridOrderSync $gridOrderSync,
+        GridOrderExecutor $gridOrderExecutor
     ) {
         $this->nobitexService = $nobitexService;
         $this->gridCalculator = $gridCalculator;
         $this->activityLogger = $activityLogger;
+        $this->gridPlanner = $gridPlanner;
+        $this->gridOrderSync = $gridOrderSync;
+        $this->gridOrderExecutor = $gridOrderExecutor;
     }
 
     /**
@@ -111,7 +117,8 @@ class TradingEngineService
             $placementResult = $this->placeGridOrders(
                 $botConfig,
                 $gridResult['grid_levels'],
-                $orderSizeResult['crypto_amount']
+                $orderSizeResult['crypto_amount'],
+                $centerPrice
             );
 
             // 8. ارزیابی سلامت راه‌اندازی و تعیین init_status
@@ -470,21 +477,38 @@ class TradingEngineService
 
     /**
      * ثبت سفارشات گرید
+     *
+     * Initial grid setup now goes through the same GridPlanner -> GridOrderSync
+     * -> GridOrderExecutor pipeline used by the rebalance path (AdjustGridJob),
+     * treating initial setup as "diff against an empty existing-orders array"
+     * (GridOrderExecutor::applyForBot() is void and creates its own GridOrder
+     * rows + handles simulation branching internally, so the per-order
+     * success/failure counts this method must return are derived by querying
+     * the GridOrder rows it created, scoped to this bot and this call's time
+     * window — see $callStartedAt below).
      */
-    private function placeGridOrders(BotConfig $botConfig, Collection $gridLevels, float $orderSize): array
+    private function placeGridOrders(BotConfig $botConfig, Collection $gridLevels, float $orderSize, float $centerPrice): array
     {
+        $plannedBuy = $gridLevels->where('type', 'buy')->count();
+        $plannedSell = $gridLevels->where('type', 'sell')->count();
+
         $results = [
             'total' => 0, 'successful' => 0, 'failed' => 0, 'errors' => [],
-            'planned_buy' => $gridLevels->where('type', 'buy')->count(),
-            'planned_sell' => $gridLevels->where('type', 'sell')->count(),
+            'planned_buy' => $plannedBuy,
+            'planned_sell' => $plannedSell,
             'successful_buy' => 0,
             'successful_sell' => 0,
         ];
 
-        // Get base currency balance once before loop (for SELL orders)
-        $baseCurrency = GridOrderExecutor::splitSymbol($botConfig->symbol ?? 'BTCIRT')[0];
+        $symbol = $botConfig->symbol ?? 'BTCIRT';
+
+        // Get base currency balance once before loop (for SELL orders) — this
+        // per-level affordability check (Phase 5) has no equivalent inside
+        // GridPlanner/GridOrderSync/GridOrderExecutor, so it stays here as a
+        // pre-filter applied to the plan's "to_place" items before executing.
+        $baseCurrency = GridOrderExecutor::splitSymbol($symbol)[0];
         $btcBalance = null;
-        $needsBalanceCheck = $gridLevels->contains('type', 'sell');
+        $needsBalanceCheck = $plannedSell > 0;
 
         if ($needsBalanceCheck && !$botConfig->simulation) {
             try {
@@ -506,177 +530,147 @@ class TradingEngineService
             }
         }
 
-        foreach ($gridLevels as $level) {
-            // Check BTC balance for SELL orders
-            if ($level['type'] === 'sell' && !$botConfig->simulation) {
-                $requiredBtc = $orderSize;
+        // 1) Plan — reuse the already-computed center price (the weighted
+        // average of live price + bot's prior center_price from step 3 of
+        // initializeGrid()) as lastPrice so GridPlanner does not re-fetch a
+        // possibly-different live price at this later point in time. levels/
+        // stepPct/budgetIrt map from this bot's legacy fields exactly as
+        // AdjustGridJob already does for the rebalance path. fixedQty pins
+        // every level to the single order size initializeGrid() already
+        // computed via GridCalculatorService::calculateOrderSize(), preserving
+        // the existing "one order size for the whole grid" behavior instead of
+        // GridPlanner's budget-derived per-level qty.
+        $fixedQty = rtrim(rtrim(sprintf('%.8f', $orderSize), '0'), '.');
+        if ($fixedQty === '' || $fixedQty === '-0') {
+            $fixedQty = '0';
+        }
 
-                if ($btcBalance === null || $btcBalance < $requiredBtc) {
-                    Log::channel('trading')->warning('Insufficient base currency for SELL order', [
+        $plan = $this->gridPlanner->plan(
+            $symbol,
+            lastPrice: (int) round($centerPrice),
+            levels: (int) $botConfig->grid_levels,
+            stepPct: (float) $botConfig->grid_spacing,
+            mode: 'both',
+            budgetIrt: (int) $botConfig->total_capital,
+            fixedQty: $fixedQty
+        );
+
+        // 2) Diff — initial setup has no existing orders to reconcile against.
+        $diff = $this->gridOrderSync->diff($plan, []);
+
+        // Apply the SELL-side balance pre-filter (Phase 5 behavior) to
+        // to_place before execution: drop sell items the account cannot
+        // currently cover, deducting as we go exactly as the old loop did.
+        if ($needsBalanceCheck && !$botConfig->simulation) {
+            $filteredToPlace = [];
+            foreach ($diff['to_place'] as $item) {
+                if (($item['side'] ?? '') === 'sell') {
+                    $requiredBtc = $orderSize;
+
+                    if ($btcBalance === null || $btcBalance < $requiredBtc) {
+                        Log::channel('trading')->warning('Insufficient base currency for SELL order', [
+                            'bot_id' => $botConfig->id,
+                            'base_currency' => $baseCurrency,
+                            'price' => $item['price'],
+                            'required' => $requiredBtc,
+                            'available' => $btcBalance ?? 'unknown',
+                        ]);
+                        continue; // Skip this SELL order
+                    }
+
+                    $btcBalance -= $requiredBtc;
+
+                    Log::channel('trading')->info('Base currency sufficient for SELL order', [
                         'bot_id' => $botConfig->id,
                         'base_currency' => $baseCurrency,
-                        'price' => $level['price'],
+                        'price' => $item['price'],
                         'required' => $requiredBtc,
-                        'available' => $btcBalance ?? 'unknown',
+                        'remaining' => $btcBalance,
                     ]);
-                    continue; // Skip this SELL order
                 }
 
-                // Deduct from available balance for next iteration
-                $btcBalance -= $requiredBtc;
-
-                Log::channel('trading')->info('Base currency sufficient for SELL order', [
-                    'bot_id' => $botConfig->id,
-                    'base_currency' => $baseCurrency,
-                    'price' => $level['price'],
-                    'required' => $requiredBtc,
-                    'remaining' => $btcBalance,
-                ]);
+                $filteredToPlace[] = $item;
             }
+            $diff['to_place'] = $filteredToPlace;
+        }
 
-            $results['total']++;
+        $results['total'] = count($diff['to_place']);
+        $simulation = (bool) $botConfig->simulation;
 
-            try {
-                $initSymbol      = $botConfig->symbol ?? 'BTCIRT';
-                $initClientId    = GridOrder::buildClientOrderId(
-                    $botConfig->id,
-                    $initSymbol,
-                    $level['type'],
-                    (int) round($level['price'])
-                );
+        // 3) Execute — applyForBot() is void, so success/failure counts must be
+        // derived after the call rather than from a return value.
+        //
+        // IMPORTANT, verified by reading GridOrderExecutor::applyForBot()
+        // directly: in SIMULATION mode it does NOT create any GridOrder row at
+        // all for to_place items (EXEC_SIM_PLACE just logs and continues) —
+        // unlike the old placeGridOrders() loop, which always created a row
+        // even in simulation. So for simulation bots we cannot recover counts
+        // by reading GridOrder back; instead we derive them directly from
+        // $diff['to_place'], because in simulation every item that reaches
+        // that point in applyForBot() is unconditionally counted as placed
+        // (no real API call, so no real failure mode exists for it there).
+        // For LIVE bots, applyForBot() DOES create a real GridOrder row per
+        // item (status placed/cancelled/submission_unknown), so counts are
+        // derived by reading those rows back, scoped to this bot and this
+        // call's time window.
+        $callStartedAt = now();
 
-                // ایجاد رکورد محلی
-                $gridOrder = GridOrder::create([
-                    'bot_config_id'   => $botConfig->id,
-                    'price'           => $level['price'],
-                    'amount'          => $orderSize,
-                    'type'            => $level['type'],
-                    'status'          => 'pending',
-                    'client_order_id' => $initClientId,
-                ]);
+        try {
+            $this->gridOrderExecutor->applyForBot($botConfig->id, $diff, simulation: $simulation);
+        } catch (\Throwable $e) {
+            Log::error('GridOrderExecutor::applyForBot threw during initial grid setup', [
+                'bot_id' => $botConfig->id,
+                'error' => $e->getMessage(),
+            ]);
+            $results['errors'][] = $e->getMessage();
+        }
 
-                // ثبت در نوبیتکس
-                if ($botConfig->simulation) {
-                    // SIMULATION MODE - Log only, don't create real order
-                    Log::info('SIMULATION: Would create grid order', [
-                        'bot_id' => $botConfig->id,
-                        'type' => $level['type'],
-                        'price' => $level['price'],
-                        'amount' => $orderSize,
-                        'symbol' => $botConfig->symbol ?? 'BTCIRT',
-                    ]);
-
-                    // Create simulated successful order result
-                    $orderResult = [
-                        'success' => true,
-                        'order_id' => 'SIM-' . uniqid() . '-' . time(),
-                        'status' => 'Active',
-                        'message' => 'Simulated order created'
-                    ];
+        if ($simulation) {
+            foreach ($diff['to_place'] as $item) {
+                $results['successful']++;
+                if (($item['side'] ?? '') === 'buy') {
+                    $results['successful_buy']++;
                 } else {
-                    // LIVE MODE - Create real order
-                    $symbol = $botConfig->symbol ?? 'BTCIRT';
-                    // Reuse GridOrderExecutor's symbol/currency splitting (handles
-                    // the IRT -> rls conversion and variable-length quote currencies
-                    // like USDT) so this path sends the exact same currency codes
-                    // to Nobitex as the rebalance path.
-                    [$srcCurrency, $dstCurrency] = GridOrderExecutor::splitSymbol($symbol);
-
-                    // Get precision for this symbol from config (default 8 for BTC)
-                    $precision = config("trading.exchange.precision.{$symbol}.qty_decimals") ?? 8;
-
-                    // Convert to string early, before any float operations damage precision
-                    $amountStr = rtrim(rtrim(sprintf('%.8f', $orderSize), '0'), '.');
-                    $priceStr = (string) (int) round($level['price']);
-
-                    // Create proper DTO
-                    $dto = new CreateOrderDto(
-                        side: $level['type'] === 'buy' ? OrderSide::BUY : OrderSide::SELL,
-                        execution: ExecutionType::LIMIT,
-                        srcCurrency: $srcCurrency,
-                        dstCurrency: $dstCurrency,
-                        amountBase: $amountStr,  // String: "0.0001678"
-                        priceIRT: (int) round($level['price']),  // Pass as int, will be converted to clean string in DTO
-                        clientRef: $initClientId,
-                    );
-
-                    // Log attempt before calling Nobitex
-                    Log::info('Attempting to create Nobitex order', [
-                        'bot_id' => $botConfig->id,
-                        'type' => $level['type'],
-                        'price' => $level['price'],
-                        'amount' => $orderSize,
-                        'symbol' => $symbol
-                    ]);
-
-                    try {
-                        $orderResponse = $this->nobitexService->createOrder($dto);
-
-                        Log::info('Nobitex order response received', [
-                            'bot_id' => $botConfig->id,
-                            'ok' => $orderResponse->ok,
-                            'orderId' => $orderResponse->orderId ?? 'NULL',
-                            'message' => $orderResponse->message ?? 'N/A'
-                        ]);
-
-                        // Convert response to array format expected by the rest of the code
-                        $orderResult = [
-                            'success' => $orderResponse->ok,
-                            'order_id' => $orderResponse->orderId,
-                            'status' => $orderResponse->ok ? 'Active' : 'Failed',
-                            'error' => $orderResponse->message ?? 'Order creation failed'
-                        ];
-
-                    } catch (\Throwable $e) {
-                        Log::error('Exception in createOrder', [
-                            'bot_id' => $botConfig->id,
-                            'exception' => $e->getMessage(),
-                            'trace' => $e->getTraceAsString()
-                        ]);
-
-                        $orderResult = [
-                            'success' => false,
-                            'error' => $e->getMessage()
-                        ];
-                    }
+                    $results['successful_sell']++;
                 }
+            }
+        } else {
+            $createdOrders = GridOrder::where('bot_config_id', $botConfig->id)
+                ->where('created_at', '>=', $callStartedAt)
+                ->get();
 
-                if ($orderResult['success']) {
-                    $gridOrder->update([
-                        'status' => 'placed',
-                        'nobitex_order_id' => $orderResult['order_id'],
-                        'placed_at' => now()
-                    ]);
-
+            foreach ($createdOrders as $order) {
+                if (in_array($order->status, ['placed', 'filled', 'partially_filled'], true)) {
                     $results['successful']++;
-                    if ($level['type'] === 'buy') {
+                    if ($order->type === 'buy') {
                         $results['successful_buy']++;
                     } else {
                         $results['successful_sell']++;
                     }
                 } else {
-                    Log::error('Failed to create grid order', [
-                        'bot_id' => $botConfig->id,
-                        'grid_order_id' => $gridOrder->id,
-                        'error' => $orderResult['error'] ?? 'Unknown error'
-                    ]);
-
-                    $gridOrder->update([
-                        'status' => 'failed',
-                        'error_message' => $orderResult['error']
-                    ]);
-
+                    // 'cancelled' (build failure before any API call) or
+                    // 'submission_unknown' (API call attempted, outcome unknown)
+                    // both count as failed for this bot's init-health purposes —
+                    // submission_unknown rows require separate reconciliation
+                    // (out of scope here) before being treated as live orders.
                     $results['failed']++;
-                    $results['errors'][] = $orderResult['error'] ?? 'Unknown error';
+                    $results['errors'][] = sprintf(
+                        'Order %s (%s @ %s) ended in status "%s"',
+                        $order->id,
+                        $order->type,
+                        $order->price,
+                        $order->status
+                    );
                 }
-
-                sleep(2); // Rate limiting
-
-            } catch (\Throwable $e) {
-                $results['failed']++;
-                $results['errors'][] = "Exception at {$level['price']}: {$e->getMessage()}";
             }
         }
+
+        // Items skipped by GridOrderSync for being below the minimum order
+        // value, or by the SELL-side balance pre-filter above, were never
+        // attempted at all — they are not "failed" placements, but they do
+        // reduce $results['total'] versus the originally planned level count,
+        // which evaluateInitializationHealth() already accounts for via its
+        // ratio-of(successful/total) and per-side minimum checks.
 
         return $results;
     }
