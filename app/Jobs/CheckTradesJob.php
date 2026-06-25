@@ -535,9 +535,6 @@ class CheckTradesJob implements ShouldQueue
             return;
         }
 
-        /** @var NobitexService $nobitexService */
-        $nobitexService = app(NobitexService::class);
-
         DB::beginTransaction();
         try {
             // Persist the intent row BEFORE the API call so a timeout-retry sees
@@ -548,6 +545,7 @@ class CheckTradesJob implements ShouldQueue
                 'calculated_price'=> $newPrice,
                 'filled_order_id' => $filledOrder->id,
                 'client_order_id' => $clientOrderId,
+                'simulation'      => (bool) $bot->simulation,
             ]);
 
             $newOrder = GridOrder::create([
@@ -560,30 +558,67 @@ class CheckTradesJob implements ShouldQueue
                 'paired_order_id' => $filledOrder->id,
             ]);
 
-            // Call exchange API
-            $startTime   = microtime(true);
-            $apiResponse = $nobitexService->placeOrder(
-                $symbol,
-                $newType,
-                $newPrice,
-                (string) $filledOrder->amount,
-                $clientOrderId
-            );
-            $executionTime = (int) ((microtime(true) - $startTime) * 1000);
+            if ($bot->simulation) {
+                // SIMULATION MODE - never call the real exchange API.
+                $nobitexOrderId = 'SIM-' . uniqid() . '-' . time();
 
-            if (($apiResponse['status'] ?? null) !== 'ok') {
-                throw new \RuntimeException('Nobitex order placement failed: ' . ($apiResponse['message'] ?? 'Unknown error'));
+                $newOrder->update([
+                    'status'           => 'placed',
+                    'nobitex_order_id' => $nobitexOrderId,
+                ]);
+
+                Log::channel('trading')->info('SIM_PAIR_ORDER_PLACED', [
+                    'order_id' => $newOrder->id,
+                    'bot_id'   => $bot->id,
+                    'type'     => $newType,
+                    'price'    => $newPrice,
+                ]);
+
+                $logger->logOrderPlaced($bot->id, [
+                    'order_id'        => $newOrder->id,
+                    'type'            => $newType,
+                    'price'           => $newPrice,
+                    'amount'          => $filledOrder->amount,
+                    'nobitex_order_id'=> $nobitexOrderId,
+                ]);
+            } else {
+                /** @var NobitexService $nobitexService */
+                $nobitexService = app(NobitexService::class);
+
+                // Call exchange API
+                $startTime   = microtime(true);
+                $apiResponse = $nobitexService->placeOrder(
+                    $symbol,
+                    $newType,
+                    $newPrice,
+                    (string) $filledOrder->amount,
+                    $clientOrderId
+                );
+                $executionTime = (int) ((microtime(true) - $startTime) * 1000);
+
+                if (($apiResponse['status'] ?? null) !== 'ok') {
+                    throw new \RuntimeException('Nobitex order placement failed: ' . ($apiResponse['message'] ?? 'Unknown error'));
+                }
+
+                $nobitexOrderId = $apiResponse['order']['id'] ?? null;
+                if (!$nobitexOrderId) {
+                    throw new \RuntimeException('Nobitex order ID not found in response');
+                }
+
+                $newOrder->update([
+                    'status'           => 'placed',
+                    'nobitex_order_id' => (string) $nobitexOrderId,
+                ]);
+
+                $logger->logApiCall($bot->id, '/market/orders/add', null, $apiResponse, $executionTime);
+                $logger->logOrderPlaced($bot->id, [
+                    'order_id'        => $newOrder->id,
+                    'type'            => $newType,
+                    'price'           => $newPrice,
+                    'amount'          => $filledOrder->amount,
+                    'nobitex_order_id'=> $nobitexOrderId,
+                ]);
             }
-
-            $nobitexOrderId = $apiResponse['order']['id'] ?? null;
-            if (!$nobitexOrderId) {
-                throw new \RuntimeException('Nobitex order ID not found in response');
-            }
-
-            $newOrder->update([
-                'status'           => 'placed',
-                'nobitex_order_id' => (string) $nobitexOrderId,
-            ]);
 
             Log::channel('trading')->info('PAIR_ORDER_POST_CREATE', [
                 'order_id'    => $newOrder->id,
@@ -594,15 +629,6 @@ class CheckTradesJob implements ShouldQueue
             $filledOrder->update(['paired_order_id' => $newOrder->id]);
 
             Log::info("CheckTradesJob: Successfully created pair order {$newOrder->id} (Nobitex ID: {$nobitexOrderId}) - Type: {$newType}, Price: {$newPrice} for filled order {$filledOrder->id}");
-
-            $logger->logApiCall($bot->id, '/market/orders/add', null, $apiResponse, $executionTime);
-            $logger->logOrderPlaced($bot->id, [
-                'order_id'        => $newOrder->id,
-                'type'            => $newType,
-                'price'           => $newPrice,
-                'amount'          => $filledOrder->amount,
-                'nobitex_order_id'=> $nobitexOrderId,
-            ]);
 
             DB::commit();
 
