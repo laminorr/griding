@@ -27,6 +27,7 @@ class BotConfig extends Model
         'budget_irt',           // بودجه به ریال (یا quote)
         'simulation',           // Dry-run به صورت پیش‌فرض
         'is_active',            // Start/Stop
+        'init_status',          // نتیجهٔ راه‌اندازی گرید: running | partially_initialized | failed
         // 'status',            // Computed via getStatusAttribute() accessor, not fillable
         'min_order_value_irt',  // حداقل ارزش سفارش
         'fee_bps',              // کارمزد به bps (مثلاً 35 = 0.35%)
