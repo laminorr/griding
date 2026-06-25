@@ -85,6 +85,16 @@ class TradingEngineService
                 throw new Exception('Order size validation failed');
             }
 
+            // 5b. بررسی موجودی واقعی ارز quote قبل از ثبت سفارشات خرید
+            $balanceCheck = $this->verifySufficientQuoteBalance(
+                $botConfig,
+                $gridResult['grid_levels'],
+                $orderSizeResult['crypto_amount']
+            );
+            if (!$balanceCheck['success']) {
+                throw new Exception($balanceCheck['error']);
+            }
+
             // 6. پاکسازی سفارشات قدیمی
             $this->cleanupExistingOrders($botConfig);
 
@@ -172,6 +182,63 @@ class TradingEngineService
 
         } catch (Exception $e) {
             return ['success' => false, 'error' => $e->getMessage()];
+        }
+    }
+
+    /**
+     * بررسی موجودی واقعی ارز quote (مثل IRT/RLS) قبل از ثبت سفارشات خرید.
+     *
+     * Note: this checks this bot's own requirement against the account's
+     * current total available balance. It does NOT protect against other
+     * bots on the same account concurrently reserving/spending the same
+     * balance — there is no cross-bot capital allocation tracking in this
+     * codebase today (BotConfig has no "reserved capital" concept), so two
+     * bots racing to start at the same time can both pass this check
+     * against the same pre-spend balance. That is a separate, larger
+     * concern to address later.
+     */
+    private function verifySufficientQuoteBalance(BotConfig $botConfig, Collection $gridLevels, float $orderSize): array
+    {
+        if ($botConfig->simulation) {
+            return ['success' => true];
+        }
+
+        $buyLevels = $gridLevels->where('type', 'buy');
+        if ($buyLevels->isEmpty()) {
+            return ['success' => true];
+        }
+
+        try {
+            $symbol = $botConfig->symbol ?? 'BTCIRT';
+            [, $quoteCurrency] = GridOrderExecutor::splitSymbol($symbol);
+
+            $balances = $this->nobitexService->getBalances();
+            $available = (float)($balances[$quoteCurrency]['available'] ?? 0);
+
+            $requiredNotional = 0.0;
+            foreach ($buyLevels as $level) {
+                $requiredNotional += $level['price'] * $orderSize;
+            }
+
+            $feeBps = (int) ($botConfig->fee_bps ?? config('trading.fee_bps', 35));
+            $required = $requiredNotional * (1 + ($feeBps / 10000));
+
+            if ($available < $required) {
+                return [
+                    'success' => false,
+                    'error' => sprintf(
+                        'Insufficient %s balance for planned buy orders: required %.0f (incl. %d bps fee buffer), available %.0f',
+                        strtoupper($quoteCurrency),
+                        $required,
+                        $feeBps,
+                        $available
+                    ),
+                ];
+            }
+
+            return ['success' => true];
+        } catch (Exception $e) {
+            return ['success' => false, 'error' => 'Balance verification failed: ' . $e->getMessage()];
         }
     }
 
