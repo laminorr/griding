@@ -8,6 +8,7 @@ use App\Models\CompletedTrade;
 use App\Services\NobitexService;
 use App\Services\TradingEngineService;
 use App\Services\BotActivityLogger;
+use App\Services\MarketDataLayer;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -80,9 +81,15 @@ class CheckTradesJob implements ShouldQueue
 
             Log::info("CheckTradesJob: Found {$activeOrders->count()} active orders for bot {$bot->name}");
 
-            // بررسی وضعیت واقعی سفارشات از نوبیتکس
+            // بررسی وضعیت سفارشات: برای ربات‌های simulation هرگز به API واقعی نوبیتکس
+            // متصل نمی‌شویم (سفارشات SIM-* در نوبیتکس وجود ندارند)؛ به جای آن از موتور
+            // تطبیق محلی (checkSimulatedOrders) استفاده می‌کنیم.
             if ($activeOrders->isNotEmpty()) {
-                $this->checkOrdersStatus($activeOrders, $bot);
+                if ($bot->simulation) {
+                    $this->checkSimulatedOrders($activeOrders, $bot);
+                } else {
+                    $this->checkOrdersStatus($activeOrders, $bot);
+                }
             }
 
             // اگر سفارشی پر شده، سفارش جدید در طرف مقابل ایجاد کن
@@ -133,6 +140,64 @@ class CheckTradesJob implements ShouldQueue
 
         // ✅ ADD: Log at very end
         Log::info("CheckTradesJob: [END] Finished processing bot {$bot->name}");
+    }
+
+    /**
+     * موتور تطبیق ساده برای سفارشات شبیه‌سازی‌شده (simulation=true).
+     *
+     * هیچ تماسی با API واقعی نوبیتکس (getOrdersStatus یا هر endpoint دیگری که
+     * order ID می‌فرستد) برقرار نمی‌شود — فقط آخرین قیمت بازار واقعی را
+     * می‌خوانیم (MarketDataLayer) و طبق منطق سفارش لیمیت واقعی تصمیم می‌گیریم:
+     *   - سفارش خرید: وقتی قیمت بازار <= قیمت سفارش برسد، پر می‌شود.
+     *   - سفارش فروش: وقتی قیمت بازار >= قیمت سفارش برسد، پر می‌شود.
+     *
+     * @param \Illuminate\Support\Collection $orders مجموعه سفارشات شبیه‌سازی‌شده برای بررسی
+     * @param BotConfig $bot کانفیگ ربات
+     * @return void
+     */
+    private function checkSimulatedOrders($orders, BotConfig $bot): void
+    {
+        try {
+            $symbol = $bot->symbol ?? 'BTCIRT';
+
+            /** @var MarketDataLayer $marketData */
+            $marketData = app(MarketDataLayer::class);
+            $currentPrice = $marketData->getLastPrice($symbol);
+
+            Log::info("CheckTradesJob: [SIM] Current market price for {$symbol}: {$currentPrice}");
+
+            foreach ($orders as $order) {
+                $isFilled = $order->type === 'buy'
+                    ? $order->price >= $currentPrice
+                    : $order->price <= $currentPrice;
+
+                if (!$isFilled) {
+                    continue;
+                }
+
+                Log::info("CheckTradesJob: [SIM] Order {$order->id} ({$order->type} @ {$order->price}) filled at market price {$currentPrice}");
+
+                DB::beginTransaction();
+                try {
+                    $order->update([
+                        'status' => 'filled',
+                        'filled_at' => now(),
+                    ]);
+
+                    app(BotActivityLogger::class)->logOrderFilled($bot->id, $order);
+
+                    $this->createCompletedTradeIfPaired($order, $bot);
+
+                    DB::commit();
+                } catch (\Exception $e) {
+                    DB::rollBack();
+                    Log::error("CheckTradesJob: [SIM] Error handling filled order {$order->id}: " . $e->getMessage());
+                }
+            }
+        } catch (\Exception $e) {
+            Log::error("CheckTradesJob: [SIM] Error checking simulated orders for bot {$bot->name}: " . $e->getMessage());
+            Log::error($e->getTraceAsString());
+        }
     }
 
     /**
