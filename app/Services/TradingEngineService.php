@@ -374,8 +374,7 @@ class TradingEngineService
                     $botConfig->id,
                     $initSymbol,
                     $level['type'],
-                    (int) round($level['price']),
-                    (int) ($level['level'] ?? 0)
+                    (int) round($level['price'])
                 );
 
                 // ایجاد رکورد محلی

@@ -130,8 +130,9 @@ class GridOrderExecutor
             $price = $this->roundToTick($price, $tick);
             [$src, $dst] = $this->splitSymbol($symbol);
 
-            // Deterministic identifier — $levelIdx is the per-to_place loop index.
-            $clientOrderId = GridOrder::buildClientOrderId($botId, $symbol, $side, $price, $levelIdx);
+            // Deterministic identifier based on the grid level's stable identity
+            // (bot+symbol+side+price), not the transient $levelIdx loop index.
+            $clientOrderId = GridOrder::buildClientOrderId($botId, $symbol, $side, $price);
 
             if ($simulation) {
                 Log::channel('trading')->info('EXEC_SIM_PLACE', [
