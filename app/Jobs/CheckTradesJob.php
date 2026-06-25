@@ -16,6 +16,7 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Cache;
 
 class CheckTradesJob implements ShouldQueue
 {
@@ -505,6 +506,25 @@ class CheckTradesJob implements ShouldQueue
      */
     private function createPairOrder(GridOrder $filledOrder, BotConfig $bot): void
     {
+        $lock = Cache::lock("pair-order:{$filledOrder->id}", 10);
+
+        if (!$lock->get()) {
+            Log::channel('trading')->info('PAIR_ORDER_LOCK_BUSY', [
+                'filled_order_id' => $filledOrder->id,
+                'bot_id'          => $bot->id,
+            ]);
+            return;
+        }
+
+        try {
+            $this->createPairOrderLocked($filledOrder, $bot);
+        } finally {
+            $lock->release();
+        }
+    }
+
+    private function createPairOrderLocked(GridOrder $filledOrder, BotConfig $bot): void
+    {
         $logger = app(BotActivityLogger::class);
 
         $newType     = $filledOrder->type === 'buy' ? 'sell' : 'buy';
@@ -537,6 +557,19 @@ class CheckTradesJob implements ShouldQueue
 
         DB::beginTransaction();
         try {
+            // Re-read under a row lock to confirm no other process paired this
+            // order while we were waiting for the per-order Cache::lock above.
+            $current = GridOrder::where('id', $filledOrder->id)->lockForUpdate()->first();
+
+            if (!$current || $current->paired_order_id !== null) {
+                Log::channel('trading')->info('PAIR_ORDER_ALREADY_PAIRED', [
+                    'filled_order_id' => $filledOrder->id,
+                    'bot_id'          => $bot->id,
+                ]);
+                DB::commit();
+                return;
+            }
+
             // Persist the intent row BEFORE the API call so a timeout-retry sees
             // the 'pending' record and the dedup guard above blocks the duplicate.
             Log::channel('trading')->info('PAIR_ORDER_PRE_CREATE', [
