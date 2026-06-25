@@ -105,31 +105,47 @@ class TradingEngineService
                 $orderSizeResult['crypto_amount']
             );
 
-            // 8. به‌روزرسانی تنظیمات ربات
+            // 8. ارزیابی سلامت راه‌اندازی و تعیین init_status
+            $healthResult = $this->evaluateInitializationHealth($placementResult);
+
+            $isActive = $healthResult['init_status'] === 'running';
+
             $botConfig->update([
                 'center_price' => $centerPrice,
-                'is_active' => true,
-                'status' => 'running',
-                'started_at' => now(),
-                'last_rebalance_at' => now()
+                'is_active' => $isActive,
+                'init_status' => $healthResult['init_status'],
+                'started_at' => $isActive ? now() : $botConfig->started_at,
+                'last_rebalance_at' => now(),
+                'stop_reason' => $isActive ? null : $healthResult['reason'],
             ]);
 
-            Log::info("Grid initialization completed successfully", [
-                'bot_id' => $botConfig->id,
-                'center_price' => $centerPrice,
-                'successful_orders' => $placementResult['successful']
-            ]);
+            if ($isActive) {
+                Log::info("Grid initialization completed successfully", [
+                    'bot_id' => $botConfig->id,
+                    'center_price' => $centerPrice,
+                    'successful_orders' => $placementResult['successful']
+                ]);
+            } else {
+                Log::warning("Grid initialization did not meet health threshold; bot left inactive", [
+                    'bot_id' => $botConfig->id,
+                    'init_status' => $healthResult['init_status'],
+                    'reason' => $healthResult['reason'],
+                ]);
+            }
 
             return [
-                'success' => true,
-                'message' => 'Grid initialized successfully',
+                'success' => $isActive,
+                'message' => $isActive ? 'Grid initialized successfully' : $healthResult['reason'],
+                'error' => $isActive ? null : $healthResult['reason'],
+                'init_status' => $healthResult['init_status'],
                 'data' => [
                     'center_price' => $centerPrice,
                     'total_orders' => $placementResult['total'],
                     'successful_orders' => $placementResult['successful'],
                     'failed_orders' => $placementResult['failed'],
                     'order_size_crypto' => $orderSizeResult['crypto_amount'],
-                    'market_analysis' => $marketAnalysis
+                    'market_analysis' => $marketAnalysis,
+                    'init_status' => $healthResult['init_status'],
                 ]
             ];
 
@@ -149,7 +165,7 @@ class TradingEngineService
 
             $botConfig->update([
                 'is_active' => false,
-                'status' => 'failed',
+                'init_status' => 'failed',
                 'last_error_message' => $e->getMessage()
             ]);
 
@@ -183,6 +199,63 @@ class TradingEngineService
         } catch (Exception $e) {
             return ['success' => false, 'error' => $e->getMessage()];
         }
+    }
+
+    /**
+     * تعیین init_status بر اساس نسبت موفقیت سفارشات و حداقل پوشش هر طرف
+     * (خرید/فروش) که واقعاً در گرید برنامه‌ریزی شده‌اند.
+     *
+     * Minimum health bar to mark a bot 'running': at least one successful
+     * order on every side that was actually planned (buy-only bots need
+     * >=1 successful buy, sell-only need >=1 successful sell, buy+sell
+     * grids need >=1 of each) AND an overall success ratio >= 80%. Both
+     * conditions must hold — being conservative here is intentional: a bot
+     * that silently runs with most of its grid missing is worse than one
+     * that fails loudly and waits for a retry.
+     */
+    private function evaluateInitializationHealth(array $placementResult): array
+    {
+        $total = $placementResult['total'];
+        $successful = $placementResult['successful'];
+        $plannedBuy = $placementResult['planned_buy'] ?? 0;
+        $plannedSell = $placementResult['planned_sell'] ?? 0;
+        $successfulBuy = $placementResult['successful_buy'] ?? 0;
+        $successfulSell = $placementResult['successful_sell'] ?? 0;
+
+        if ($successful === 0) {
+            return [
+                'init_status' => 'failed',
+                'reason' => "Grid initialization failed: 0/{$total} orders placed successfully",
+            ];
+        }
+
+        $ratio = $total > 0 ? ($successful / $total) : 0;
+
+        $sideMinimumMet = true;
+        if ($plannedBuy > 0 && $plannedSell > 0) {
+            $sideMinimumMet = $successfulBuy >= 1 && $successfulSell >= 1;
+        } elseif ($plannedBuy > 0) {
+            $sideMinimumMet = $successfulBuy >= 1;
+        } elseif ($plannedSell > 0) {
+            $sideMinimumMet = $successfulSell >= 1;
+        }
+
+        if ($sideMinimumMet && $ratio >= 0.8) {
+            return ['init_status' => 'running', 'reason' => null];
+        }
+
+        return [
+            'init_status' => 'partially_initialized',
+            'reason' => sprintf(
+                'Grid initialization only partially succeeded: %d/%d orders placed (buy %d/%d, sell %d/%d) — below the minimum health threshold to mark the bot running',
+                $successful,
+                $total,
+                $successfulBuy,
+                $plannedBuy,
+                $successfulSell,
+                $plannedSell
+            ),
+        ];
     }
 
     /**
@@ -378,7 +451,13 @@ class TradingEngineService
      */
     private function placeGridOrders(BotConfig $botConfig, Collection $gridLevels, float $orderSize): array
     {
-        $results = ['total' => 0, 'successful' => 0, 'failed' => 0, 'errors' => []];
+        $results = [
+            'total' => 0, 'successful' => 0, 'failed' => 0, 'errors' => [],
+            'planned_buy' => $gridLevels->where('type', 'buy')->count(),
+            'planned_sell' => $gridLevels->where('type', 'sell')->count(),
+            'successful_buy' => 0,
+            'successful_sell' => 0,
+        ];
 
         // Get base currency balance once before loop (for SELL orders)
         $baseCurrency = $this->baseCurrency($botConfig->symbol ?? 'BTCIRT');
@@ -548,6 +627,11 @@ class TradingEngineService
                     ]);
 
                     $results['successful']++;
+                    if ($level['type'] === 'buy') {
+                        $results['successful_buy']++;
+                    } else {
+                        $results['successful_sell']++;
+                    }
                 } else {
                     Log::error('Failed to create grid order', [
                         'bot_id' => $botConfig->id,
