@@ -13,7 +13,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 class AdjustGridJob implements ShouldQueue
@@ -29,9 +29,15 @@ class AdjustGridJob implements ShouldQueue
         OrderRegistry $reg,
         GridOrderExecutor $exec
     ): void {
-        // Global lock to prevent concurrent runs (1 second timeout)
-        $globalLock = DB::select("SELECT GET_LOCK(?, 1) as locked", ['grid:adjust:global']);
-        if (!$globalLock[0]->locked) {
+        // Global lock to prevent concurrent runs (1 second wait, same semantics
+        // as the previous MySQL GET_LOCK(?, 1) call). 30s TTL covers a single
+        // run and self-expires if a worker dies mid-job, instead of relying on
+        // a held DB connection that a connection pool could recycle.
+        $globalLock = Cache::lock('grid:adjust:global', 30);
+
+        try {
+            $globalLock->block(1);
+        } catch (\Illuminate\Contracts\Cache\LockTimeoutException $e) {
             Log::channel('trading')->info('ADJUST_GRID_SKIP', [
                 'reason' => 'Global lock busy - another instance running'
             ]);
@@ -74,11 +80,14 @@ class AdjustGridJob implements ShouldQueue
                     continue;
                 }
 
-                // Per-bot lock (1 second timeout)
+                // Per-bot lock (1 second wait, same semantics as previous
+                // GET_LOCK(?, 1)); 30s TTL self-expires if a worker dies.
                 $botLockKey = "grid:adjust:bot:{$bot->id}";
-                $botLock = DB::select("SELECT GET_LOCK(?, 1) as locked", [$botLockKey]);
+                $botLock = Cache::lock($botLockKey, 30);
 
-                if (!$botLock[0]->locked) {
+                try {
+                    $botLock->block(1);
+                } catch (\Illuminate\Contracts\Cache\LockTimeoutException $e) {
                     Log::channel('trading')->info('ADJUST_GRID_BOT_SKIP', [
                         'bot_id' => $bot->id,
                         'reason' => 'Bot lock busy'
@@ -182,7 +191,7 @@ class AdjustGridJob implements ShouldQueue
                     ]);
                 } finally {
                     // Release per-bot lock
-                    DB::select("SELECT RELEASE_LOCK(?)", [$botLockKey]);
+                    $botLock->release();
                 }
             }
 
@@ -192,7 +201,7 @@ class AdjustGridJob implements ShouldQueue
 
         } finally {
             // Release global lock
-            DB::select("SELECT RELEASE_LOCK(?)", ['grid:adjust:global']);
+            $globalLock->release();
         }
     }
 }
