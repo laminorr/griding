@@ -180,7 +180,7 @@ class TradingEngineService
     private function analyzeMarketForGrid(BotConfig $botConfig): array
     {
         try {
-            $marketAnalysis = $this->gridCalculator->quickMarketAnalysis();
+            $marketAnalysis = $this->gridCalculator->quickMarketAnalysis($botConfig->symbol ?? 'BTCIRT');
 
             if (!$marketAnalysis['success']) {
                 return ['suitable' => false, 'reason' => 'Market analysis failed'];
