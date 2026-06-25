@@ -426,7 +426,8 @@ class TradingEngineService
                         srcCurrency: $srcCurrency,
                         dstCurrency: $dstCurrency,
                         amountBase: $amountStr,  // String: "0.0001678"
-                        priceIRT: (int) round($level['price'])  // Pass as int, will be converted to clean string in DTO
+                        priceIRT: (int) round($level['price']),  // Pass as int, will be converted to clean string in DTO
+                        clientRef: $initClientId,
                     );
 
                     // Log attempt before calling Nobitex
