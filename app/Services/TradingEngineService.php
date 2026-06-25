@@ -26,11 +26,16 @@ class TradingEngineService
 {
     private NobitexService $nobitexService;
     private GridCalculatorService $gridCalculator;
+    private BotActivityLogger $activityLogger;
 
-    public function __construct(NobitexService $nobitexService, GridCalculatorService $gridCalculator)
-    {
+    public function __construct(
+        NobitexService $nobitexService,
+        GridCalculatorService $gridCalculator,
+        BotActivityLogger $activityLogger
+    ) {
         $this->nobitexService = $nobitexService;
         $this->gridCalculator = $gridCalculator;
+        $this->activityLogger = $activityLogger;
     }
 
     /**
@@ -49,8 +54,12 @@ class TradingEngineService
 
             // 2. تحلیل بازار
             $marketAnalysis = $this->analyzeMarketForGrid($botConfig);
-            if (!$marketAnalysis['suitable'] && !($options['force_start'] ?? false)) {
-                throw new Exception('Market conditions not suitable: ' . $marketAnalysis['reason']);
+            if (!$marketAnalysis['suitable']) {
+                if (!($options['force_start'] ?? false)) {
+                    throw new Exception('Market conditions not suitable: ' . $marketAnalysis['reason']);
+                }
+
+                $this->logForceStartOverride($botConfig, $marketAnalysis);
             }
 
             // 3. محاسبه قیمت مرکز
@@ -199,6 +208,43 @@ class TradingEngineService
         } catch (Exception $e) {
             return ['success' => false, 'error' => $e->getMessage()];
         }
+    }
+
+    /**
+     * ثبت لاگ حسابرسی هنگامی که force_start، بررسی تناسب بازار را دور می‌زند.
+     *
+     * force_start has no UI/CLI trigger today (it's only reachable by
+     * passing $options['force_start'] = true directly into initializeGrid()),
+     * but whenever it IS used to bypass the market-suitability gate, that
+     * override must be loud and traceable: who triggered it, when, on which
+     * bot, and exactly which warning was bypassed.
+     */
+    private function logForceStartOverride(BotConfig $botConfig, array $marketAnalysis): void
+    {
+        $triggeredBy = auth()->check() ? ('user:' . auth()->id()) : 'console';
+
+        $message = sprintf(
+            '⚠️ force_start used to bypass unsuitable market conditions (triggered by %s): %s',
+            $triggeredBy,
+            $marketAnalysis['reason'] ?? 'unknown reason'
+        );
+
+        Log::warning($message, [
+            'bot_id' => $botConfig->id,
+            'triggered_by' => $triggeredBy,
+            'bypassed_market_analysis' => $marketAnalysis,
+        ]);
+
+        $this->activityLogger->log(
+            $botConfig->id,
+            'FORCE_START_OVERRIDE',
+            'WARNING',
+            $message,
+            [
+                'triggered_by' => $triggeredBy,
+                'bypassed_market_analysis' => $marketAnalysis,
+            ]
+        );
     }
 
     /**
