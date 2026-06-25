@@ -268,28 +268,55 @@ class TradingEngineService
     }
 
     /**
+     * استخراج ارز پایه از نماد (مثل ETHIRT -> eth)
+     * منطق مشابه GridOrderExecutor::splitSymbol برای حفظ یکنواختی.
+     */
+    private function baseCurrency(string $symbol): string
+    {
+        $s = strtolower(str_replace('-', '', trim($symbol)));
+
+        if ($s === '' || strlen($s) < 6) {
+            throw new Exception("Bad symbol: {$symbol}");
+        }
+        if (str_ends_with($s, 'irt')) {
+            return substr($s, 0, -3);
+        }
+        if (str_ends_with($s, 'usdt')) {
+            return substr($s, 0, -4);
+        }
+        if (strlen($s) === 6) {
+            return substr($s, 0, 3);
+        }
+
+        throw new Exception("Unsupported symbol: {$symbol}");
+    }
+
+    /**
      * ثبت سفارشات گرید
      */
     private function placeGridOrders(BotConfig $botConfig, Collection $gridLevels, float $orderSize): array
     {
         $results = ['total' => 0, 'successful' => 0, 'failed' => 0, 'errors' => []];
 
-        // Get BTC balance once before loop (for SELL orders)
+        // Get base currency balance once before loop (for SELL orders)
+        $baseCurrency = $this->baseCurrency($botConfig->symbol ?? 'BTCIRT');
         $btcBalance = null;
         $needsBalanceCheck = $gridLevels->contains('type', 'sell');
 
         if ($needsBalanceCheck && !$botConfig->simulation) {
             try {
                 $balances = $this->nobitexService->getBalances();
-                $btcBalance = (float)($balances['btc']['available'] ?? 0);
+                $btcBalance = (float)($balances[$baseCurrency]['available'] ?? 0);
 
-                Log::channel('trading')->info('BTC balance for SELL orders', [
+                Log::channel('trading')->info('Base currency balance for SELL orders', [
                     'bot_id' => $botConfig->id,
-                    'btc_available' => $btcBalance,
+                    'base_currency' => $baseCurrency,
+                    'available' => $btcBalance,
                 ]);
             } catch (\Exception $e) {
-                Log::channel('trading')->warning('Failed to get BTC balance', [
+                Log::channel('trading')->warning('Failed to get base currency balance', [
                     'bot_id' => $botConfig->id,
+                    'base_currency' => $baseCurrency,
                     'error' => $e->getMessage(),
                 ]);
                 $btcBalance = 0;
@@ -302,11 +329,12 @@ class TradingEngineService
                 $requiredBtc = $orderSize;
 
                 if ($btcBalance === null || $btcBalance < $requiredBtc) {
-                    Log::channel('trading')->warning('Insufficient BTC for SELL order', [
+                    Log::channel('trading')->warning('Insufficient base currency for SELL order', [
                         'bot_id' => $botConfig->id,
+                        'base_currency' => $baseCurrency,
                         'price' => $level['price'],
-                        'required_btc' => $requiredBtc,
-                        'available_btc' => $btcBalance ?? 'unknown',
+                        'required' => $requiredBtc,
+                        'available' => $btcBalance ?? 'unknown',
                     ]);
                     continue; // Skip this SELL order
                 }
@@ -314,11 +342,12 @@ class TradingEngineService
                 // Deduct from available balance for next iteration
                 $btcBalance -= $requiredBtc;
 
-                Log::channel('trading')->info('BTC sufficient for SELL order', [
+                Log::channel('trading')->info('Base currency sufficient for SELL order', [
                     'bot_id' => $botConfig->id,
+                    'base_currency' => $baseCurrency,
                     'price' => $level['price'],
-                    'required_btc' => $requiredBtc,
-                    'remaining_btc' => $btcBalance,
+                    'required' => $requiredBtc,
+                    'remaining' => $btcBalance,
                 ]);
             }
 
