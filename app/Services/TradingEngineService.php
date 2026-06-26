@@ -600,19 +600,13 @@ class TradingEngineService
         // 3) Execute — applyForBot() is void, so success/failure counts must be
         // derived after the call rather than from a return value.
         //
-        // IMPORTANT, verified by reading GridOrderExecutor::applyForBot()
-        // directly: in SIMULATION mode it does NOT create any GridOrder row at
-        // all for to_place items (EXEC_SIM_PLACE just logs and continues) —
-        // unlike the old placeGridOrders() loop, which always created a row
-        // even in simulation. So for simulation bots we cannot recover counts
-        // by reading GridOrder back; instead we derive them directly from
-        // $diff['to_place'], because in simulation every item that reaches
-        // that point in applyForBot() is unconditionally counted as placed
-        // (no real API call, so no real failure mode exists for it there).
-        // For LIVE bots, applyForBot() DOES create a real GridOrder row per
-        // item (status placed/cancelled/submission_unknown), so counts are
-        // derived by reading those rows back, scoped to this bot and this
-        // call's time window.
+        // Both SIMULATION and LIVE bots now create a real GridOrder row per
+        // to_place item: live rows go through 'pending' → 'placed' (or
+        // 'cancelled'/'submission_unknown' on failure), while simulation rows
+        // are created directly as 'placed' with a SIM-* nobitex_order_id and no
+        // real exchange call. So counts are recovered the same way for both
+        // modes — by reading the rows created during this call's time window
+        // back from the database, scoped to this bot.
         $callStartedAt = now();
 
         try {
@@ -625,43 +619,32 @@ class TradingEngineService
             $results['errors'][] = $e->getMessage();
         }
 
-        if ($simulation) {
-            foreach ($diff['to_place'] as $item) {
+        $createdOrders = GridOrder::where('bot_config_id', $botConfig->id)
+            ->where('created_at', '>=', $callStartedAt)
+            ->get();
+
+        foreach ($createdOrders as $order) {
+            if (in_array($order->status, ['placed', 'filled', 'partially_filled'], true)) {
                 $results['successful']++;
-                if (($item['side'] ?? '') === 'buy') {
+                if ($order->type === 'buy') {
                     $results['successful_buy']++;
                 } else {
                     $results['successful_sell']++;
                 }
-            }
-        } else {
-            $createdOrders = GridOrder::where('bot_config_id', $botConfig->id)
-                ->where('created_at', '>=', $callStartedAt)
-                ->get();
-
-            foreach ($createdOrders as $order) {
-                if (in_array($order->status, ['placed', 'filled', 'partially_filled'], true)) {
-                    $results['successful']++;
-                    if ($order->type === 'buy') {
-                        $results['successful_buy']++;
-                    } else {
-                        $results['successful_sell']++;
-                    }
-                } else {
-                    // 'cancelled' (build failure before any API call) or
-                    // 'submission_unknown' (API call attempted, outcome unknown)
-                    // both count as failed for this bot's init-health purposes —
-                    // submission_unknown rows require separate reconciliation
-                    // (out of scope here) before being treated as live orders.
-                    $results['failed']++;
-                    $results['errors'][] = sprintf(
-                        'Order %s (%s @ %s) ended in status "%s"',
-                        $order->id,
-                        $order->type,
-                        $order->price,
-                        $order->status
-                    );
-                }
+            } else {
+                // 'cancelled' (build failure before any API call) or
+                // 'submission_unknown' (API call attempted, outcome unknown)
+                // both count as failed for this bot's init-health purposes —
+                // submission_unknown rows require separate reconciliation
+                // (out of scope here) before being treated as live orders.
+                $results['failed']++;
+                $results['errors'][] = sprintf(
+                    'Order %s (%s @ %s) ended in status "%s"',
+                    $order->id,
+                    $order->type,
+                    $order->price,
+                    $order->status
+                );
             }
         }
 
