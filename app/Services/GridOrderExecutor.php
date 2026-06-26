@@ -135,6 +135,41 @@ class GridOrderExecutor
             $clientOrderId = GridOrder::buildClientOrderId($botId, $symbol, $side, $price);
 
             if ($simulation) {
+                // Same dedup guard as the live path — skip if an active order
+                // with this id already exists, so simulation re-runs of the same
+                // plan don't pile up duplicate rows.
+                $existing = GridOrder::where('bot_config_id', $botId)
+                    ->where('client_order_id', $clientOrderId)
+                    ->whereIn('status', ['pending', 'placed', 'filled', 'partially_filled'])
+                    ->first();
+
+                if ($existing) {
+                    Log::channel('trading')->info('DEDUP_SKIP', [
+                        'bot_id'           => $botId,
+                        'client_order_id'  => $clientOrderId,
+                        'existing_order_id'=> $existing->id,
+                        'existing_status'  => $existing->status,
+                    ]);
+                    continue;
+                }
+
+                // Persist a GridOrder row for the simulated order. Status is set
+                // DIRECTLY to 'placed' (there is no real API call that would later
+                // flip it from 'pending'), making it visible to both
+                // CheckTradesJob::checkSimulatedOrders() and the Filament panels.
+                // nobitex_order_id uses a SIM-* sentinel so it is clearly
+                // distinguishable from real orders and never collides with a real
+                // Nobitex order id. No real exchange call is made.
+                GridOrder::create([
+                    'bot_config_id'    => $botId,
+                    'price'            => $price,
+                    'amount'           => $quantity,
+                    'type'             => $side,
+                    'status'           => 'placed',
+                    'client_order_id'  => $clientOrderId,
+                    'nobitex_order_id' => 'SIM-' . uniqid(),
+                ]);
+
                 Log::channel('trading')->info('EXEC_SIM_PLACE', [
                     'symbol'=>$symbol,'side'=>$side,'price'=>$price,'quantity'=>$quantity,'notional'=>$notional,
                     'src'=>$src,'dst'=>$dst,'client_order_id'=>$clientOrderId,
