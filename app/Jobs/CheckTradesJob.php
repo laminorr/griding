@@ -438,80 +438,84 @@ class CheckTradesJob implements ShouldQueue
     /**
      * ایجاد رکورد CompletedTrade اگر سفارش جفت دارد
      *
+     * Phase 9, Step 4 — completed trades are now booked via the STABLE
+     * parent/child continuation link (`paired_order_id`) established by
+     * createPairOrder(), NOT via nearest-price matching.
+     *
+     * createPairOrder() links a filled order to the continuation order it
+     * spawns, bidirectionally: when order A fills it creates the opposite-side
+     * order B with B.paired_order_id = A.id, then sets A.paired_order_id = B.id.
+     * A completed (round-trip) trade is booked exactly once — when BOTH legs of
+     * such a linked pair are filled. If the partner leg has not filled yet, we
+     * do nothing and wait for it.
+     *
      * @param GridOrder $order سفارش پر شده
      * @param BotConfig $bot
      * @return void
      */
     private function createCompletedTradeIfPaired(GridOrder $order, BotConfig $bot): void
     {
-        // چک کن آیا این سفارش، جفت یک سفارش دیگر است که قبلاً پر شده
-        // مثلاً اگر این sell است، باید یک buy پر شده قبلی پیدا کنیم
+        Log::info("CheckTradesJob: Checking paired completion for {$order->type} order #{$order->id} at price {$order->price}");
 
-        Log::info("CheckTradesJob: Checking for pair for {$order->type} order #{$order->id} at price {$order->price}");
-
-        if ($order->type === 'sell') {
-            // پیدا کردن آخرین سفارش خرید پر شده که قیمتش کمتر از این فروش است
-            $buyOrder = GridOrder::where('bot_config_id', $bot->id)
-                ->where('type', 'buy')
-                ->where('status', 'filled')
-                ->where('price', '<', $order->price)
-                ->whereNull('paired_order_id') // هنوز pair نشده
-                ->orderBy('price', 'desc') // نزدیک‌ترین به قیمت فروش
-                ->first();
-
-            if ($buyOrder) {
-                // محاسبه سود
-                $profit = ($order->price - $buyOrder->price) * $buyOrder->amount;
-
-                Log::info("CheckTradesJob: Found buy pair for sell order #{$order->id} -> buy order #{$buyOrder->id}, profit: {$profit}");
-
-                // ایجاد CompletedTrade
-                $this->recordCompletedTrade($buyOrder, $order, $bot);
-
-                // مارک کردن این دو سفارش به عنوان paired
-                $buyOrder->update(['paired_order_id' => $order->id]);
-                $order->update(['paired_order_id' => $buyOrder->id]);
-
-                // Log pairing
-                $logger = app(BotActivityLogger::class);
-                $logger->logOrderPaired($bot->id, $buyOrder->id, $order->id, $profit);
-
-                Log::info("CheckTradesJob: ✅ Created completed trade for buy order {$buyOrder->id} and sell order {$order->id}");
-            } else {
-                Log::info("CheckTradesJob: ⚠️ No unpaired buy order found for sell order #{$order->id}");
-            }
-        } elseif ($order->type === 'buy') {
-            // پیدا کردن آخرین سفارش فروش پر شده که قیمتش بیشتر از این خرید است
-            $sellOrder = GridOrder::where('bot_config_id', $bot->id)
-                ->where('type', 'sell')
-                ->where('status', 'filled')
-                ->where('price', '>', $order->price)
-                ->whereNull('paired_order_id') // هنوز pair نشده
-                ->orderBy('price', 'asc') // نزدیک‌ترین به قیمت خرید
-                ->first();
-
-            if ($sellOrder) {
-                // محاسبه سود
-                $profit = ($sellOrder->price - $order->price) * $order->amount;
-
-                Log::info("CheckTradesJob: Found sell pair for buy order #{$order->id} -> sell order #{$sellOrder->id}, profit: {$profit}");
-
-                // ایجاد CompletedTrade
-                $this->recordCompletedTrade($order, $sellOrder, $bot);
-
-                // مارک کردن این دو سفارش به عنوان paired
-                $order->update(['paired_order_id' => $sellOrder->id]);
-                $sellOrder->update(['paired_order_id' => $order->id]);
-
-                // Log pairing
-                $logger = app(BotActivityLogger::class);
-                $logger->logOrderPaired($bot->id, $order->id, $sellOrder->id, $profit);
-
-                Log::info("CheckTradesJob: ✅ Created completed trade for buy order {$order->id} and sell order {$sellOrder->id}");
-            } else {
-                Log::info("CheckTradesJob: ⚠️ No unpaired sell order found for buy order #{$order->id}");
-            }
+        // No continuation partner yet — typically an initial-grid order that
+        // just filled. Its partner is created by createPairOrder() afterwards;
+        // the trade is booked when that partner subsequently fills.
+        if ($order->paired_order_id === null) {
+            Log::info("CheckTradesJob: ⚠️ Order #{$order->id} has no paired_order_id yet — waiting for its continuation partner");
+            return;
         }
+
+        // Resolve the linked counterpart via the stable pairing relationship.
+        $partner = GridOrder::where('bot_config_id', $bot->id)
+            ->where('id', $order->paired_order_id)
+            ->first();
+
+        if (!$partner) {
+            Log::warning("CheckTradesJob: Order #{$order->id} links to missing partner #{$order->paired_order_id} — skipping");
+            return;
+        }
+
+        // Only book when BOTH legs are filled. If the partner hasn't filled
+        // yet, defer — it will book when the partner's own fill is processed.
+        if ($partner->status !== 'filled') {
+            Log::info("CheckTradesJob: Partner #{$partner->id} of order #{$order->id} not filled yet (status: {$partner->status}) — deferring");
+            return;
+        }
+
+        // The two legs must be opposite sides to form a buy/sell round-trip.
+        if ($order->type === $partner->type) {
+            Log::warning("CheckTradesJob: Order #{$order->id} and partner #{$partner->id} are both '{$order->type}' — cannot book a completed trade");
+            return;
+        }
+
+        // Assign buy/sell roles correctly regardless of which leg filled last.
+        [$buyOrder, $sellOrder] = $order->type === 'buy'
+            ? [$order, $partner]
+            : [$partner, $order];
+
+        // Double-booking guard: skip if a completed_trade already exists for
+        // this exact pair (covers re-runs and both-legs being re-processed).
+        $alreadyBooked = CompletedTrade::where('buy_order_id', $buyOrder->id)
+            ->where('sell_order_id', $sellOrder->id)
+            ->exists();
+
+        if ($alreadyBooked) {
+            Log::info("CheckTradesJob: Completed trade for buy #{$buyOrder->id} / sell #{$sellOrder->id} already booked — skipping duplicate");
+            return;
+        }
+
+        $profit = ($sellOrder->price - $buyOrder->price) * $buyOrder->amount;
+
+        Log::info("CheckTradesJob: Booking completed trade via link — buy #{$buyOrder->id} <-> sell #{$sellOrder->id}, gross profit: {$profit}");
+
+        // ایجاد CompletedTrade
+        $this->recordCompletedTrade($buyOrder, $sellOrder, $bot);
+
+        // Log pairing
+        $logger = app(BotActivityLogger::class);
+        $logger->logOrderPaired($bot->id, $buyOrder->id, $sellOrder->id, $profit);
+
+        Log::info("CheckTradesJob: ✅ Created completed trade for buy order {$buyOrder->id} and sell order {$sellOrder->id}");
     }
     
     /**
