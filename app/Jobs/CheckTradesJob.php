@@ -709,9 +709,13 @@ class CheckTradesJob implements ShouldQueue
         $sellPrice = $sellOrder->price;
         $amount = $buyOrder->amount;
 
-        // محاسبه سود/زیان برای logging
+        // محاسبه سود/زیان برای logging.
+        // نرخ کارمزد از همان منبع رسمی‌ای خوانده می‌شود که CompletedTrade::createFromOrders
+        // برای persist استفاده می‌کند (fee_bps ربات، fallback به config). این تضمین می‌کند
+        // مقدار log شده دقیقاً با مقدار ذخیره‌شده در رکورد معامله یکی باشد.
+        $feeBps = $bot->fee_bps ?? config('trading.exchange.fee_bps', 35);
+        $feeRate = $feeBps / 10000.0; // bps → نرخ (35 bps = 0.0035)
         $grossProfit = ($sellPrice - $buyPrice) * $amount;
-        $feeRate = 0.0035; // 0.35% Nobitex fee
         $totalFee = (($buyPrice * $amount) + ($sellPrice * $amount)) * $feeRate;
         $netProfit = $grossProfit - $totalFee;
 

@@ -257,30 +257,48 @@ class CompletedTrade extends Model
      */
     public static function createFromOrders(GridOrder $buyOrder, GridOrder $sellOrder): self
     {
-        // محاسبه سود خالص
-        $grossProfit = ($sellOrder->price - $buyOrder->price) * $buyOrder->amount;
-        $totalFee = ($buyOrder->fee ?? 0) + ($sellOrder->fee ?? 0);
+        $amount = $buyOrder->amount;
+
+        // سود ناخالص (قبل از کسر کارمزد)
+        $grossProfit = ($sellOrder->price - $buyOrder->price) * $amount;
+
+        // محاسبه کارمزد روی هر دو طرف معامله (خرید و فروش).
+        //
+        // grid_orders هیچ ستون `fee` ندارد، بنابراین نمی‌توان کارمزد را از روی
+        // سفارش‌ها خواند. منبع رسمی کارمزد، fee_bps خودِ ربات است (override در
+        // سطح هر ربات) و در صورت نبود، مقدار سراسری config('trading.exchange.fee_bps').
+        // fee_bps بر حسب basis point است (35 = 0.35% = 0.0035).
+        $feeBps  = $buyOrder->botConfig?->fee_bps ?? config('trading.exchange.fee_bps', 35);
+        $feeRate = $feeBps / 10000.0; // bps → نرخ (35 bps = 0.0035)
+
+        $buyNotional  = $buyOrder->price * $amount;
+        $sellNotional = $sellOrder->price * $amount;
+        $totalFee     = ($buyNotional + $sellNotional) * $feeRate;
+
+        // سود خالص = سود ناخالص − کارمزد دو طرف
         $netProfit = $grossProfit - $totalFee;
-        
+
         // محاسبه زمان اجرا
         $executionTime = $sellOrder->updated_at->diffInSeconds($buyOrder->created_at);
-        
+
         return self::create([
             'bot_config_id' => $buyOrder->bot_config_id,
             'buy_order_id' => $buyOrder->id,
             'sell_order_id' => $sellOrder->id,
             'buy_price' => $buyOrder->price,
             'sell_price' => $sellOrder->price,
-            'amount' => $buyOrder->amount,
+            'amount' => $amount,
             'profit' => $netProfit,
             'fee' => $totalFee,
             'gross_profit' => $grossProfit,
             'net_profit' => $netProfit,
-            'profit_percentage' => ($grossProfit / ($buyOrder->price * $buyOrder->amount)) * 100,
+            'profit_percentage' => ($grossProfit / $buyNotional) * 100,
             'execution_time_seconds' => $executionTime,
             'trade_type' => 'grid',
-            'grid_level_buy' => $buyOrder->grid_level ?? null,
-            'grid_level_sell' => $sellOrder->grid_level ?? null,
+            // grid_orders ستون grid_level ندارد (در فاز ۴ عمداً حذف شد) و هیچ
+            // بخشی از UI این مقادیر را نمایش نمی‌دهد؛ بنابراین صریحاً null می‌مانند.
+            'grid_level_buy' => null,
+            'grid_level_sell' => null,
             'market_conditions' => [
                 'btc_price_at_trade' => cache('btc_price'),
                 'timestamp' => now()->toISOString(),
