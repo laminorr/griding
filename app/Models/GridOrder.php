@@ -13,15 +13,21 @@ class GridOrder extends Model
         'client_order_id','exchange_order_id','status',
         'price_irt','amount','matched','unmatched','raw_json',
         'bot_config_id','price','type','nobitex_order_id','paired_order_id','filled_at',
+        'original_amount','filled_amount','remaining_amount','average_fill_price','last_fill_at',
     ];
 
     protected $casts = [
-        'amount'    => 'decimal:8',
-        'matched'   => 'decimal:8',
-        'unmatched' => 'decimal:8',
-        'raw_json'  => 'array',
-        'price'     => 'integer',
-        'filled_at' => 'datetime',
+        'amount'             => 'decimal:8',
+        'matched'            => 'decimal:8',
+        'unmatched'          => 'decimal:8',
+        'raw_json'           => 'array',
+        'price'              => 'integer',
+        'filled_at'          => 'datetime',
+        'original_amount'    => 'decimal:8',
+        'filled_amount'      => 'decimal:8',
+        'remaining_amount'   => 'decimal:8',
+        'average_fill_price' => 'integer',
+        'last_fill_at'       => 'datetime',
     ];
 
     /**
