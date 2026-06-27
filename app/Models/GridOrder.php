@@ -14,6 +14,7 @@ class GridOrder extends Model
         'price_irt','amount','matched','unmatched','raw_json',
         'bot_config_id','price','type','nobitex_order_id','paired_order_id','filled_at',
         'original_amount','filled_amount','remaining_amount','average_fill_price','last_fill_at',
+        'role',
     ];
 
     protected $casts = [
