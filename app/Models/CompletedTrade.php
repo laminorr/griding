@@ -55,6 +55,42 @@ class CompletedTrade extends Model
         'execution_time_formatted'
     ];
 
+    // ========== Attribute Mutators ==========
+    //
+    // CRITICAL FIX: Force the large IRT decimal(20,0) value columns to string
+    // before they are bound, exactly mirroring GridOrder::setPriceAttribute.
+    //
+    // Without this guard a raw PHP int (e.g. a price like 101500000000) is bound
+    // as PDO::PARAM_INT and can truncate to a signed 32-bit value on the driver
+    // (101500000000 -> -1579215104). The completed_trades columns are
+    // decimal(20,0) and wide enough; stringifying forces a PARAM_STR binding so
+    // the full value is stored intact. Applies to every decimal(20,0) column:
+    // buy_price, sell_price, profit, fee.
+
+    public function setBuyPriceAttribute($value): void
+    {
+        // Convert to string to prevent integer overflow in PDO bindings
+        $this->attributes['buy_price'] = (string) $value;
+    }
+
+    public function setSellPriceAttribute($value): void
+    {
+        // Convert to string to prevent integer overflow in PDO bindings
+        $this->attributes['sell_price'] = (string) $value;
+    }
+
+    public function setProfitAttribute($value): void
+    {
+        // Convert to string to prevent integer overflow in PDO bindings
+        $this->attributes['profit'] = (string) $value;
+    }
+
+    public function setFeeAttribute($value): void
+    {
+        // Convert to string to prevent integer overflow in PDO bindings
+        $this->attributes['fee'] = (string) $value;
+    }
+
     // ========== Relations ==========
     public function botConfig(): BelongsTo
     {
