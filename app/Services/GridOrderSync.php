@@ -104,12 +104,25 @@ class GridOrderSync
         // 2) هر existing که مچ نشد → to_cancel (اما paired orders رو حفظ می‌کنیم)
         foreach ($existing as $idx => $eo) {
             if (!$used[$idx]) {
-                // ✅ NEVER cancel paired orders - they are part of an active trading cycle
-                if (!empty($eo['paired_order_id'])) {
-                    Log::info('GridOrderSync: Protecting paired order from cancellation', [
-                        'order_id' => $eo['id'],
-                        'price' => $eo['price'],
-                        'paired_order_id' => $eo['paired_order_id']
+                // ✅ NEVER cancel orders that belong to an active trading cycle.
+                // Two independent protection signals, either one is enough
+                // (belt-and-suspenders — pre-backfill rows may carry one
+                // signal but not the other):
+                //   - role: 'cycle_exit' (continuation order waiting for its
+                //     counterpart to fill) or 'manual' (operator-owned)
+                //   - paired_order_id: legacy signal, set on both legs of a cycle
+                $roleProtected = in_array((string) ($eo['role'] ?? ''), ['cycle_exit', 'manual'], true);
+                $pairProtected = !empty($eo['paired_order_id']);
+
+                if ($roleProtected || $pairProtected) {
+                    Log::info('GridOrderSync: Protecting order from cancellation', [
+                        'order_id' => $eo['id'] ?? null,
+                        'price' => $eo['price'] ?? null,
+                        'role' => $eo['role'] ?? null,
+                        'paired_order_id' => $eo['paired_order_id'] ?? null,
+                        'protected_by' => $roleProtected && $pairProtected
+                            ? 'role+paired_order_id'
+                            : ($roleProtected ? 'role' : 'paired_order_id'),
                     ]);
                     continue;
                 }
