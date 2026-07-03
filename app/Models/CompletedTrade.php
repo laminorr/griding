@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
 
 class CompletedTrade extends Model
@@ -293,7 +294,39 @@ class CompletedTrade extends Model
      */
     public static function createFromOrders(GridOrder $buyOrder, GridOrder $sellOrder): self
     {
-        $amount = $buyOrder->amount;
+        // Phase 9, Step 5 — defensive handling of unequal leg amounts.
+        //
+        // Today's pairing flow (CheckTradesJob::createPairOrderLocked) creates
+        // the continuation order with 'amount' => $filledOrder->amount, so the
+        // two legs are always equal in the current codebase. This guard exists
+        // so that if a future partial-fill flow (or any precision drift) ever
+        // produces unequal legs, the booked trade's numbers are correct for the
+        // matched quantity (min of the two) instead of silently using the buy
+        // side's amount and mispricing the sell notional / gross profit.
+        //
+        // The residual (buy_amount - sell_amount) is intentionally NOT tracked
+        // here — inventory/residual management is a later concern. We just make
+        // the divergence loud via a warning log.
+        //
+        // BTC amounts are decimal:8 (e.g. 0.00007399), well within double
+        // precision (~15-17 significant digits), so a plain float min() is
+        // safe and matches the existing arithmetic style below (which already
+        // coerces decimal:8 strings via arithmetic operators).
+        $buyAmount  = (float) $buyOrder->amount;
+        $sellAmount = (float) $sellOrder->amount;
+        $amount     = min($buyAmount, $sellAmount);
+
+        if ($buyAmount !== $sellAmount) {
+            Log::channel('trading')->warning('COMPLETED_TRADE_UNEQUAL_LEG_AMOUNTS', [
+                'buy_order_id'   => $buyOrder->id,
+                'sell_order_id'  => $sellOrder->id,
+                'buy_amount'     => $buyAmount,
+                'sell_amount'    => $sellAmount,
+                'matched_amount' => $amount,
+                'residual'       => abs($buyAmount - $sellAmount),
+                'note'           => 'Booking trade on matched quantity; residual is not tracked in this step.',
+            ]);
+        }
 
         // سود ناخالص (قبل از کسر کارمزد)
         $grossProfit = ($sellOrder->price - $buyOrder->price) * $amount;
