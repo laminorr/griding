@@ -166,7 +166,7 @@ class AdjustGridJob implements ShouldQueue
 
                     // 4) Apply changes with bot_id context
                     if (method_exists($exec, 'applyForBot')) {
-                        $exec->applyForBot($bot->id, $diff, simulation: $simulate);
+                        $exec->applyForBot($bot->id, $diff, simulation: $simulate, role: 'rebalance');
                     } else {
                         $exec->apply($diff, simulation: $simulate);
                         Log::channel('trading')->warning('USING_UNSCOPED_APPLY', [

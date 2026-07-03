@@ -613,6 +613,7 @@ class CheckTradesJob implements ShouldQueue
                 'status'          => 'pending',
                 'client_order_id' => $clientOrderId,
                 'paired_order_id' => $filledOrder->id,
+                'role'            => 'cycle_exit',
             ]);
 
             if ($bot->simulation) {
