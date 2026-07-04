@@ -39,8 +39,13 @@ class GridOrderExecutor
      * Primary entry point — scoped to a specific bot.
      * Creates GridOrder records, performs dedup checks, and uses a deterministic
      * client_order_id so timeout-retries cannot produce duplicate exchange orders.
+     *
+     * $role is stamped onto every GridOrder row created here: 'initial_grid'
+     * when called from the initial setup path (TradingEngineService) and
+     * 'rebalance' when called from AdjustGridJob. Null keeps the column unset
+     * for any caller that predates role wiring.
      */
-    public function applyForBot(int $botId, array $diff, bool $simulation = true): void
+    public function applyForBot(int $botId, array $diff, bool $simulation = true, ?string $role = null): void
     {
         $symbol = (string) ($diff['symbol'] ?? 'UNKNOWN');
         $tick   = max(1, (int) ($diff['tick'] ?? 1));
@@ -168,6 +173,7 @@ class GridOrderExecutor
                     'status'           => 'placed',
                     'client_order_id'  => $clientOrderId,
                     'nobitex_order_id' => 'SIM-' . uniqid(),
+                    'role'             => $role,
                 ]);
 
                 Log::channel('trading')->info('EXEC_SIM_PLACE', [
@@ -206,6 +212,7 @@ class GridOrderExecutor
                     'type'            => $side,
                     'status'          => 'pending',
                     'client_order_id' => $clientOrderId,
+                    'role'            => $role,
                 ]);
 
                 $sideEnum = $side === 'buy' ? OrderSide::BUY : OrderSide::SELL;

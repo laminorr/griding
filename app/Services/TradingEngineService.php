@@ -610,7 +610,7 @@ class TradingEngineService
         $callStartedAt = now();
 
         try {
-            $this->gridOrderExecutor->applyForBot($botConfig->id, $diff, simulation: $simulation);
+            $this->gridOrderExecutor->applyForBot($botConfig->id, $diff, simulation: $simulation, role: 'initial_grid');
         } catch (\Throwable $e) {
             Log::error('GridOrderExecutor::applyForBot threw during initial grid setup', [
                 'bot_id' => $botConfig->id,
