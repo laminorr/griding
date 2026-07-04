@@ -87,8 +87,11 @@ class CheckTradesJob implements ShouldQueue
 
         try {
             // بررسی سفارشات فعال (placed = در انتظار اجرا)
+            // Phase 9, Step 7: partially_filled orders are still live on the
+            // exchange and MUST keep being polled, otherwise they would never
+            // transition to 'filled' once the remaining quantity matches.
             $activeOrders = $bot->gridOrders()
-                ->where('status', 'placed')
+                ->whereIn('status', ['placed', 'partially_filled'])
                 ->get();
 
             Log::info("CheckTradesJob: Found {$activeOrders->count()} active orders for bot {$bot->name}");
@@ -309,6 +312,21 @@ class CheckTradesJob implements ShouldQueue
 
         Log::debug("CheckTradesJob: Processing order {$order->id}, current status: {$order->status}, API status: {$apiStatus}");
 
+        // Phase 9, Step 7 — partial-fill detection.
+        //
+        // Nobitex has no distinct "partially filled" status: a partial fill is
+        // reported as ACTIVE with matchedAmount > 0 (surfaced on the DTO as
+        // filledBase). This check MUST run before the status-unchanged early
+        // return below, because ACTIVE maps to 'placed' and a placed order
+        // with a growing partial fill would otherwise be silently skipped.
+        $originalAmount = (float) ($order->original_amount ?? $order->amount);
+        $filledBase     = (float) $statusDto->filledBase;
+
+        if ($apiStatus === 'ACTIVE' && $filledBase > 0 && $filledBase < $originalAmount) {
+            $this->handlePartialFill($order, $statusDto, $bot);
+            return;
+        }
+
         // اگر وضعیت تغییری نکرده، ادامه نده
         $mappedStatus = $this->mapNobitexStatusToLocal($apiStatus);
         if ($order->status === $mappedStatus) {
@@ -362,14 +380,48 @@ class CheckTradesJob implements ShouldQueue
         $logger = app(BotActivityLogger::class);
 
         try {
-            // به‌روزرسانی وضعیت سفارش به filled
+            // Phase 9, Step 7 — never overwrite the 'amount' column anymore.
+            // The old code did `'amount' => $statusDto->filledBase ?? $order->amount`,
+            // which destroyed the originally requested amount (and, since
+            // filledBase is a non-nullable string, a missing matchedAmount in
+            // the API row arrived as '0' and zeroed the order). The requested
+            // amount now stays in 'amount' / 'original_amount' and the actual
+            // executed quantity goes to 'filled_amount'.
+            $originalAmount = $order->original_amount ?? $order->amount;
+
+            // filledBase of '0' on a DONE order means the API row lacked
+            // matchedAmount — fall back to the requested amount rather than
+            // recording a zero-quantity fill.
+            $filledBase = ((float) $statusDto->filledBase > 0)
+                ? $statusDto->filledBase
+                : (string) $order->amount;
+
+            if ((float) $filledBase < (float) $originalAmount) {
+                // Unusual: Nobitex reports the order DONE but matched less
+                // than requested. Keep the original amount intact and make
+                // the divergence loud.
+                Log::channel('trading')->warning('FILLED_WITH_PARTIAL_QUANTITY', [
+                    'order_id'         => $order->id,
+                    'bot_id'           => $bot->id,
+                    'original_amount'  => (string) $originalAmount,
+                    'filled_base'      => (string) $filledBase,
+                    'nobitex_order_id' => $order->nobitex_order_id,
+                ]);
+            }
+
             $order->update([
-                'status' => 'filled',
-                'filled_at' => now(),
-                'amount' => $statusDto->filledBase ?? $order->amount, // استفاده از مقدار واقعی اگر موجود باشد
+                'status'             => 'filled',
+                'filled_at'          => now(),
+                'original_amount'    => $originalAmount,
+                'filled_amount'      => $filledBase,
+                'remaining_amount'   => number_format(max(0, (float) $originalAmount - (float) $filledBase), 8, '.', ''),
+                // DTO has no true average-fill-price field; for our limit
+                // orders the API's priceIRT (or our own price) is the fill price.
+                'average_fill_price' => $statusDto->priceIRT ?? $order->price,
+                'last_fill_at'       => now(),
             ]);
 
-            Log::info("CheckTradesJob: Order {$order->id} marked as filled - Price: {$order->price}, Amount: {$order->amount}, Type: {$order->type}");
+            Log::info("CheckTradesJob: Order {$order->id} marked as filled - Price: {$order->price}, Amount: {$order->amount}, Filled: {$order->filled_amount}, Type: {$order->type}");
 
             // Log order filled
             $logger->logOrderFilled($bot->id, $order);
@@ -384,6 +436,70 @@ class CheckTradesJob implements ShouldQueue
             Log::error("CheckTradesJob: Error handling filled order {$order->id}: " . $e->getMessage());
             throw $e;
         }
+    }
+
+    /**
+     * پردازش فیل جزئی (Phase 9, Step 7)
+     *
+     * The order is still live on the exchange (Nobitex status ACTIVE) but part
+     * of it has matched. We record the partial in the ledger and nothing more:
+     *
+     * NO pair (continuation) order is created for a partial fill. A partial
+     * can keep growing (more matches arrive) or stay partial forever; booking
+     * a pair for the partial quantity now and then receiving further fills
+     * would require a whole reconciliation system to split/extend pairs.
+     * The continuation pair is only created when the fill becomes FULL, i.e.
+     * when Nobitex reports the order Done and handleFilledOrder() moves it to
+     * 'filled' (processBot() only pairs orders with status = 'filled', so
+     * 'partially_filled' rows are naturally excluded from pairing).
+     *
+     * @param GridOrder $order
+     * @param \App\DTOs\OrderStatusDto $statusDto
+     * @param BotConfig $bot
+     * @return void
+     */
+    private function handlePartialFill(GridOrder $order, $statusDto, BotConfig $bot): void
+    {
+        // Backfill original_amount on first detection so the requested
+        // quantity survives even for rows created before Phase 9, Step 1.
+        $originalAmount = $order->original_amount ?? $order->amount;
+        $filledBase     = (float) $statusDto->filledBase;
+
+        // Idempotence: repeated polls with an unchanged matched amount must
+        // not rewrite the row (and must not bump last_fill_at).
+        if ($order->status === 'partially_filled'
+            && (float) $order->filled_amount === $filledBase) {
+            Log::debug("CheckTradesJob: Order {$order->id} partial fill unchanged at {$statusDto->filledBase} — nothing to update");
+            return;
+        }
+
+        $remaining = number_format(max(0, (float) $originalAmount - $filledBase), 8, '.', '');
+
+        $order->update([
+            'status'             => 'partially_filled',
+            // 'amount' is intentionally NOT touched — it stays the originally
+            // requested quantity; the executed part lives in filled_amount.
+            'original_amount'    => $originalAmount,
+            'filled_amount'      => $statusDto->filledBase,
+            'remaining_amount'   => $remaining,
+            // DTO has no true average-fill-price field; for our limit orders
+            // matches happen at the limit price, so priceIRT / order price is
+            // the correct fill price.
+            'average_fill_price' => $statusDto->priceIRT ?? $order->price,
+            'last_fill_at'       => now(),
+        ]);
+
+        Log::channel('trading')->info('PARTIAL_FILL_DETECTED', [
+            'order_id'           => $order->id,
+            'bot_id'             => $bot->id,
+            'type'               => $order->type,
+            'price'              => $order->price,
+            'original_amount'    => (string) $originalAmount,
+            'filled_amount'      => (string) $statusDto->filledBase,
+            'remaining_amount'   => $remaining,
+            'average_fill_price' => $order->average_fill_price,
+            'nobitex_order_id'   => $order->nobitex_order_id,
+        ]);
     }
 
     /**
@@ -559,9 +675,18 @@ class CheckTradesJob implements ShouldQueue
 
         $symbol = $bot->symbol ?? 'BTCIRT';
 
+        // Phase 9, Step 7 (defensive): size the continuation order by what was
+        // actually executed, not what was requested. Today pairs are only
+        // created for fully-filled orders so the two are normally equal, but
+        // if a fill ever lands with filled_amount < amount (see
+        // FILLED_WITH_PARTIAL_QUANTITY in handleFilledOrder) the pair must
+        // reflect the real quantity. Combined with CompletedTrade's min()
+        // logic (Step 5), profit is then computed on the matched quantity.
+        $pairAmount = $filledOrder->filled_amount ?? $filledOrder->amount;
+
         $clientOrderId = GridOrder::buildClientOrderId($bot->id, $symbol, $newType, $newPrice);
 
-        Log::info("CheckTradesJob: Creating pair order - Type: {$newType}, Price: {$newPrice} for filled order {$filledOrder->id}");
+        Log::info("CheckTradesJob: Creating pair order - Type: {$newType}, Price: {$newPrice}, Amount: {$pairAmount} for filled order {$filledOrder->id}");
 
         // Dedup guard — abort before opening a transaction if this pair was already placed.
         $existingOrder = GridOrder::where('bot_config_id', $bot->id)
@@ -608,7 +733,7 @@ class CheckTradesJob implements ShouldQueue
             $newOrder = GridOrder::create([
                 'bot_config_id'   => $bot->id,
                 'price'           => $newPrice,
-                'amount'          => $filledOrder->amount,
+                'amount'          => $pairAmount,
                 'type'            => $newType,
                 'status'          => 'pending',
                 'client_order_id' => $clientOrderId,
@@ -636,7 +761,7 @@ class CheckTradesJob implements ShouldQueue
                     'order_id'        => $newOrder->id,
                     'type'            => $newType,
                     'price'           => $newPrice,
-                    'amount'          => $filledOrder->amount,
+                    'amount'          => $pairAmount,
                     'nobitex_order_id'=> $nobitexOrderId,
                 ]);
             } else {
@@ -649,7 +774,7 @@ class CheckTradesJob implements ShouldQueue
                     $symbol,
                     $newType,
                     $newPrice,
-                    (string) $filledOrder->amount,
+                    (string) $pairAmount,
                     $clientOrderId
                 );
                 $executionTime = (int) ((microtime(true) - $startTime) * 1000);
@@ -673,7 +798,7 @@ class CheckTradesJob implements ShouldQueue
                     'order_id'        => $newOrder->id,
                     'type'            => $newType,
                     'price'           => $newPrice,
-                    'amount'          => $filledOrder->amount,
+                    'amount'          => $pairAmount,
                     'nobitex_order_id'=> $nobitexOrderId,
                 ]);
             }

@@ -12,6 +12,12 @@ enum GridOrderStatus: string
 {
     case PENDING   = 'PENDING';   // سفارش آماده ثبت در صرافی، هنوز ارسال نشده
     case ACTIVE    = 'ACTIVE';    // سفارش ثبت شده و در حال انتظار اجرا
+    // Phase 9, Step 7 — partially executed order. Nobitex does NOT emit a
+    // distinct status string for this: a partial fill arrives as status
+    // 'Active' with matchedAmount > 0, so no API string maps here in
+    // fromString(). Detection happens in CheckTradesJob::processOrderStatus()
+    // by comparing the DTO's filledBase against the order's original amount.
+    case PARTIALLY_FILLED = 'PARTIALLY_FILLED';
     case FILLED    = 'FILLED';    // سفارش به طور کامل اجرا شده
     case CANCELED  = 'CANCELED';  // سفارش لغو شده (دستی یا سیستمی)
     case ERROR     = 'ERROR';     // خطا در ثبت یا پیگیری سفارش
@@ -61,12 +67,15 @@ enum GridOrderStatus: string
         };
 
         return match ($v) {
-            'PENDING'   => self::PENDING,
-            'ACTIVE'    => self::ACTIVE,
-            'FILLED'    => self::FILLED,
-            'CANCELED'  => self::CANCELED,
-            'ERROR'     => self::ERROR,
-            default     => throw new \InvalidArgumentException("Unknown GridOrderStatus: {$value}"),
+            'PENDING'          => self::PENDING,
+            'ACTIVE'           => self::ACTIVE,
+            // Only round-trips our own stored value — Nobitex never sends this
+            // string (its partials are 'Active' + matchedAmount > 0).
+            'PARTIALLY_FILLED' => self::PARTIALLY_FILLED,
+            'FILLED'           => self::FILLED,
+            'CANCELED'         => self::CANCELED,
+            'ERROR'            => self::ERROR,
+            default            => throw new \InvalidArgumentException("Unknown GridOrderStatus: {$value}"),
         };
     }
 }

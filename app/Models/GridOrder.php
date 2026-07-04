@@ -40,6 +40,15 @@ class GridOrder extends Model
         $this->attributes['price'] = (string) $value;
     }
 
+    public function setAverageFillPriceAttribute($value): void
+    {
+        // Same rationale as setPriceAttribute — decimal(20,0) values above the
+        // signed 32-bit ceiling (~2.1B) truncate when bound as PDO PARAM_INT.
+        // Coercing to string forces PARAM_STR binding so the full value lands
+        // in the column. Nullable column, so null passes through untouched.
+        $this->attributes['average_fill_price'] = $value === null ? null : (string) $value;
+    }
+
     /**
      * Validation and guards
      */
