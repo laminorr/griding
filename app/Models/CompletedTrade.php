@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Support\Facades\Log;
+use App\Support\Money;
 use Carbon\Carbon;
 
 class CompletedTrade extends Model
@@ -294,6 +295,13 @@ class CompletedTrade extends Model
      */
     public static function createFromOrders(GridOrder $buyOrder, GridOrder $sellOrder): self
     {
+        // Phase 10, Step 2 — every monetary calculation below now runs through
+        // the bcmath Money helper on decimal strings instead of native float/int
+        // operators. IRT prices are ~20-digit integers (which truncate on some
+        // 32-bit PDO paths) and crypto amounts are decimal:8 (which accumulate
+        // IEEE-754 rounding error); doing the arithmetic as exact big-decimals
+        // removes both classes of error from these user-facing profit numbers.
+        //
         // Phase 9, Step 5 — defensive handling of unequal leg amounts.
         //
         // Today's pairing flow (CheckTradesJob::createPairOrderLocked) creates
@@ -307,29 +315,33 @@ class CompletedTrade extends Model
         // The residual (buy_amount - sell_amount) is intentionally NOT tracked
         // here — inventory/residual management is a later concern. We just make
         // the divergence loud via a warning log.
-        //
-        // BTC amounts are decimal:8 (e.g. 0.00007399), well within double
-        // precision (~15-17 significant digits), so a plain float min() is
-        // safe and matches the existing arithmetic style below (which already
-        // coerces decimal:8 strings via arithmetic operators).
-        $buyAmount  = (float) $buyOrder->amount;
-        $sellAmount = (float) $sellOrder->amount;
-        $amount     = min($buyAmount, $sellAmount);
 
-        if ($buyAmount !== $sellAmount) {
+        // Extract raw values as canonical decimal strings. GridOrder->price is a
+        // large IRT integer and amount is decimal:8; Money::normalize() coerces
+        // either representation into a bcmath-safe string with no (float)/(int)
+        // cast, so no precision is lost before the arithmetic even begins.
+        $buyPrice   = Money::normalize($buyOrder->price);
+        $sellPrice  = Money::normalize($sellOrder->price);
+        $buyAmount  = Money::normalize($buyOrder->amount);
+        $sellAmount = Money::normalize($sellOrder->amount);
+
+        // Book the trade on the matched quantity (min of the two legs).
+        $amount = Money::min($buyAmount, $sellAmount);
+
+        if (Money::compare($buyAmount, $sellAmount) !== 0) {
             Log::channel('trading')->warning('COMPLETED_TRADE_UNEQUAL_LEG_AMOUNTS', [
                 'buy_order_id'   => $buyOrder->id,
                 'sell_order_id'  => $sellOrder->id,
                 'buy_amount'     => $buyAmount,
                 'sell_amount'    => $sellAmount,
                 'matched_amount' => $amount,
-                'residual'       => abs($buyAmount - $sellAmount),
+                'residual'       => Money::abs(Money::sub($buyAmount, $sellAmount)),
                 'note'           => 'Booking trade on matched quantity; residual is not tracked in this step.',
             ]);
         }
 
-        // سود ناخالص (قبل از کسر کارمزد)
-        $grossProfit = ($sellOrder->price - $buyOrder->price) * $amount;
+        // سود ناخالص (قبل از کسر کارمزد) = (sellPrice − buyPrice) × amount
+        $grossProfit = Money::mul(Money::sub($sellPrice, $buyPrice), $amount);
 
         // محاسبه کارمزد روی هر دو طرف معامله (خرید و فروش).
         //
@@ -338,14 +350,20 @@ class CompletedTrade extends Model
         // سطح هر ربات) و در صورت نبود، مقدار سراسری config('trading.exchange.fee_bps').
         // fee_bps بر حسب basis point است (35 = 0.35% = 0.0035).
         $feeBps  = $buyOrder->botConfig?->fee_bps ?? config('trading.exchange.fee_bps', 35);
-        $feeRate = $feeBps / 10000.0; // bps → نرخ (35 bps = 0.0035)
+        $feeRate = Money::div((string) $feeBps, '10000'); // bps → نرخ (35 bps = 0.0035)
 
-        $buyNotional  = $buyOrder->price * $amount;
-        $sellNotional = $sellOrder->price * $amount;
-        $totalFee     = ($buyNotional + $sellNotional) * $feeRate;
+        $buyNotional  = Money::mul($buyPrice, $amount);
+        $sellNotional = Money::mul($sellPrice, $amount);
+        $totalFee     = Money::mul($feeRate, Money::add($buyNotional, $sellNotional));
 
         // سود خالص = سود ناخالص − کارمزد دو طرف
-        $netProfit = $grossProfit - $totalFee;
+        $netProfit = Money::sub($grossProfit, $totalFee);
+
+        // درصد سود ناخالص نسبت به notional خرید. مخرج صفر (قیمت یا مقدار صفر)
+        // به‌جای پرتاب DivisionByZeroError، درصد را برابر "0" قرار می‌دهد.
+        $profitPercentage = Money::isZero($buyNotional)
+            ? '0'
+            : Money::mul(Money::div($grossProfit, $buyNotional), '100');
 
         // محاسبه زمان اجرا
         $executionTime = $sellOrder->updated_at->diffInSeconds($buyOrder->created_at);
@@ -354,14 +372,14 @@ class CompletedTrade extends Model
             'bot_config_id' => $buyOrder->bot_config_id,
             'buy_order_id' => $buyOrder->id,
             'sell_order_id' => $sellOrder->id,
-            'buy_price' => $buyOrder->price,
-            'sell_price' => $sellOrder->price,
+            'buy_price' => $buyPrice,
+            'sell_price' => $sellPrice,
             'amount' => $amount,
             'profit' => $netProfit,
             'fee' => $totalFee,
             'gross_profit' => $grossProfit,
             'net_profit' => $netProfit,
-            'profit_percentage' => ($grossProfit / $buyNotional) * 100,
+            'profit_percentage' => $profitPercentage,
             'execution_time_seconds' => $executionTime,
             'trade_type' => 'grid',
             // grid_orders ستون grid_level ندارد (در فاز ۴ عمداً حذف شد) و هیچ
