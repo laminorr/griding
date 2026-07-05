@@ -9,6 +9,7 @@ use App\Services\NobitexService;
 use App\Services\TradingEngineService;
 use App\Services\BotActivityLogger;
 use App\Services\MarketDataLayer;
+use App\Support\Money;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -190,10 +191,20 @@ class CheckTradesJob implements ShouldQueue
 
             Log::info("CheckTradesJob: [SIM] Current market price for {$symbol}: {$currentPrice}");
 
+            // Phase 10, Step 4 — decide fills with exact BCMath comparison
+            // instead of float comparisons. getLastPrice() returns an int, so
+            // normalize it to a decimal string; GridOrder->price is already a
+            // string (Phase 4 mutator). Normalize once outside the loop.
+            $marketPrice = Money::normalize($currentPrice);
+
             foreach ($orders as $order) {
+                // Money::compare(market, order): <0 market below, >0 market above.
+                //   buy  fills when market <= order price  → compare <= 0
+                //   sell fills when market >= order price  → compare >= 0
+                $cmp = Money::compare($marketPrice, $order->price);
                 $isFilled = $order->type === 'buy'
-                    ? $order->price >= $currentPrice
-                    : $order->price <= $currentPrice;
+                    ? $cmp <= 0
+                    : $cmp >= 0;
 
                 if (!$isFilled) {
                     continue;
@@ -667,11 +678,21 @@ class CheckTradesJob implements ShouldQueue
     {
         $logger = app(BotActivityLogger::class);
 
-        $newType     = $filledOrder->type === 'buy' ? 'sell' : 'buy';
-        $priceChange = $bot->grid_spacing / 100;
-        $newPrice    = $newType === 'sell'
-            ? (int) round($filledOrder->price * (1 + $priceChange))
-            : (int) round($filledOrder->price * (1 - $priceChange));
+        $newType = $filledOrder->type === 'buy' ? 'sell' : 'buy';
+
+        // Phase 10, Step 4 — compute the continuation price with BCMath instead
+        // of float arithmetic. grid_spacing is a decimal-cast percentage string
+        // (e.g. "1.00"); as a ratio that is grid_spacing / 100 (1.0% -> "0.01").
+        $spacingStr = Money::div(Money::normalize($bot->grid_spacing), '100');
+        $rawPrice   = $newType === 'sell'
+            ? Money::mul($filledOrder->price, Money::add('1', $spacingStr))
+            : Money::mul($filledOrder->price, Money::sub('1', $spacingStr));
+
+        // IRT prices are whole-rial integers (DECIMAL(20,0)); preserve the
+        // existing rounding to the integer tick — only the raw multiplication
+        // moved to BCMath. At IRT magnitudes (~10^11) the value is far inside
+        // float's exact-integer range, so this final round stays exact.
+        $newPrice = (int) round((float) $rawPrice);
 
         $symbol = $bot->symbol ?? 'BTCIRT';
 
