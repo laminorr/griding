@@ -7,6 +7,7 @@ use App\DTOs\CreateOrderDto;
 use App\Enums\ExecutionType;
 use App\Enums\OrderSide;
 use App\Models\GridOrder;
+use App\Support\Money;
 use App\Support\OrderRegistry;
 use Illuminate\Support\Facades\Log;
 
@@ -118,7 +119,8 @@ class GridOrderExecutor
 
             $notional = (int)   ($p['notional'] ?? 0);
             if ($notional <= 0 && $price > 0 && (float)$quantity > 0) {
-                $notional = (int) floor($price * (float) $quantity);
+                // exact price × quantity on strings; scale 0 truncates == floor for positive
+                $notional = (int) Money::mul((string) $price, $quantity, 0);
             }
 
             if ($side === '' || $price <= 0 || (float)$quantity <= 0.0) {
@@ -127,7 +129,7 @@ class GridOrderExecutor
                 continue;
             }
 
-            if ($notional < $minIrt) {
+            if (Money::compare((string) $notional, (string) $minIrt) < 0) {
                 Log::channel('trading')->warning('EXEC_SKIP_BELOW_MIN', compact('symbol','side','price','quantity','notional','minIrt'));
                 continue;
             }
@@ -345,7 +347,8 @@ class GridOrderExecutor
 
             $notional = (int)   ($p['notional'] ?? 0);
             if ($notional <= 0 && $price > 0 && (float)$quantity > 0) {
-                $notional = (int) floor($price * (float) $quantity);
+                // exact price × quantity on strings; scale 0 truncates == floor for positive
+                $notional = (int) Money::mul((string) $price, $quantity, 0);
             }
 
             if ($side === '' || $price <= 0 || (float)$quantity <= 0.0) {
@@ -354,7 +357,7 @@ class GridOrderExecutor
                 continue;
             }
 
-            if ($notional < $minIrt) {
+            if (Money::compare((string) $notional, (string) $minIrt) < 0) {
                 Log::channel('trading')->warning('EXEC_SKIP_BELOW_MIN', compact('symbol','side','price','quantity','notional','minIrt'));
                 continue;
             }
@@ -452,7 +455,7 @@ class GridOrderExecutor
     protected function roundToTick(int $price, int $tick): int
     {
         $tick = max(1, $tick);
-        return (int) (floor($price / $tick) * $tick);
+        return (int) Money::alignToTick((string) $price, (string) $tick, 'floor');
     }
 
 }
