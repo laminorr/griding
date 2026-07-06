@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Contracts\MarketData;
+use App\Support\Money;
 use Illuminate\Support\Facades\Log;
 
 class GridPlanner
@@ -77,8 +78,15 @@ class GridPlanner
         // خریدها (زیر mid)
         if ($mode !== 'sell') {
             for ($i = 1; $i <= $perSide; $i++) {
-                $raw   = (int) round($mid * pow(1 - $step, $i));
-                $price = $this->roundToTick($raw, $tick, down: true);
+                // pow() computes only the geometric SPACING factor. Its exponent is an
+                // integer (it merely distributes the levels), but its base is a float and
+                // bcmath has no fractional pow, so the factor stays native float. The
+                // level PRICE itself (mid × factor) is computed exactly on strings via
+                // Money; the tick-rounding below absorbs any residual float noise from the
+                // spacing calculation.
+                $factor = pow(1 - $step, $i);
+                $raw    = (int) Money::round(Money::mul((string) $mid, Money::normalize($factor)), 0);
+                $price  = $this->roundToTick($raw, $tick, down: true);
                 $rawItems[] = ['side' => 'buy', 'price' => $price];
             }
         }
@@ -86,8 +94,9 @@ class GridPlanner
         // فروش‌ها (بالای mid)
         if ($mode !== 'buy') {
             for ($i = 1; $i <= $perSide; $i++) {
-                $raw   = (int) round($mid * pow(1 + $step, $i));
-                $price = $this->roundToTick($raw, $tick, down: false);
+                $factor = pow(1 + $step, $i);
+                $raw    = (int) Money::round(Money::mul((string) $mid, Money::normalize($factor)), 0);
+                $price  = $this->roundToTick($raw, $tick, down: false);
                 $rawItems[] = ['side' => 'sell', 'price' => $price];
             }
         }
@@ -122,10 +131,14 @@ class GridPlanner
 
             if ($fixedQty !== null) {
                 $qty      = $fixedQty;
-                $notional = (int) round($price * (float) $qty);
+                $notional = (int) Money::round(Money::mul((string) $price, $qty), 0);
             } elseif ($budgetIrt > 0 && $count > 0) {
-                $notional = (int) floor($budgetIrt / $count);
-                $qty      = $this->formatQty($notional / max($price, 1), $qtyDecimals);
+                // scale 0 truncates == floor/intdiv for positive operands
+                $notional = (int) Money::div((string) $budgetIrt, (string) $count, 0);
+                // exact division on strings; formatQty applies the same number_format
+                // rounding + trailing-zero trim as before (10 guard digits keep the round stable).
+                $qtyRaw   = Money::div((string) $notional, (string) max($price, 1), $qtyDecimals + 10);
+                $qty      = $this->formatQty((float) $qtyRaw, $qtyDecimals);
             } else {
                 $qty      = '0';
                 $notional = 0;
@@ -141,7 +154,9 @@ class GridPlanner
         }
         unset($it);
 
-        $estimatedFee = (int) ceil($sumNotional * $feeBps / 10_000);
+        // exact integer product, then ceil(n / 10_000) == floor((n + 9999) / 10_000) on strings
+        $feeNumerator = Money::mul((string) $sumNotional, (string) $feeBps, 0);
+        $estimatedFee = (int) Money::div(Money::add($feeNumerator, '9999'), '10000', 0);
 
         $plan = [
             'symbol'               => $symbol,
