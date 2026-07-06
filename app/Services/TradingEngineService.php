@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\GridOrder;
 use App\Models\BotConfig;
+use App\Support\Money;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Collection;
 use Exception;
@@ -282,7 +283,10 @@ class TradingEngineService
             ];
         }
 
-        $ratio = $total > 0 ? ($successful / $total) : 0;
+        // Success ratio via bcmath so 4/5 etc. is an exact decimal string
+        // ("0.8") compared against the unchanged 80% threshold, rather than a
+        // drifting IEEE-754 double.
+        $ratio = $total > 0 ? Money::div((string) $successful, (string) $total) : '0';
 
         $sideMinimumMet = true;
         if ($plannedBuy > 0 && $plannedSell > 0) {
@@ -293,7 +297,7 @@ class TradingEngineService
             $sideMinimumMet = $successfulSell >= 1;
         }
 
-        if ($sideMinimumMet && $ratio >= 0.8) {
+        if ($sideMinimumMet && Money::compare($ratio, '0.8') >= 0) {
             return ['init_status' => 'running', 'reason' => null];
         }
 
@@ -339,25 +343,38 @@ class TradingEngineService
             [, $quoteCurrency] = GridOrderExecutor::splitSymbol($symbol);
 
             $balances = $this->nobitexService->getBalances();
-            $available = (float)($balances[$quoteCurrency]['available'] ?? 0);
+            // Balance comes back as a decimal string from the exchange; keep it
+            // a string (normalize handles the ?? 0 int fallback) so the compare
+            // below is exact.
+            $available = Money::normalize($balances[$quoteCurrency]['available'] ?? 0);
 
-            $requiredNotional = 0.0;
+            // $orderSize arrives as a float (signature preserved), so normalize
+            // it once to a bcmath-safe string before the per-level multiply.
+            $orderSizeStr = Money::normalize($orderSize);
+
+            $requiredNotional = '0';
             foreach ($buyLevels as $level) {
-                $requiredNotional += $level['price'] * $orderSize;
+                $requiredNotional = Money::add(
+                    $requiredNotional,
+                    Money::mul(Money::normalize($level['price']), $orderSizeStr)
+                );
             }
 
             $feeBps = (int) ($botConfig->fee_bps ?? config('trading.fee_bps', 35));
-            $required = $requiredNotional * (1 + ($feeBps / 10000));
+            // fee_rate = fee_bps / 10000 (e.g. 35 bps -> "0.0035"); the buffer is
+            // notional * fee_rate, added on top of the raw notional requirement.
+            $feeRate = Money::div((string) $feeBps, '10000');
+            $required = Money::add($requiredNotional, Money::mul($requiredNotional, $feeRate));
 
-            if ($available < $required) {
+            if (Money::compare($available, $required) < 0) {
                 return [
                     'success' => false,
                     'error' => sprintf(
-                        'Insufficient %s balance for planned buy orders: required %.0f (incl. %d bps fee buffer), available %.0f',
+                        'Insufficient %s balance for planned buy orders: required %s (incl. %d bps fee buffer), available %s',
                         strtoupper($quoteCurrency),
-                        $required,
+                        Money::round($required, 0),
                         $feeBps,
-                        $available
+                        Money::round($available, 0)
                     ),
                 ];
             }
@@ -513,7 +530,9 @@ class TradingEngineService
         if ($needsBalanceCheck && !$botConfig->simulation) {
             try {
                 $balances = $this->nobitexService->getBalances();
-                $btcBalance = (float)($balances[$baseCurrency]['available'] ?? 0);
+                // Keep the base-currency balance as a decimal string; the
+                // per-SELL affordability check below deducts from it via bcmath.
+                $btcBalance = Money::normalize($balances[$baseCurrency]['available'] ?? 0);
 
                 Log::channel('trading')->info('Base currency balance for SELL orders', [
                     'bot_id' => $botConfig->id,
@@ -526,7 +545,7 @@ class TradingEngineService
                     'base_currency' => $baseCurrency,
                     'error' => $e->getMessage(),
                 ]);
-                $btcBalance = 0;
+                $btcBalance = '0';
             }
         }
 
@@ -565,9 +584,9 @@ class TradingEngineService
             $filteredToPlace = [];
             foreach ($diff['to_place'] as $item) {
                 if (($item['side'] ?? '') === 'sell') {
-                    $requiredBtc = $orderSize;
+                    $requiredBtc = Money::normalize($orderSize);
 
-                    if ($btcBalance === null || $btcBalance < $requiredBtc) {
+                    if ($btcBalance === null || Money::compare($btcBalance, $requiredBtc) < 0) {
                         Log::channel('trading')->warning('Insufficient base currency for SELL order', [
                             'bot_id' => $botConfig->id,
                             'base_currency' => $baseCurrency,
@@ -578,7 +597,7 @@ class TradingEngineService
                         continue; // Skip this SELL order
                     }
 
-                    $btcBalance -= $requiredBtc;
+                    $btcBalance = Money::sub($btcBalance, $requiredBtc);
 
                     Log::channel('trading')->info('Base currency sufficient for SELL order', [
                         'bot_id' => $botConfig->id,
