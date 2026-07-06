@@ -59,38 +59,66 @@ class CompletedTrade extends Model
 
     // ========== Attribute Mutators ==========
     //
-    // CRITICAL FIX: Force the large IRT decimal(20,0) value columns to string
-    // before they are bound, exactly mirroring GridOrder::setPriceAttribute.
+    // Force the large IRT decimal(20,0) value columns to string before they are
+    // bound, exactly mirroring GridOrder::setPriceAttribute.
     //
-    // Without this guard a raw PHP int (e.g. a price like 101500000000) is bound
-    // as PDO::PARAM_INT and can truncate to a signed 32-bit value on the driver
-    // (101500000000 -> -1579215104). The completed_trades columns are
-    // decimal(20,0) and wide enough; stringifying forces a PARAM_STR binding so
-    // the full value is stored intact. Applies to every decimal(20,0) column:
-    // buy_price, sell_price, profit, fee.
+    // Phase 10, Step 7 — upstream now computes these via the bcmath Money helper
+    // and hands us decimal strings natively, so these mutators no longer
+    // *convert* anything in the normal flow. They are retained as defensive
+    // normalization + validation guards because the overflow risk lives in the
+    // PDO layer, not our code: Laravel's Connection::bindValues binds a native
+    // PHP int as PDO::PARAM_INT, which truncates a value above the signed 32-bit
+    // ceiling on 32-bit / emulated-prepare drivers (101500000000 ->
+    // -1579215104). Passing a string keeps the binding as PARAM_STR so the full
+    // DECIMAL(20,0) value is stored intact. Applies to every decimal(20,0)
+    // column: buy_price, sell_price, profit, fee.
 
     public function setBuyPriceAttribute($value): void
     {
-        // Convert to string to prevent integer overflow in PDO bindings
-        $this->attributes['buy_price'] = (string) $value;
+        $this->attributes['buy_price'] = $this->normalizeDecimalString('buy_price', $value);
     }
 
     public function setSellPriceAttribute($value): void
     {
-        // Convert to string to prevent integer overflow in PDO bindings
-        $this->attributes['sell_price'] = (string) $value;
+        $this->attributes['sell_price'] = $this->normalizeDecimalString('sell_price', $value);
     }
 
     public function setProfitAttribute($value): void
     {
-        // Convert to string to prevent integer overflow in PDO bindings
-        $this->attributes['profit'] = (string) $value;
+        $this->attributes['profit'] = $this->normalizeDecimalString('profit', $value);
     }
 
     public function setFeeAttribute($value): void
     {
-        // Convert to string to prevent integer overflow in PDO bindings
-        $this->attributes['fee'] = (string) $value;
+        $this->attributes['fee'] = $this->normalizeDecimalString('fee', $value);
+    }
+
+    /**
+     * Normalize an incoming DECIMAL(20,0) value into a safe string binding.
+     *
+     * - Rejects arrays/objects (never valid for a numeric column).
+     * - Emits a debug regression signal if a native PHP int larger than
+     *   PHP_INT_MAX / 2 arrives, which means some caller bypassed the bcmath
+     *   Money pipeline and is one 32-bit driver away from silently truncating.
+     * - Returns the value as a string so it binds as PARAM_STR.
+     */
+    private function normalizeDecimalString(string $column, $value): string
+    {
+        if (is_array($value) || is_object($value)) {
+            throw new \InvalidArgumentException(
+                "CompletedTrade::{$column} expects a scalar decimal value, " . gettype($value) . ' given.'
+            );
+        }
+
+        if (is_int($value) && abs($value) > PHP_INT_MAX / 2) {
+            Log::debug('COMPLETED_TRADE_LARGE_NATIVE_INT_BINDING', [
+                'column' => $column,
+                'value'  => $value,
+                'note'   => 'Native int on a DECIMAL(20,0) column — expected a bcmath string. Possible upstream regression.',
+            ]);
+        }
+
+        return (string) $value;
     }
 
     // ========== Relations ==========
