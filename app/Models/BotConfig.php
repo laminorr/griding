@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasManyThrough;
+use Illuminate\Support\Facades\Log;
 
 /**
  * مدل تنظیمات ربات (BotConfig)
@@ -28,6 +29,8 @@ class BotConfig extends Model
         'simulation',           // Dry-run به صورت پیش‌فرض
         'is_active',            // Start/Stop
         'init_status',          // نتیجهٔ راه‌اندازی گرید: running | partially_initialized | failed
+        'open_cycles_count',    // تعداد چرخه‌های باز (Phase 11 Step 1) — nullable = محاسبه‌نشده
+        'capital_locked_irt',   // سرمایهٔ قفل‌شده در چرخه‌های باز (IRT) — Phase 11 Step 1
         // 'status',            // Computed via getStatusAttribute() accessor, not fillable
         'min_order_value_irt',  // حداقل ارزش سفارش
         'fee_bps',              // کارمزد به bps (مثلاً 35 = 0.35%)
@@ -68,6 +71,13 @@ class BotConfig extends Model
         'tick'                 => 'integer',
         'settings_json'        => 'array',
         'last_run_at'          => 'datetime',
+        'open_cycles_count'    => 'integer',     // TINYINT 0..255 — safe to cast (Phase 11 Step 1)
+        // NOTE: `capital_locked_irt` is a DECIMAL(20,0) IRT column and is
+        // deliberately NOT cast here. An 'integer' cast would coerce ~20-digit
+        // values back to a native PHP int on read — a 32-bit-overflow hazard,
+        // exactly what the write-side mutator below guards against. Leaving it
+        // uncast keeps the full decimal string intact end to end, mirroring
+        // GridOrder::$price / CompletedTrade::$buy_price. (Phase 10 Step 7.)
 
         // قدیمی
         'total_capital'        => 'decimal:0',   // IRR - بدون اعشار
@@ -82,6 +92,59 @@ class BotConfig extends Model
         'stopped_at'           => 'datetime',
         'last_rebalance_at'    => 'datetime',
     ];
+
+    // ========= Mutators =========
+
+    /**
+     * Force capital_locked_irt to a string so it binds as PDO::PARAM_STR.
+     *
+     * Phase 11, Step 1 — mirrors the DECIMAL(20,0) write-side guard added to
+     * GridOrder / CompletedTrade in Phase 10 Step 7. Laravel's
+     * Connection::bindValues binds a native PHP int as PDO::PARAM_INT, which
+     * truncates a value above the signed 32-bit ceiling on 32-bit / emulated-
+     * prepare drivers (e.g. 101500000000 -> -1579215104). Passing a string
+     * keeps the binding as PARAM_STR so the full DECIMAL(20,0) value is stored
+     * intact. The column is nullable, so null passes through untouched.
+     */
+    public function setCapitalLockedIrtAttribute($value): void
+    {
+        $this->attributes['capital_locked_irt'] = $value === null
+            ? null
+            : $this->normalizeDecimalString('capital_locked_irt', $value);
+    }
+
+    /**
+     * Normalize an incoming DECIMAL(20,0) value into a safe string binding.
+     *
+     * Duplicated (intentionally, to avoid premature abstraction) from the
+     * identical private helper on GridOrder / CompletedTrade introduced in
+     * Phase 10 Step 7. If a third+ consumer appears, consider extracting this
+     * to a shared trait/support class then — not yet.
+     *
+     * - Rejects arrays/objects (never valid for a numeric column).
+     * - Emits a debug regression signal if a native PHP int larger than
+     *   PHP_INT_MAX / 2 arrives, which means some caller bypassed the bcmath
+     *   Money pipeline and is one 32-bit driver away from silently truncating.
+     * - Returns the value as a string so it binds as PARAM_STR.
+     */
+    private function normalizeDecimalString(string $column, $value): string
+    {
+        if (is_array($value) || is_object($value)) {
+            throw new \InvalidArgumentException(
+                "BotConfig::{$column} expects a scalar decimal value, " . gettype($value) . ' given.'
+            );
+        }
+
+        if (is_int($value) && abs($value) > PHP_INT_MAX / 2) {
+            Log::debug('BOT_CONFIG_LARGE_NATIVE_INT_BINDING', [
+                'column' => $column,
+                'value'  => $value,
+                'note'   => 'Native int on a DECIMAL(20,0) column — expected a bcmath string. Possible upstream regression.',
+            ]);
+        }
+
+        return (string) $value;
+    }
 
     // ========= Relations =========
 
