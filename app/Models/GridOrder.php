@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Facades\Log;
 
 class GridOrder extends Model
 {
@@ -22,31 +23,74 @@ class GridOrder extends Model
         'matched'            => 'decimal:8',
         'unmatched'          => 'decimal:8',
         'raw_json'           => 'array',
-        'price'              => 'integer',
+        // NOTE: `price` and `average_fill_price` are DECIMAL(20,0) columns and
+        // are deliberately NOT cast here. They were previously cast to
+        // 'integer' (Phase 4 / Phase 9), which coerces the value back to a
+        // native PHP int on read — a 32-bit-overflow hazard for ~20-digit IRT
+        // values and exactly the type the write-side mutators below exist to
+        // avoid. Leaving them uncast keeps the full decimal string intact end
+        // to end; upstream callers run through the bcmath Money helper and
+        // treat these as decimal strings. (Phase 10, Step 7.)
         'filled_at'          => 'datetime',
         'original_amount'    => 'decimal:8',
         'filled_amount'      => 'decimal:8',
         'remaining_amount'   => 'decimal:8',
-        'average_fill_price' => 'integer',
         'last_fill_at'       => 'datetime',
     ];
 
     /**
-     * CRITICAL FIX: Force price to string before save to prevent PDO binding issues
+     * Force the price to a string so it is bound as PDO::PARAM_STR.
+     *
+     * Phase 10, Step 7 — upstream calculations were migrated to the bcmath
+     * Money helper and now hand us decimal strings natively, so this mutator no
+     * longer *converts* anything in the normal flow. It is retained as a
+     * defensive normalization + validation guard because the overflow risk
+     * lives in the PDO layer, not in our code: Laravel's Connection::bindValues
+     * binds a native PHP int as PDO::PARAM_INT, which truncates a value above
+     * the signed 32-bit ceiling on 32-bit / emulated-prepare drivers
+     * (e.g. 101500000000 -> -1579215104). Passing a string keeps the binding as
+     * PARAM_STR so the full DECIMAL(20,0) value is stored intact.
      */
     public function setPriceAttribute($value): void
     {
-        // Convert to string to prevent integer overflow in PDO bindings
-        $this->attributes['price'] = (string) $value;
+        $this->attributes['price'] = $this->normalizeDecimalString('price', $value);
     }
 
     public function setAverageFillPriceAttribute($value): void
     {
-        // Same rationale as setPriceAttribute — decimal(20,0) values above the
-        // signed 32-bit ceiling (~2.1B) truncate when bound as PDO PARAM_INT.
-        // Coercing to string forces PARAM_STR binding so the full value lands
-        // in the column. Nullable column, so null passes through untouched.
-        $this->attributes['average_fill_price'] = $value === null ? null : (string) $value;
+        // Same rationale as setPriceAttribute. Nullable column, so null passes
+        // through untouched.
+        $this->attributes['average_fill_price'] = $value === null
+            ? null
+            : $this->normalizeDecimalString('average_fill_price', $value);
+    }
+
+    /**
+     * Normalize an incoming DECIMAL(20,0) value into a safe string binding.
+     *
+     * - Rejects arrays/objects (never valid for a numeric column).
+     * - Emits a debug regression signal if a native PHP int larger than
+     *   PHP_INT_MAX / 2 arrives, which means some caller bypassed the bcmath
+     *   Money pipeline and is one 32-bit driver away from silently truncating.
+     * - Returns the value as a string so it binds as PARAM_STR.
+     */
+    private function normalizeDecimalString(string $column, $value): string
+    {
+        if (is_array($value) || is_object($value)) {
+            throw new \InvalidArgumentException(
+                "GridOrder::{$column} expects a scalar decimal value, " . gettype($value) . ' given.'
+            );
+        }
+
+        if (is_int($value) && abs($value) > PHP_INT_MAX / 2) {
+            Log::debug('GRID_ORDER_LARGE_NATIVE_INT_BINDING', [
+                'column' => $column,
+                'value'  => $value,
+                'note'   => 'Native int on a DECIMAL(20,0) column — expected a bcmath string. Possible upstream regression.',
+            ]);
+        }
+
+        return (string) $value;
     }
 
     /**
