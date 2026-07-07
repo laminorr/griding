@@ -8,6 +8,8 @@ use App\Contracts\ExchangeClient;
 use App\Services\NobitexService;
 use App\Contracts\MarketData;
 use App\Services\MarketDataLayer;
+use App\Models\GridOrder;
+use App\Observers\GridOrderObserver;
 use Illuminate\Support\Facades\Log;
 
 class AppServiceProvider extends ServiceProvider
@@ -29,6 +31,12 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        // Phase 11, Step 2 — populate the read-only inventory tracking columns
+        // (open_cycles_count, capital_locked_irt) on bot_configs whenever a
+        // GridOrder changes state. Observation only; nothing consumes these
+        // values for decisions yet.
+        GridOrder::observe(GridOrderObserver::class);
+
         if ($this->app->runningInConsole()) {
             $this->validateCacheDriverForOnOneServer();
         }
