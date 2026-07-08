@@ -4,8 +4,11 @@ declare(strict_types=1);
 namespace App\Jobs;
 
 use App\Models\BotConfig;
+use App\Models\GridOrder;
+use App\Observers\GridOrderObserver;
 use App\Services\GridPlanner;
 use App\Services\GridOrderSync;
+use App\Support\Money;
 use App\Support\OrderRegistry;
 use App\Services\GridOrderExecutor;
 use App\Services\KillSwitchService;
@@ -126,13 +129,82 @@ class AdjustGridJob implements ShouldQueue
                         'capital' => $bot->total_capital ?? 50_000_000
                     ]);
 
+                    // Phase 11 Step 4 — deduct capital already locked in open
+                    // cycles from the budget handed to the rebalance planner.
+                    //
+                    // Once some initial buys have filled, the IRT they spent now
+                    // sits in crypto waiting to sell (a cycle_exit *sell*). That
+                    // IRT is NOT available to fund NEW buy orders, yet without
+                    // this adjustment the planner sizes the whole grid as if the
+                    // full budget were free. capital_locked_irt (populated by
+                    // GridOrderObserver in Phase 11 Step 2 — the summed notional
+                    // of the filled buys behind open cycle_exit sells) is exactly
+                    // that spent-and-waiting IRT, so we subtract it to get the
+                    // budget actually available to redeploy this pass.
+                    //
+                    // FIELD NOTE: this job has always fed GridPlanner
+                    // total_capital (see the original budgetIrt argument below),
+                    // so we deduct from total_capital — not budget_irt — to keep
+                    // the locked==0 case byte-for-byte identical to prior
+                    // behavior. Initial placement (TradingEngineService::
+                    // initializeGrid) needs no change: at init there are no open
+                    // cycles, so capital_locked_irt is 0 and effectiveBudget ==
+                    // total_capital.
+                    $totalBudget   = (string) ($bot->total_capital ?? 50_000_000);
+                    $lockedCapital = $bot->capital_locked_irt ?? '0';
+
+                    // Guard against a stale/missing capital_locked_irt: if the
+                    // observer never ran (or failed silently) the column can be
+                    // null/0 while placed cycle_exit orders exist. Detect that
+                    // mismatch and recompute inline via the observer's public
+                    // helper before trusting the value.
+                    $cycleExitCount = GridOrder::where('bot_config_id', $bot->id)
+                        ->where('role', 'cycle_exit')
+                        ->where('status', 'placed')
+                        ->count();
+
+                    if ($cycleExitCount > 0
+                        && ($lockedCapital === null || Money::isZero((string) $lockedCapital))
+                    ) {
+                        Log::channel('trading')->warning('REBALANCE_STALE_LOCKED_CAPITAL', [
+                            'bot_id'           => $bot->id,
+                            'cycle_exit_count' => $cycleExitCount,
+                        ]);
+                        (new GridOrderObserver())->recomputeInventoryForBot($bot);
+                        $bot->refresh();
+                        $lockedCapital = $bot->capital_locked_irt ?? '0';
+                    }
+
+                    $effectiveBudget = Money::sub($totalBudget, (string) $lockedCapital);
+
+                    // If nothing is available to deploy (locked >= total) we skip
+                    // ONLY this bot's rebalance for this cycle. This is NOT a Kill
+                    // Switch: the bot stays active and its existing cycle_exit
+                    // sells keep working; we simply plan no new grid this pass.
+                    if (Money::compare($effectiveBudget, '0') <= 0) {
+                        Log::channel('trading')->warning('REBALANCE_SKIP_NO_AVAILABLE_BUDGET', [
+                            'bot_id'           => $bot->id,
+                            'total_budget'     => $totalBudget,
+                            'locked_capital'   => (string) $lockedCapital,
+                            'effective_budget' => $effectiveBudget,
+                        ]);
+                        continue;
+                    }
+
+                    Log::channel('trading')->info('REBALANCE_EFFECTIVE_BUDGET', [
+                        'bot_id'           => $bot->id,
+                        'total_budget'     => $totalBudget,
+                        'locked_capital'   => (string) $lockedCapital,
+                        'effective_budget' => $effectiveBudget,
+                    ]);
+
                     // 1) Plan grid using bot's configuration
                     $plan = $planner->plan(
                         $symbol,
                         levels: (int)($bot->grid_levels ?? 6),
                         stepPct: (float)($bot->grid_spacing ?? 0.25),
                         mode: 'both',
-                        budgetIrt: (int)($bot->total_capital ?? 50_000_000)
+                        budgetIrt: (int) $effectiveBudget
                     );
 
                     // ✅ Get existing orders using bot-specific method
