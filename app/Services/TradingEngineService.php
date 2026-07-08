@@ -28,6 +28,7 @@ class TradingEngineService
     private GridPlanner $gridPlanner;
     private GridOrderSync $gridOrderSync;
     private GridOrderExecutor $gridOrderExecutor;
+    private KillSwitchService $killSwitch;
 
     public function __construct(
         NobitexService $nobitexService,
@@ -35,7 +36,8 @@ class TradingEngineService
         BotActivityLogger $activityLogger,
         GridPlanner $gridPlanner,
         GridOrderSync $gridOrderSync,
-        GridOrderExecutor $gridOrderExecutor
+        GridOrderExecutor $gridOrderExecutor,
+        KillSwitchService $killSwitch
     ) {
         $this->nobitexService = $nobitexService;
         $this->gridCalculator = $gridCalculator;
@@ -43,6 +45,7 @@ class TradingEngineService
         $this->gridPlanner = $gridPlanner;
         $this->gridOrderSync = $gridOrderSync;
         $this->gridOrderExecutor = $gridOrderExecutor;
+        $this->killSwitch = $killSwitch;
     }
 
     /**
@@ -52,6 +55,28 @@ class TradingEngineService
     {
         try {
             Log::info("Starting grid initialization", ['bot_id' => $botConfig->id]);
+
+            // 0. Kill Switch gate (Phase 11 Step 3). Evaluated FIRST, before any
+            // order-placing work: if a risk threshold (stop_loss / max_drawdown)
+            // is already breached, refuse to (re)initialize the grid. This also
+            // covers the "re-run on an already-killed bot" case — the switch
+            // returns triggered=true and we abort without touching the exchange.
+            $kill = $this->killSwitch->checkAndTrigger($botConfig);
+            if ($kill['triggered']) {
+                Log::warning('Grid initialization aborted by Kill Switch', [
+                    'bot_id'  => $botConfig->id,
+                    'reason'  => $kill['reason'],
+                    'details' => $kill['details'],
+                ]);
+
+                return [
+                    'success'    => false,
+                    'error'      => 'Kill switch active (' . $kill['reason'] . '): grid initialization refused.',
+                    'error_code' => 'KILL_SWITCH_ACTIVE',
+                    'reason'     => $kill['reason'],
+                    'details'    => $kill['details'],
+                ];
+            }
 
             // 1. بررسی‌های اولیه
             $preflightResult = $this->performPreflightChecks($botConfig);
@@ -129,6 +154,11 @@ class TradingEngineService
 
             $botConfig->update([
                 'center_price' => $centerPrice,
+                // Stable Kill Switch stop-loss anchor: the mid price used for
+                // planning, captured once here at (re)initialization. Distinct
+                // from center_price, which drifts on later rebalances. (Phase 11
+                // Step 3.)
+                'grid_center_price' => $centerPrice,
                 'is_active' => $isActive,
                 'init_status' => $healthResult['init_status'],
                 'started_at' => $isActive ? now() : $botConfig->started_at,

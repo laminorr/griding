@@ -8,6 +8,7 @@ use App\Services\GridPlanner;
 use App\Services\GridOrderSync;
 use App\Support\OrderRegistry;
 use App\Services\GridOrderExecutor;
+use App\Services\KillSwitchService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -27,7 +28,8 @@ class AdjustGridJob implements ShouldQueue
         GridPlanner $planner,
         GridOrderSync $sync,
         OrderRegistry $reg,
-        GridOrderExecutor $exec
+        GridOrderExecutor $exec,
+        KillSwitchService $killSwitch
     ): void {
         // Global lock to prevent concurrent runs (1 second wait, same semantics
         // as the previous MySQL GET_LOCK(?, 1) call). 30s TTL covers a single
@@ -96,6 +98,22 @@ class AdjustGridJob implements ShouldQueue
                 }
 
                 try {
+                    // Kill Switch gate (Phase 11 Step 3). Re-evaluate the risk
+                    // thresholds on every rebalance cycle. If a threshold is
+                    // breached the switch trips (sets is_active = false) and we
+                    // skip rebalancing this bot — no NEW orders are planned or
+                    // placed. Existing cycle_exit sells are left untouched so
+                    // open cycles can still close.
+                    $kill = $killSwitch->checkAndTrigger($bot);
+                    if ($kill['triggered']) {
+                        Log::channel('trading')->warning('ADJUST_GRID_BOT_SKIP_KILLED', [
+                            'bot_id'  => $bot->id,
+                            'reason'  => $kill['reason'],
+                            'details' => $kill['details'],
+                        ]);
+                        continue;
+                    }
+
                     $simulate = (bool) $bot->simulation;
 
                     Log::channel('trading')->info('ADJUST_GRID_BOT_START', [

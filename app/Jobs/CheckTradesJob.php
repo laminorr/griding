@@ -657,6 +657,21 @@ class CheckTradesJob implements ShouldQueue
      */
     private function createPairOrder(GridOrder $filledOrder, BotConfig $bot): void
     {
+        // Kill Switch honoring (Phase 11 Step 3). Creating a pair order opens a
+        // NEW cycle_exit order, which a killed bot must not do. This is a
+        // lightweight is_active check — no need to re-run the full Kill Switch
+        // here; the switch that flipped is_active=false already logged its
+        // reason (initializeGrid / AdjustGridJob). Existing cycle_exit sells are
+        // untouched and their fills still book normally (handleFilledOrder).
+        if (! $bot->is_active) {
+            Log::channel('trading')->info('SKIP_PAIR_KILLED', [
+                'bot_id'          => $bot->id,
+                'filled_order_id' => $filledOrder->id,
+                'reason'          => 'Bot is inactive (Kill Switch or manual stop); not creating new pair order.',
+            ]);
+            return;
+        }
+
         $lock = Cache::lock("pair-order:{$filledOrder->id}", 10);
 
         if (!$lock->get()) {

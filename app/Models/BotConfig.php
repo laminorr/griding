@@ -47,6 +47,7 @@ class BotConfig extends Model
         'grid_spacing',
         'grid_levels',
         'center_price',
+        'grid_center_price',    // مرجع پایدار قیمت مرکز برای Kill Switch (Phase 11 Step 3)
         'stop_loss_percent',
         'take_profit_percent',
         'max_drawdown_percent',
@@ -78,6 +79,13 @@ class BotConfig extends Model
         // exactly what the write-side mutator below guards against. Leaving it
         // uncast keeps the full decimal string intact end to end, mirroring
         // GridOrder::$price / CompletedTrade::$buy_price. (Phase 10 Step 7.)
+        //
+        // NOTE: `grid_center_price` (Phase 11 Step 3) is a DECIMAL(20,0) IRT
+        // column and is likewise deliberately NOT cast — same overflow reason.
+        // The Kill Switch reads it as a decimal string and feeds it straight
+        // into the bcmath Money helper, so any numeric cast here would only
+        // reintroduce the 32-bit truncation hazard the write-side mutator below
+        // guards against.
 
         // قدیمی
         'total_capital'        => 'decimal:0',   // IRR - بدون اعشار
@@ -111,6 +119,23 @@ class BotConfig extends Model
         $this->attributes['capital_locked_irt'] = $value === null
             ? null
             : $this->normalizeDecimalString('capital_locked_irt', $value);
+    }
+
+    /**
+     * Force grid_center_price to a string so it binds as PDO::PARAM_STR.
+     *
+     * Phase 11, Step 3 — same DECIMAL(20,0) write-side guard as
+     * capital_locked_irt above. initializeGrid() populates this with the mid
+     * price used for planning (a native float/int at IRT magnitude ~10^11);
+     * routing it through normalizeDecimalString keeps the binding as a string
+     * so the full value is stored intact on 32-bit / emulated-prepare drivers.
+     * The column is nullable, so null passes through untouched.
+     */
+    public function setGridCenterPriceAttribute($value): void
+    {
+        $this->attributes['grid_center_price'] = $value === null
+            ? null
+            : $this->normalizeDecimalString('grid_center_price', $value);
     }
 
     /**
