@@ -594,6 +594,18 @@ class TradingEngineService
             $fixedQty = '0';
         }
 
+        // Balance-aware SELL sizing (Phase 11 Step 5) — INITIAL PLACEMENT ONLY.
+        // If the account already holds enough base currency (BTC for BTCIRT) to
+        // meaningfully back the sell side, redirect the sell levels to use that
+        // existing inventory instead of requiring fresh IRT to acquire it. The
+        // buy side is untouched. presetBaseQty stays null (naive plan, identical
+        // to before this step) for simulation bots, when balance is unavailable,
+        // when holdings are below threshold, or when holdings are so large they
+        // exceed the whole budget. Rebalance (AdjustGridJob) is intentionally
+        // NOT covered here — see method note; that path has open-cycle
+        // accounting that makes preset sizing more involved (follow-up).
+        $presetBaseQty = $this->computePresetBaseQty($botConfig, $btcBalance, $centerPrice);
+
         $plan = $this->gridPlanner->plan(
             $symbol,
             lastPrice: (int) round($centerPrice),
@@ -601,7 +613,8 @@ class TradingEngineService
             stepPct: (float) $botConfig->grid_spacing,
             mode: 'both',
             budgetIrt: (int) $botConfig->total_capital,
-            fixedQty: $fixedQty
+            fixedQty: $fixedQty,
+            presetBaseQty: $presetBaseQty
         );
 
         // 2) Diff — initial setup has no existing orders to reconcile against.
@@ -614,7 +627,13 @@ class TradingEngineService
             $filteredToPlace = [];
             foreach ($diff['to_place'] as $item) {
                 if (($item['side'] ?? '') === 'sell') {
-                    $requiredBtc = Money::normalize($orderSize);
+                    // Use the SELL item's actual planned quantity, not the
+                    // uniform $orderSize: with balance-aware sizing (Phase 11
+                    // Step 5) sell quantities come from presetBaseQty and differ
+                    // from $orderSize. When preset is not engaged the plan sizes
+                    // every level at fixedQty == $orderSize, so this is
+                    // numerically identical to the previous behavior.
+                    $requiredBtc = Money::normalize($item['quantity'] ?? $orderSize);
 
                     if ($btcBalance === null || Money::compare($btcBalance, $requiredBtc) < 0) {
                         Log::channel('trading')->warning('Insufficient base currency for SELL order', [
@@ -705,5 +724,112 @@ class TradingEngineService
         // ratio-of(successful/total) and per-side minimum checks.
 
         return $results;
+    }
+
+    /**
+     * محاسبهٔ presetBaseQty برای مقداردهی فروش‌ها بر پایهٔ موجودی موجود ارز پایه.
+     *
+     * Balance-aware SELL sizing decision (Phase 11 Step 5). Given the base
+     * currency the account currently has available and the planning mid price,
+     * decide whether the grid's sell side should be backed by that existing
+     * inventory rather than by fresh IRT. Returns the base quantity to hand to
+     * GridPlanner as its presetBaseQty (the full available base), or null to
+     * keep the naive, pre-Step-5 plan.
+     *
+     * Returns null (naive plan) when ANY of the following hold — each logged:
+     *   - $baseAvailable is null (balance API was unavailable / not fetched, e.g.
+     *     simulation bots never fetch it) → fail safe to naive.
+     *   - the bot's mode is 'buy' only → there is no sell side to back.
+     *   - budget or mid is non-positive → cannot form a meaningful threshold.
+     *   - available base value < half a sell side's notional (below threshold)
+     *     → not worth restructuring the grid.
+     *   - available base value exceeds the WHOLE budget → the account is
+     *     effectively all crypto with no room for a normal grid; use naive and
+     *     let the operator decide.
+     *
+     * @param string|null $baseAvailable  موجودی در دسترس ارز پایه (decimal string) یا null
+     */
+    private function computePresetBaseQty(BotConfig $botConfig, ?string $baseAvailable, float $centerPrice): ?string
+    {
+        // Simulation bots never fetch a real balance ($baseAvailable is null),
+        // so this returns null and the simulation branch is left unchanged.
+        if ($baseAvailable === null) {
+            return null;
+        }
+
+        // mode='buy' only → no sells to back with inventory. (mode='both' and
+        // mode='sell' both have a sell side and are handled by the logic below.)
+        $mode = strtolower(trim((string) ($botConfig->mode ?? 'both')));
+        if ($mode === 'buy') {
+            Log::channel('trading')->info('Balance-aware sizing skipped: buy-only mode', [
+                'bot_id' => $botConfig->id,
+            ]);
+            return null;
+        }
+
+        $baseAvailable = Money::normalize($baseAvailable);
+        if (!Money::isPositive($baseAvailable)) {
+            return null; // nothing on hand → naive plan (also the common case)
+        }
+
+        $mid = (int) round($centerPrice);
+        $budgetIrt = (int) $botConfig->total_capital;
+        if ($mid <= 0 || $budgetIrt <= 0) {
+            Log::channel('trading')->warning('Balance-aware sizing skipped: non-positive mid/budget', [
+                'bot_id' => $botConfig->id,
+                'mid'    => $mid,
+                'budget' => $budgetIrt,
+            ]);
+            return null;
+        }
+
+        // Notional value of the base we hold, at the planning mid price.
+        $baseAvailableNotional = Money::mul($baseAvailable, (string) $mid);
+
+        // In 'both' mode GridPlanner splits the budget evenly across the two
+        // sides, so a full naive sell side is ~half the budget. In 'sell'-only
+        // mode the whole budget is the sell side. threshold = half of that.
+        $naiveSellNotional = ($mode === 'sell')
+            ? (string) $budgetIrt
+            : Money::div((string) $budgetIrt, '2');
+        $threshold = Money::mul($naiveSellNotional, '0.5');
+
+        // Safety: holdings worth more than the entire budget mean the account is
+        // essentially all crypto — there is no room for a normal buy+sell grid.
+        // Fall back to naive rather than building a lopsided, all-sell grid.
+        if (Money::compare($baseAvailableNotional, (string) $budgetIrt) > 0) {
+            Log::channel('trading')->warning('Balance-aware sizing skipped: holdings exceed full budget', [
+                'bot_id'                  => $botConfig->id,
+                'base_available'          => $baseAvailable,
+                'base_available_notional' => $baseAvailableNotional,
+                'budget_irt'              => (string) $budgetIrt,
+            ]);
+            return null;
+        }
+
+        // Below threshold → not enough existing inventory to bother; naive plan.
+        if (Money::compare($baseAvailableNotional, $threshold) < 0) {
+            Log::channel('trading')->info('Balance-aware sizing not engaged: holdings below threshold', [
+                'bot_id'                  => $botConfig->id,
+                'base_available'          => $baseAvailable,
+                'base_available_notional' => $baseAvailableNotional,
+                'threshold'               => $threshold,
+            ]);
+            return null;
+        }
+
+        // Engage: dedicate the full available base to the sell side. GridPlanner
+        // splits it across the sell levels. This deploys LESS IRT (the sell
+        // inventory is already owned) for the SAME grid coverage.
+        Log::channel('trading')->info('Balance-aware sizing engaged: backing sells with existing holdings', [
+            'bot_id'                  => $botConfig->id,
+            'mode'                    => $mode,
+            'preset_base_qty'         => $baseAvailable,
+            'base_available_notional' => $baseAvailableNotional,
+            'naive_sell_notional'     => $naiveSellNotional,
+            'threshold'               => $threshold,
+        ]);
+
+        return $baseAvailable;
     }
 }

@@ -20,6 +20,16 @@ class GridPlanner
      * @param int         $budgetIrt بودجه ریالی برای گزارش (Dry-run)
      * @param string|null $fixedQty  اگر ست شود، مقدار qty همه لول‌ها این است (مثل "0.001")
      * @param int|null    $tick      اندازه تیک (پیش‌فرض از config یا 10)
+     * @param string|null $presetBaseQty
+     *        Balance-aware sizing (Phase 11 Step 5). When set (and > 0), the
+     *        SELL side is backed by base currency the account ALREADY holds:
+     *        this amount is split evenly across the sell levels and used as the
+     *        per-sell quantity, instead of the fixedQty/budget-derived quantity.
+     *        The BUY side is untouched — it keeps its fixedQty/budget sizing —
+     *        so fewer IRT are spent acquiring inventory the account already has.
+     *        Default null preserves the exact pre-Step-5 behavior for every
+     *        existing caller (AdjustGridJob, GridRunOnce). Only affects sells;
+     *        harmless (no-op) for mode='buy' since there are no sell levels.
      */
     public function plan(
         string $symbol,
@@ -29,7 +39,8 @@ class GridPlanner
         string $mode = 'both',
         int $budgetIrt = 0,
         ?string $fixedQty = null,
-        ?int $tick = null
+        ?int $tick = null,
+        ?string $presetBaseQty = null
     ): array {
         $symbol = strtoupper(trim($symbol));
         $mode   = strtolower(trim($mode));
@@ -126,10 +137,38 @@ class GridPlanner
         $sumNotional = 0;
         $belowMinCnt = 0;
 
+        // Balance-aware SELL sizing (Phase 11 Step 5). When presetBaseQty is
+        // provided, distribute it evenly across the actual sell levels present
+        // in $items and use the result as each sell's quantity. Computed once
+        // here, applied per-sell inside the loop below. Stays null (no effect)
+        // when presetBaseQty is null/<=0 or there are no sell levels, so the
+        // per-item sizing branches remain byte-for-byte identical to before.
+        $presetBaseQty = ($presetBaseQty !== null) ? Money::normalize($presetBaseQty) : null;
+        $sellCount = 0;
+        foreach ($items as $it) {
+            if (($it['side'] ?? '') === 'sell') { $sellCount++; }
+        }
+        $presetSellQty = null;
+        if ($presetBaseQty !== null && Money::isPositive($presetBaseQty) && $sellCount > 0) {
+            $perRaw        = Money::div($presetBaseQty, (string) $sellCount, $qtyDecimals + 10);
+            $presetSellQty = $this->formatQty((float) $perRaw, $qtyDecimals);
+            // A preset so small it rounds to zero per level is treated as "no
+            // preset" rather than emitting zero-qty sells.
+            if (!Money::isPositive($presetSellQty)) {
+                $presetSellQty = null;
+            }
+        }
+
         foreach ($items as &$it) {
             $price = (int) $it['price'];
 
-            if ($fixedQty !== null) {
+            if ($presetSellQty !== null && ($it['side'] ?? '') === 'sell') {
+                // Sell backed by existing holdings — quantity comes from the
+                // preset split, NOT from budget/fixedQty. This is the whole
+                // point of Step 5: the sell inventory is already on the account.
+                $qty      = $presetSellQty;
+                $notional = (int) Money::round(Money::mul((string) $price, $qty), 0);
+            } elseif ($fixedQty !== null) {
                 $qty      = $fixedQty;
                 $notional = (int) Money::round(Money::mul((string) $price, $qty), 0);
             } elseif ($budgetIrt > 0 && $count > 0) {
@@ -168,6 +207,8 @@ class GridPlanner
             'tick'                 => $tick,
             'qty_decimals'         => $qtyDecimals,
             'budget_irt'           => $budgetIrt,
+            'preset_base_qty'      => $presetBaseQty,     // Phase 11 Step 5 — null unless balance-aware sizing engaged
+            'preset_sell_qty'      => $presetSellQty,     // per-sell qty derived from the preset (null = not engaged)
             'min_order_value_irt'  => $minNotional,
             'fee_bps'              => $feeBps,
             'estimated_notional'   => $sumNotional,
