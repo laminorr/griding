@@ -98,10 +98,14 @@ class TradingEngineService
             $centerPrice = $this->calculateOptimalCenterPrice($botConfig, $options);
 
             // 4. محاسبه سطوح گرید
+            // Pass the bot's mode (Phase 11 Step 6) so directional bots generate
+            // their levels on a single side, keeping planned_buy/planned_sell
+            // consistent with what GridPlanner places in placeGridOrders().
             $gridResult = $this->gridCalculator->calculateGridLevels(
                 $centerPrice,
                 $botConfig->grid_spacing,
-                $botConfig->grid_levels
+                $botConfig->grid_levels,
+                mode: $this->resolveBotMode($botConfig)
             );
 
             if (!$gridResult['success']) {
@@ -346,6 +350,27 @@ class TradingEngineService
     }
 
     /**
+     * تعیین حالت معاملاتی ربات برای برنامه‌ریزی گرید (Phase 11 Step 6).
+     *
+     * Resolve a bot's trading mode for planning. Legacy bots may carry a null or
+     * unexpected mode value; rather than fail hard we default to 'both' and log a
+     * warning, so directional bots ('buy'/'sell') are honored end-to-end while
+     * old rows keep working exactly as before.
+     */
+    private function resolveBotMode(BotConfig $botConfig): string
+    {
+        $mode = strtolower(trim((string) ($botConfig->mode ?? '')));
+        if (!in_array($mode, ['both', 'buy', 'sell'], true)) {
+            Log::channel('trading')->warning('Bot mode invalid or unset; defaulting to both', [
+                'bot_id' => $botConfig->id,
+                'mode'   => $botConfig->mode,
+            ]);
+            return 'both';
+        }
+        return $mode;
+    }
+
+    /**
      * بررسی موجودی واقعی ارز quote (مثل IRT/RLS) قبل از ثبت سفارشات خرید.
      *
      * Note: this checks this bot's own requirement against the account's
@@ -360,6 +385,14 @@ class TradingEngineService
     private function verifySufficientQuoteBalance(BotConfig $botConfig, Collection $gridLevels, float $orderSize): array
     {
         if ($botConfig->simulation) {
+            return ['success' => true];
+        }
+
+        // Sell-only grids place no buy orders, so no quote currency (IRT) is
+        // needed — skip the quote balance check explicitly (Phase 11 Step 6).
+        // The buyLevels->isEmpty() guard below would also short-circuit once
+        // calculateGridLevels honors mode, but make the intent unambiguous.
+        if ($this->resolveBotMode($botConfig) === 'sell') {
             return ['success' => true];
         }
 
@@ -555,7 +588,12 @@ class TradingEngineService
         // pre-filter applied to the plan's "to_place" items before executing.
         $baseCurrency = GridOrderExecutor::splitSymbol($symbol)[0];
         $btcBalance = null;
-        $needsBalanceCheck = $plannedSell > 0;
+        // Phase 11 Step 6 — honor the bot's directional mode. In 'buy' mode there
+        // is no sell side, so the SELL-side base-balance pre-filter is skipped
+        // explicitly (plannedSell is already 0 once calculateGridLevels honors
+        // mode, but the extra guard makes the intent unambiguous).
+        $mode = $this->resolveBotMode($botConfig);
+        $needsBalanceCheck = $plannedSell > 0 && $mode !== 'buy';
 
         if ($needsBalanceCheck && !$botConfig->simulation) {
             try {
@@ -611,7 +649,7 @@ class TradingEngineService
             lastPrice: (int) round($centerPrice),
             levels: (int) $botConfig->grid_levels,
             stepPct: (float) $botConfig->grid_spacing,
-            mode: 'both',
+            mode: $mode,
             budgetIrt: (int) $botConfig->total_capital,
             fixedQty: $fixedQty,
             presetBaseQty: $presetBaseQty

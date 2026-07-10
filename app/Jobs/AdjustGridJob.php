@@ -198,12 +198,25 @@ class AdjustGridJob implements ShouldQueue
                         'effective_budget' => $effectiveBudget,
                     ]);
 
+                    // Phase 11 Step 6 — honor the bot's directional mode instead
+                    // of always planning a two-sided grid. Legacy bots may carry a
+                    // null/invalid mode; default to 'both' with a warning rather
+                    // than fail the rebalance for the whole batch.
+                    $mode = strtolower(trim((string) ($bot->mode ?? '')));
+                    if (!in_array($mode, ['both', 'buy', 'sell'], true)) {
+                        Log::channel('trading')->warning('ADJUST_GRID_MODE_INVALID', [
+                            'bot_id' => $bot->id,
+                            'mode'   => $bot->mode,
+                        ]);
+                        $mode = 'both';
+                    }
+
                     // 1) Plan grid using bot's configuration
                     $plan = $planner->plan(
                         $symbol,
                         levels: (int)($bot->grid_levels ?? 6),
                         stepPct: (float)($bot->grid_spacing ?? 0.25),
-                        mode: 'both',
+                        mode: $mode,
                         budgetIrt: (int) $effectiveBudget
                     );
 
