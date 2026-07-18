@@ -396,9 +396,10 @@ class BotConfig extends Model
         }
 
         $this->forceFill([
-            'is_active'  => true,
-            'started_at' => now(),
-            'stopped_at' => null,
+            'is_active'   => true,
+            'started_at'  => now(),
+            'stopped_at'  => null,
+            'stop_reason' => null,
         ])->save();
 
         return true;

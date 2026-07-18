@@ -21,7 +21,6 @@ use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
 use Filament\Tables\Columns\TextColumn;
-use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Actions\Action;
 use Filament\Tables\Actions\EditAction;
 use Filament\Tables\Actions\DeleteAction;
@@ -197,32 +196,51 @@ class BotConfigResource extends Resource
     {
         return $table
             ->columns([
-                // نام ربات با وضعیت
+                // نام ربات
                 TextColumn::make('name')
                     ->label('نام ربات')
                     ->searchable()
                     ->sortable()
                     ->weight(FontWeight::Bold)
                     ->formatStateUsing(function ($record) {
-                        $status = $record->is_active ? '🟢 فعال' : '⚫ متوقف';
-                        
+                        // وضعیت در ستون «وضعیت» (نشان سلامت) نمایش داده می‌شود تا دوباره‌کاری نشود
                         return new HtmlString("
                             <div class='text-center'>
                                 <div class='font-bold text-gray-900 dark:text-white'>{$record->name}</div>
-                                <div class='text-sm text-gray-600 dark:text-gray-400 mt-1'>{$status}</div>
                             </div>
                         ");
                     })
                     ->alignment(Alignment::Center),
 
-                // وضعیت آیکون
-                IconColumn::make('is_active')
+                // وضعیت سلامت (فعال / توقف اضطراری / متوقف) — مشتق از is_active + stop_reason روی همان ردیف
+                TextColumn::make('is_active')
                     ->label('وضعیت')
-                    ->boolean()
-                    ->trueIcon('heroicon-o-check-circle')
-                    ->falseIcon('heroicon-o-pause-circle')
-                    ->trueColor('success')
-                    ->falseColor('gray')
+                    ->formatStateUsing(function ($record) {
+                        if ($record->is_active) {
+                            $label   = 'فعال';
+                            $classes = 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300';
+                            $tooltip = '';
+                        } elseif (is_string($record->stop_reason) && str_starts_with($record->stop_reason, 'kill_switch:')) {
+                            $label   = 'توقف اضطراری';
+                            $classes = 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300';
+                            $reasonFa = match (substr($record->stop_reason, strlen('kill_switch:'))) {
+                                'stop_loss'    => 'حد ضرر',
+                                'max_drawdown' => 'حداکثر افت',
+                                default        => 'توقف خودکار',
+                            };
+                            $tooltip = " title='{$reasonFa}'";
+                        } else {
+                            $label   = 'متوقف';
+                            $classes = 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300';
+                            $tooltip = '';
+                        }
+
+                        return new HtmlString("
+                            <div class='text-center'>
+                                <span class='inline-flex items-center rounded-full px-2 py-1 text-sm font-semibold {$classes}'{$tooltip}>{$label}</span>
+                            </div>
+                        ");
+                    })
                     ->alignment(Alignment::Center),
 
                 // سود/زیان
@@ -272,6 +290,36 @@ class BotConfigResource extends Resource
                     })
                     ->alignment(Alignment::Center),
 
+                // چرخه‌های باز (open_cycles_count) — nullable = محاسبه‌نشده (Phase 11 Step 7)
+                TextColumn::make('open_cycles_count')
+                    ->label('چرخه‌های باز')
+                    ->formatStateUsing(function ($state, $record) {
+                        if ($state === null) {
+                            return new HtmlString("
+                                <div class='text-center'>
+                                    <div class='font-bold text-gray-400'>—</div>
+                                    <div class='text-sm text-gray-500'>محاسبه‌نشده</div>
+                                </div>
+                            ");
+                        }
+
+                        $levels = max(1, (int) $record->grid_levels);
+                        $ratio  = $state / $levels;
+                        $color  = match (true) {
+                            $ratio < 0.5 => 'text-green-600',
+                            $ratio < 0.8 => 'text-yellow-600',
+                            default      => 'text-red-600',
+                        };
+
+                        return new HtmlString("
+                            <div class='text-center'>
+                                <div class='font-bold {$color}'>{$state}</div>
+                                <div class='text-sm text-gray-500'>{$state} از {$record->grid_levels}</div>
+                            </div>
+                        ");
+                    })
+                    ->alignment(Alignment::Center),
+
                 // سرمایه فعال
                 TextColumn::make('active_capital')
                     ->label('سرمایه فعال')
@@ -300,6 +348,35 @@ class BotConfigResource extends Resource
                         ");
                     })
                     ->sortable()
+                    ->alignment(Alignment::Center),
+
+                // سرمایه قفل‌شده (capital_locked_irt) — UNCAST: رشتهٔ اعشاری یا NULL (Phase 11 Step 7)
+                TextColumn::make('capital_locked_irt')
+                    ->label('سرمایه قفل‌شده')
+                    ->formatStateUsing(function ($state, $record) {
+                        if ($state === null) {
+                            return new HtmlString("
+                                <div class='text-center'>
+                                    <div class='font-bold text-gray-400'>—</div>
+                                </div>
+                            ");
+                        }
+
+                        $locked = (float) $state;
+                        $total  = max(1, (float) $record->total_capital);
+                        $ratio  = $locked / $total;
+                        $color  = match (true) {
+                            $ratio < 0.5 => 'text-green-600',
+                            $ratio < 0.8 => 'text-yellow-600',
+                            default      => 'text-red-600',
+                        };
+
+                        return new HtmlString("
+                            <div class='text-center'>
+                                <div class='font-bold {$color}'>" . number_format($locked, 0) . " IRR</div>
+                            </div>
+                        ");
+                    })
                     ->alignment(Alignment::Center),
 
                 // نرخ موفقیت
@@ -384,6 +461,8 @@ class BotConfigResource extends Resource
                             $result = $tradingEngine->initializeGrid($record);
                             
                             if ($result['success']) {
+                                // stop_reason پرشدنی نیست؛ پاک‌سازی مستقیم تا نشان سلامت قابل‌اعتماد بماند
+                                $record->stop_reason = null;
                                 $record->update(['is_active' => true]);
                                 
                                 Notification::make()
