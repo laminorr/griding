@@ -115,6 +115,18 @@ class BotConfigResource extends Resource
                 ->description('پیکربندی استراتژی معاملاتی')
                 ->schema([
                     Grid::make(3)->schema([
+                        Select::make('mode')
+                            ->label('حالت معاملاتی')
+                            ->options([
+                                'both' => 'دوطرفه (خرید + فروش)',
+                                'buy'  => 'فقط خرید',
+                                'sell' => 'فقط فروش',
+                            ])
+                            ->default('both')
+                            ->required()
+                            ->selectablePlaceholder(false)
+                            ->helperText('جهت گرید: دوطرفه، فقط خرید یا فقط فروش'),
+
                         TextInput::make('grid_spacing')
                             ->label('فاصله بین سطوح')
                             ->numeric()

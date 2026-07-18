@@ -83,14 +83,33 @@ class GridCalculatorService
         float $centerPrice,
         float $spacing,
         int $levels,
-        string $algorithm = 'logarithmic'
+        string $algorithm = 'logarithmic',
+        $mode = 'both'
     ): array {
         try {
             // اعتبارسنجی ورودی‌ها
             $this->validateGridInputs($centerPrice, $spacing, $levels);
-            
+
+            // Mode guard (Phase 11 Step 6). Directional bots ('buy'/'sell') must
+            // generate all levels on a single side so planned_buy/planned_sell
+            // stay consistent with what GridPlanner actually places. Legacy bots
+            // may carry a null/unexpected mode, so default to 'both' rather than
+            // fail hard. $mode is intentionally untyped: an existing caller
+            // (GridCalculatorAdvanced Livewire) passes a stray extra positional
+            // argument here, so non-string values must fall through to the safe
+            // default without noise.
+            $mode = is_string($mode) ? strtolower(trim($mode)) : '';
+            if (!in_array($mode, ['both', 'buy', 'sell'], true)) {
+                if ($mode !== '') {
+                    Log::warning('calculateGridLevels: invalid mode, defaulting to both', [
+                        'mode' => $mode,
+                    ]);
+                }
+                $mode = 'both';
+            }
+
             // محاسبه سطوح بر اساس الگوریتم
-            $gridLevels = $this->generateGridLevels($centerPrice, $spacing, $levels, $algorithm);
+            $gridLevels = $this->generateGridLevels($centerPrice, $spacing, $levels, $algorithm, $mode);
             
             // غنی‌سازی سطوح با متادیتا
             $enhancedLevels = $this->enhanceGridLevels($gridLevels, $centerPrice);
@@ -401,127 +420,142 @@ $profitMargin = $grossProfitPerCycle > 0
     /**
      * تولید سطوح گرید
      */
-    private function generateGridLevels(float $centerPrice, float $spacing, int $levels, string $algorithm): Collection
+    private function generateGridLevels(float $centerPrice, float $spacing, int $levels, string $algorithm, string $mode = 'both'): Collection
     {
-        $halfLevels = intval($levels / 2);
-        
+        // Distribute levels across sides by mode (Phase 11 Step 6). In 'both'
+        // mode the levels split evenly — halfLevels buys below + halfLevels sells
+        // above, mirroring GridPlanner's per_side = levels/2 (so 'both' stays
+        // byte-for-byte identical to before). In a directional mode every level
+        // goes to that single side (per_side = levels), so e.g. mode='buy' with
+        // 4 levels yields 4 buy levels rather than 2.
+        if ($mode === 'buy') {
+            $buyCount = $levels;
+            $sellCount = 0;
+        } elseif ($mode === 'sell') {
+            $buyCount = 0;
+            $sellCount = $levels;
+        } else {
+            $buyCount = intval($levels / 2);
+            $sellCount = intval($levels / 2);
+        }
+
         switch ($algorithm) {
             case 'arithmetic':
-                return $this->generateArithmeticGrid($centerPrice, $spacing, $halfLevels);
+                return $this->generateArithmeticGrid($centerPrice, $spacing, $buyCount, $sellCount);
             case 'geometric':
-                return $this->generateGeometricGrid($centerPrice, $spacing, $halfLevels);
+                return $this->generateGeometricGrid($centerPrice, $spacing, $buyCount, $sellCount);
             case 'logarithmic':
             default:
-                return $this->generateLogarithmicGrid($centerPrice, $spacing, $halfLevels);
+                return $this->generateLogarithmicGrid($centerPrice, $spacing, $buyCount, $sellCount);
         }
     }
 
     /**
      * الگوریتم لگاریتمی (بهترین برای اکثر شرایط)
      */
-    private function generateLogarithmicGrid(float $centerPrice, float $spacing, int $halfLevels): Collection
+    private function generateLogarithmicGrid(float $centerPrice, float $spacing, int $buyCount, int $sellCount): Collection
     {
         $grid = collect();
         $spacingDecimal = $spacing / 100;
-        
+
         // سطوح خرید (پایین‌تر از قیمت مرکز)
-        for ($i = 1; $i <= $halfLevels; $i++) {
+        for ($i = 1; $i <= $buyCount; $i++) {
             $multiplier = pow(1 - $spacingDecimal, $i);
             $price = $centerPrice * $multiplier;
-            
+
             $grid->push([
                 'price' => round($price, 0),
                 'type' => 'buy',
-                'level' => $halfLevels - $i + 1,
+                'level' => $buyCount - $i + 1,
                 'distance_percent' => -($spacing * $i),
                 'multiplier' => $multiplier
             ]);
         }
-        
+
         // سطوح فروش (بالاتر از قیمت مرکز)
-        for ($i = 1; $i <= $halfLevels; $i++) {
+        for ($i = 1; $i <= $sellCount; $i++) {
             $multiplier = pow(1 + $spacingDecimal, $i);
             $price = $centerPrice * $multiplier;
-            
+
             $grid->push([
                 'price' => round($price, 0),
                 'type' => 'sell',
-                'level' => $halfLevels + $i,
+                'level' => $buyCount + $i,
                 'distance_percent' => +($spacing * $i),
                 'multiplier' => $multiplier
             ]);
         }
-        
+
         return $grid->sortBy('price')->values();
     }
 
     /**
      * الگوریتم حسابی
      */
-    private function generateArithmeticGrid(float $centerPrice, float $spacing, int $halfLevels): Collection
+    private function generateArithmeticGrid(float $centerPrice, float $spacing, int $buyCount, int $sellCount): Collection
     {
         $grid = collect();
         $spacingAmount = $centerPrice * ($spacing / 100);
-        
+
         // سطوح خرید
-        for ($i = 1; $i <= $halfLevels; $i++) {
+        for ($i = 1; $i <= $buyCount; $i++) {
             $price = $centerPrice - ($spacingAmount * $i);
-            
+
             $grid->push([
                 'price' => round($price, 0),
                 'type' => 'buy',
-                'level' => $halfLevels - $i + 1,
+                'level' => $buyCount - $i + 1,
                 'distance_percent' => -(($centerPrice - $price) / $centerPrice * 100)
             ]);
         }
-        
+
         // سطوح فروش
-        for ($i = 1; $i <= $halfLevels; $i++) {
+        for ($i = 1; $i <= $sellCount; $i++) {
             $price = $centerPrice + ($spacingAmount * $i);
-            
+
             $grid->push([
                 'price' => round($price, 0),
                 'type' => 'sell',
-                'level' => $halfLevels + $i,
+                'level' => $buyCount + $i,
                 'distance_percent' => +(($price - $centerPrice) / $centerPrice * 100)
             ]);
         }
-        
+
         return $grid->sortBy('price')->values();
     }
 
     /**
      * الگوریتم هندسی
      */
-    private function generateGeometricGrid(float $centerPrice, float $spacing, int $halfLevels): Collection
+    private function generateGeometricGrid(float $centerPrice, float $spacing, int $buyCount, int $sellCount): Collection
     {
         $grid = collect();
         $ratio = 1 + ($spacing / 100);
-        
+
         // سطوح خرید
-        for ($i = 1; $i <= $halfLevels; $i++) {
+        for ($i = 1; $i <= $buyCount; $i++) {
             $price = $centerPrice / pow($ratio, $i);
-            
+
             $grid->push([
                 'price' => round($price, 0),
                 'type' => 'buy',
-                'level' => $halfLevels - $i + 1,
+                'level' => $buyCount - $i + 1,
                 'distance_percent' => -(($centerPrice - $price) / $centerPrice * 100)
             ]);
         }
-        
+
         // سطوح فروش
-        for ($i = 1; $i <= $halfLevels; $i++) {
+        for ($i = 1; $i <= $sellCount; $i++) {
             $price = $centerPrice * pow($ratio, $i);
-            
+
             $grid->push([
                 'price' => round($price, 0),
                 'type' => 'sell',
-                'level' => $halfLevels + $i,
+                'level' => $buyCount + $i,
                 'distance_percent' => +(($price - $centerPrice) / $centerPrice * 100)
             ]);
         }
-        
+
         return $grid->sortBy('price')->values();
     }
 
