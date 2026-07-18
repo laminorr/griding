@@ -54,7 +54,12 @@ class NobitexAuthService
             $payload['remember'] = 'yes';
         }
 
-        $req = Http::asJson();
+        $timeout        = (int) (config('trading.nobitex.http.timeout') ?? 10);
+        $connectTimeout = (float) (config('trading.nobitex.http.connect_timeout') ?? 5.0);
+
+        $req = Http::asJson()
+            ->timeout($timeout)
+            ->connectTimeout($connectTimeout);
         // اگر 2FA فعال است و سکرت داریم، کد TOTP را محاسبه و در هدر بفرستیم
         if ($totpSecret !== '') {
             $req = $req->withHeaders(['X-TOTP' => $this->generateTotp($totpSecret)]);

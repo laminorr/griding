@@ -109,7 +109,10 @@ class ConnectionTest extends Page
                 $response = Http::withHeaders([
                     'Authorization' => 'Token ' . config('services.nobitex.api_key'),
                     'User-Agent' => 'TraderBot/GridBot_v1'
-                ])->timeout(10)->get($this->apiEndpoint . '/users/profile');
+                ])
+                    ->timeout((int) (config('trading.nobitex.http.timeout') ?? 10))
+                    ->connectTimeout((float) (config('trading.nobitex.http.connect_timeout') ?? 5.0))
+                    ->get($this->apiEndpoint . '/users/profile');
                 
                 $endTime = microtime(true);
                 $this->responseTime = round(($endTime - $startTime) * 1000, 2);
