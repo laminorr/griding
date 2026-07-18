@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace Tests\Feature\Nobitex;
 
 use App\Services\NobitexService;
+use GuzzleHttp\Psr7\Response as Psr7Response;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\RequestException;
+use Illuminate\Http\Client\Response as ClientResponse;
 use Illuminate\Support\Facades\Http;
 use ReflectionMethod;
 use RuntimeException;
@@ -14,19 +16,28 @@ use Tests\TestCase;
 use Throwable;
 
 /**
- * Phase 12 Step 1 — behaviour lock-in for NobitexService::request().
+ * Phase 12 — behaviour tests for NobitexService::request().
  *
- * These tests pin the CURRENT retry/error-mapping behaviour of the unified
- * REST entrypoint (App\Services\NobitexService::request(), NobitexService.php
- * :88-150) EXACTLY as it exists today — including its known bugs. When Phase 12
- * Steps 2-7 change the retry predicate, the diffs to these assertions become
- * the visible, reviewable record of each behavioural change.
+ * Step 1 pinned the ORIGINAL retry/error-mapping behaviour, including three
+ * named known-bug tests. Step 2 replaced the fragile substring predicate with
+ * status/type-based classification and taught the retry path to honour a 429
+ * Retry-After header; the flips and additions below are the reviewable record
+ * of that change.
  *
- * Retry predicate under test (isRetryable(), :146-150):
- *     Str::contains($msg, ['429', '5', 'timeout', 'cURL error', 'timed out'])
- * Note the bare substring '5': ANY exception message containing the digit 5 is
- * currently treated as retryable. Several tests below exist purely to document
- * the consequences of that.
+ * Retry predicate under test (isRetryable()):
+ *     - Illuminate\Http\Client\RequestException  → retryable iff the real HTTP
+ *       status is in config('trading.nobitex.retry.http_statuses'), which now
+ *       ships {408, 429, 500, 502, 503, 504}.
+ *     - Domain exceptions from throwDomainError() and the BadResponse
+ *       RuntimeException are NOT RequestExceptions → never retried.
+ *     - ConnectionException is caught earlier in the loop and always retried
+ *       in this step.
+ * Message text is no longer consulted, so a 4xx body echoing a price like
+ * "150000" can no longer trigger a retry.
+ *
+ * Backoff (computeSleepMs()): a 429 with a numeric Retry-After (seconds) sleeps
+ * per the header, capped by config retry.max_ms; every other retryable case
+ * uses the exponential-backoff-with-jitter formula.
  *
  * request() is protected, so it is invoked directly via reflection. That keeps
  * the harness focused on the retry loop itself, without the DTO-mapping of the
@@ -159,45 +170,44 @@ final class NobitexRequestRetryTest extends TestCase
     }
 
     /**
-     * 6. KNOWN BUG (Phase 12 Step 2 will flip this).
+     * 6. FIXED (was test_known_bug_domain_error_containing_digit_5_is_retried).
      *
-     * A 400-class error whose body carries a price like "150000" is retried,
-     * even though a 4xx client error is not transient. The cause is the bare
-     * '5' in isRetryable()'s substring list (:149): the RequestException
-     * message embeds the response body, that body contains "150000", and
-     * Str::contains(..., ['5', ...]) matches. Here the first 400 is therefore
-     * retried and the second (200) response is what actually succeeds — proof
-     * the retry happened.
-     *
-     * Step 2 will replace the substring predicate with a status/exception-type
-     * check; when it lands, this test must change to assert a single attempt
-     * and a thrown error. Renaming it away from test_known_bug_* is the signal
-     * that the bug is gone.
+     * A 400-class error whose body carries a price like "150000" must NOT be
+     * retried. Under the old substring predicate the bare '5' matched the
+     * "150000" embedded in the RequestException message and wrongly triggered a
+     * retry. Step 2's status-based classifier keys on the real HTTP status
+     * (400 ∉ retry set), so message digits are irrelevant: a single attempt is
+     * made and the RequestException is thrown.
      */
-    public function test_known_bug_domain_error_containing_digit_5_is_retried(): void
+    public function test_domain_error_with_digit_5_is_not_retried(): void
     {
         Http::fake([self::HOST => Http::sequence()
             ->push(['status' => 'failed', 'code' => 'BadPrice', 'message' => 'Order rejected: price 150000 invalid'], 400)
             ->push(['status' => 'ok', 'order' => ['id' => 444]], 200),
         ]);
 
-        $data = $this->invokeRequest();
+        $threw = false;
+        try {
+            $this->invokeRequest();
+        } catch (Throwable $e) {
+            $threw = true;
+            $this->assertInstanceOf(RequestException::class, $e);
+        }
 
-        $this->assertSame('ok', $data['status']);
-        Http::assertSentCount(2); // the 400 was (wrongly) retried
+        $this->assertTrue($threw, 'A 400 must surface as a thrown RequestException.');
+        Http::assertSentCount(1); // the 400 is no longer retried
     }
 
     /**
      * 7. DuplicateOrder domain failure → mapped to the domain RuntimeException
-     *    (throwDomainError(), :193) and NOT retried.
+     *    (throwDomainError()) and NOT retried.
      *
-     * IMPORTANT / load-bearing accident: this currently works ONLY because the
-     * mapped message "Duplicate order in last 10s" happens to contain no digit
-     * '5' and none of the other trigger words, so isRetryable() returns false.
-     * If that human-readable string ever gained a '5', the current logic would
-     * silently start retrying a duplicate-order rejection. Phase 12 Step 2
-     * removes this fragility by keying retry on status/type rather than message
-     * text. A single attempt below proves it is not retried today.
+     * Non-retry is now BY DESIGN, not by accident. throwDomainError() raises a
+     * plain RuntimeException, which is not a RequestException, so isRetryable()
+     * classifies it as non-retryable regardless of its message text. The mapped
+     * string could gain a '5' tomorrow and the behaviour would not change — the
+     * old load-bearing dependence on the message lacking a '5' is gone. A single
+     * attempt below proves it is not retried.
      */
     public function test_duplicate_order_is_mapped_and_not_retried(): void
     {
@@ -220,34 +230,41 @@ final class NobitexRequestRetryTest extends TestCase
     }
 
     /**
-     * 8. KNOWN GAP (Phase 12 Step 2 will flip this).
+     * 8. FIXED (was test_known_bug_408_is_not_retried).
      *
-     * A 408 Request Timeout is a genuinely transient condition that SHOULD be
-     * retried, but currently is not: the RequestException message is only
-     * "HTTP request returned status code 408" — it carries neither a '5' nor
-     * the literal word "timeout", so isRetryable() returns false. Step 2's
-     * status-aware predicate will add 408 to the retry set; when it does, this
-     * test must change to assert multiple attempts. The empty body keeps any
-     * accidental trigger characters out of the message.
+     * A 408 Request Timeout is a genuinely transient condition and is now
+     * retried: config('trading.nobitex.retry.http_statuses') includes 408, so
+     * the status-aware predicate treats it like the 5xx/429 set. Here a first
+     * 408 is retried and the following 200 succeeds — proof the retry happened.
+     * The empty 408 body also guards against message-text sniffing sneaking
+     * back in: there is no '5' or "timeout" to accidentally match.
      */
-    public function test_known_bug_408_is_not_retried(): void
+    public function test_408_is_retried(): void
     {
-        Http::fake([self::HOST => Http::response('', 408)]);
+        Http::fake([self::HOST => Http::sequence()
+            ->push('', 408)
+            ->push(['status' => 'ok', 'order' => ['id' => 408]], 200),
+        ]);
 
-        $threw = false;
-        try {
-            $this->invokeRequest();
-        } catch (Throwable $e) {
-            $threw = true;
-            $this->assertInstanceOf(RequestException::class, $e);
-        }
+        $data = $this->invokeRequest();
 
-        $this->assertTrue($threw);
-        Http::assertSentCount(1); // NOT retried today
+        $this->assertSame('ok', $data['status']);
+        Http::assertSentCount(2); // the 408 is now retried
     }
 
-    /** 9. Non-JSON 200 body → BadResponse RuntimeException (not retried). */
-    public function test_non_json_200_body_throws_bad_response(): void
+    /**
+     * 9. Non-JSON 200 body → BadResponse RuntimeException, NOT retried.
+     *
+     * BadResponse is deliberately classified as non-retryable. It is only
+     * reached after $res->failed() has already returned false — i.e. the server
+     * answered with a 2xx status but a malformed body — so retrying the same
+     * request (a POST could double-place an order) will not help. Genuinely
+     * transient gateway failures (e.g. a Cloudflare 5xx HTML error page) carry a
+     * 5xx status and are thrown as RequestExceptions by $res->throw() long
+     * before this branch, so they remain retryable via the status path. The
+     * single attempt below pins the non-retry.
+     */
+    public function test_non_json_200_body_throws_bad_response_and_is_not_retried(): void
     {
         Http::fake([self::HOST => Http::response('this is not json', 200)]);
 
@@ -260,6 +277,65 @@ final class NobitexRequestRetryTest extends TestCase
         }
 
         $this->assertTrue($threw, 'A non-JSON 200 body must raise BadResponse.');
-        Http::assertSentCount(1);
+        Http::assertSentCount(1); // BadResponse is not retried, by design
+    }
+
+    /*
+     |------------------------------------------------------------------
+     | Phase 12 Step 2 additions — Retry-After honouring on 429.
+     |
+     | These drive computeSleepMs() directly (a protected seam) so the chosen
+     | delay is asserted WITHOUT actually sleeping. The retry config is pinned
+     | to sleep=0 in setUp(), so the formula fallback collapses to just the
+     | 0-250ms jitter.
+     |------------------------------------------------------------------
+     */
+
+    /**
+     * Invoke the protected computeSleepMs() seam with a synthetic exception.
+     */
+    private function invokeComputeSleepMs(int $attemptIndex, int $baseSleepMs, ?Throwable $e): int
+    {
+        $svc = new NobitexService();
+        $ref = new ReflectionMethod($svc, 'computeSleepMs');
+        $ref->setAccessible(true);
+
+        return (int) $ref->invoke($svc, $attemptIndex, $baseSleepMs, $e);
+    }
+
+    /** Build a RequestException wrapping a status + headers, for the seam tests. */
+    private function requestException(int $status, array $headers = []): RequestException
+    {
+        return new RequestException(new ClientResponse(new Psr7Response($status, $headers)));
+    }
+
+    /**
+     * 10. 429 + Retry-After: 3 → sleep honours the header (3s = 3000ms), and a
+     *     huge Retry-After is capped at config retry.max_ms.
+     */
+    public function test_429_retry_after_header_is_honoured_and_capped(): void
+    {
+        config(['trading.nobitex.retry.max_ms' => 4000]);
+
+        // Header value in seconds → milliseconds, under the cap.
+        $ms = $this->invokeComputeSleepMs(0, 0, $this->requestException(429, ['Retry-After' => '3']));
+        $this->assertSame(3000, $ms, 'Retry-After: 3 must sleep 3000ms.');
+
+        // A large header value is clamped to max_ms.
+        $capped = $this->invokeComputeSleepMs(0, 0, $this->requestException(429, ['Retry-After' => '99']));
+        $this->assertSame(4000, $capped, 'Retry-After above the cap must clamp to retry.max_ms.');
+    }
+
+    /**
+     * 11. 429 WITHOUT a Retry-After header → falls back to the formula backoff.
+     *     With sleep pinned to 0 and attempt index 0, that is only the jitter,
+     *     i.e. a value in [0, 250]; it never picks up any header-derived delay.
+     */
+    public function test_429_without_retry_after_falls_back_to_formula(): void
+    {
+        $ms = $this->invokeComputeSleepMs(0, 0, $this->requestException(429));
+
+        $this->assertGreaterThanOrEqual(0, $ms);
+        $this->assertLessThanOrEqual(250, $ms, 'No Retry-After ⇒ formula backoff (base 0 + jitter ≤ 250).');
     }
 }
