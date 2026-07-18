@@ -234,6 +234,15 @@ class TradingEngineService
     private function performPreflightChecks(BotConfig $botConfig): array
     {
         try {
+            // حالت شبیه‌سازی نباید به وضعیت زندهٔ صرافی وابسته باشد (اصل فاز ۱۱ گام ۵).
+            // Simulation must be independent of the live exchange: skip the API-key
+            // check and the authenticated healthCheck() entirely, so an expired/absent
+            // token can never block simulation-mode grid initialization.
+            if ($botConfig->simulation) {
+                Log::info('Preflight checks skipped (simulation mode)', ['bot_id' => $botConfig->id]);
+                return ['success' => true];
+            }
+
             // بررسی API key
             if (empty(config('services.nobitex.api_key'))) {
                 return ['success' => false, 'error' => 'API key not configured'];
