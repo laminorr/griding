@@ -86,11 +86,23 @@ return [
             'http_statuses'=> [408, 429, 500, 502, 503, 504],
         ],
 
-        // Rate limit (token bucket)
+        // Rate limit (cache-backed fixed window; see App\Services\RateLimiting\CacheRateLimiter)
         'rate_limit' => [
+            // Master switch. false (default) keeps the legacy soft per-route
+            // attempt + 200ms nap in NobitexService::request() — zero behaviour
+            // change. true swaps in the global blocking gate.
+            'enforce'        => (bool) env('NOBITEX_RATE_LIMIT_ENFORCE', false),
+
+            // Permits per window for the whole account (a single global key).
             'rpm'            => (int) env('NOBITEX_RATE_LIMIT_RPM', 60),
-            'tokens'         => (int) env('TRADING_RATE_LIMIT_TOKENS', 1),
-            'window_seconds' => (int) env('TRADING_RATE_LIMIT_WINDOW_SECONDS', 2),
+
+            // Fixed-window length in seconds. 60 makes `rpm` a literal
+            // requests-per-minute budget; tests shrink it to keep windows tiny.
+            'window_seconds' => (int) env('NOBITEX_RATE_LIMIT_WINDOW_SECONDS', 60),
+
+            // Max time the gate will block for a permit before throwing
+            // App\Exceptions\RateLimitExceededException instead of sending.
+            'max_wait_ms'    => (int) env('NOBITEX_RATE_LIMIT_MAX_WAIT_MS', 10_000),
         ],
 
         // ************ NEW: Auth (login + 30-day token + auto-refresh) ************
