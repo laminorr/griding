@@ -80,7 +80,10 @@ return [
             'max_ms'       => (int) env('TRADING_BACKOFF_MAX_MS', 4_000),
             'factor'       => (float) env('TRADING_BACKOFF_FACTOR', 2.0),
             'jitter_ms'    => (int) env('TRADING_BACKOFF_JITTER_MS', 250),
-            'http_statuses'=> [429, 500, 502, 503, 504],
+            // Single source of truth for status-based retry classification.
+            // 408 (Request Timeout) is transient like the 5xx/429 set, so it
+            // lives here rather than being appended in code.
+            'http_statuses'=> [408, 429, 500, 502, 503, 504],
         ],
 
         // Rate limit (token bucket)

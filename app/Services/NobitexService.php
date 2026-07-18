@@ -13,12 +13,12 @@ use App\DTOs\OrderStatusDto;
 use App\DTOs\WalletsDto;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\RateLimiter;
-use Illuminate\Support\Str;
 use Throwable;
 
 /**
@@ -133,9 +133,11 @@ class NobitexService implements ExchangeClient
 
                 return $data;
             } catch (ConnectionException $e) {
+                // Transport-level failure: always retried in this step (Step 5
+                // will change POST behaviour). Formula backoff — no server signal.
                 $lastEx = $e; $this->sleepBackoff($i, $sleepMs);
             } catch (Throwable $e) {
-                if ($this->isRetryable($e)) { $lastEx = $e; $this->sleepBackoff($i, $sleepMs); continue; }
+                if ($this->isRetryable($e)) { $lastEx = $e; $this->sleepBackoff($i, $sleepMs, $e); continue; }
                 throw $e;
             }
         }
@@ -143,17 +145,86 @@ class NobitexService implements ExchangeClient
         throw $lastEx ?: new \RuntimeException('Nobitex request failed');
     }
 
+    /**
+     * Status/type-based retry classification (replaces the old substring sniff).
+     *
+     * Only a genuine HTTP-layer RequestException with a transient status is
+     * retryable. Retry keys on the exception TYPE plus the real HTTP status,
+     * never on message text — so a 4xx body echoing an IRT price like "150000"
+     * can no longer masquerade as retryable.
+     *
+     *  • RequestException  → retryable iff response status ∈ retryableStatuses()
+     *                        (config http_statuses, which now includes 408).
+     *                        400/401/403/404/422/... do NOT retry.
+     *  • Domain exceptions from throwDomainError() (RuntimeException /
+     *    InvalidArgumentException / DomainException) are NOT RequestExceptions,
+     *    so they fall through to false and are NEVER retried. This makes
+     *    DuplicateOrder's non-retry explicit by classification rather than by
+     *    the accident of its message lacking a '5'.
+     *  • BadResponse (Non-JSON RuntimeException, :125) also falls through to
+     *    false. By the time it is thrown, $res->failed() has already returned
+     *    false — i.e. the server answered with a 2xx status but a malformed
+     *    body; retrying an identical request (a POST could double-place an
+     *    order) will not help. Transient gateway errors (e.g. a Cloudflare 5xx
+     *    HTML page) carry a 5xx status and are thrown as RequestExceptions by
+     *    $res->throw() long before this branch, so they stay retryable via the
+     *    status path. Hence BadResponse is deliberately NON-retryable.
+     *  • ConnectionException never reaches here — it is caught first in the
+     *    retry loop and always retried in this step.
+     */
     protected function isRetryable(Throwable $e): bool
     {
-        $msg = $e->getMessage();
-        return Str::contains($msg, ['429', '5', 'timeout', 'cURL error', 'timed out']);
+        if ($e instanceof RequestException) {
+            $status = $e->response?->status();
+            return $status !== null && in_array($status, $this->retryableStatuses(), true);
+        }
+
+        return false;
     }
 
-    protected function sleepBackoff(int $attemptIndex, int $baseSleepMs): void
+    /**
+     * The set of HTTP statuses that warrant a retry. Sourced from
+     * config('trading.nobitex.retry.http_statuses') — the single source of
+     * truth — which now ships 408 alongside {429,500,502,503,504}. The literal
+     * fallback mirrors that set so the classifier is safe even if config is
+     * unavailable.
+     *
+     * @return array<int,int>
+     */
+    protected function retryableStatuses(): array
     {
+        $statuses = (array) config('trading.nobitex.retry.http_statuses', [408, 429, 500, 502, 503, 504]);
+        return array_values(array_unique(array_map('intval', $statuses)));
+    }
+
+    protected function sleepBackoff(int $attemptIndex, int $baseSleepMs, ?Throwable $e = null): void
+    {
+        usleep($this->computeSleepMs($attemptIndex, $baseSleepMs, $e) * 1000);
+    }
+
+    /**
+     * Compute the pre-retry delay in milliseconds. Extracted as a seam so tests
+     * can assert the chosen delay without actually sleeping.
+     *
+     * On a 429 carrying a numeric Retry-After header (seconds form), honour the
+     * server signal instead of the formula, capped by config retry.max_ms. Any
+     * other retryable case (incl. a 429 with no/blank/non-numeric header) uses
+     * the existing exponential-backoff-with-jitter formula.
+     */
+    protected function computeSleepMs(int $attemptIndex, int $baseSleepMs, ?Throwable $e = null): int
+    {
+        if ($e instanceof RequestException && $e->response?->status() === 429) {
+            $retryAfter = $e->response->header('Retry-After');
+            if ($retryAfter !== '' && is_numeric($retryAfter)) {
+                $ms  = (int) round(((float) $retryAfter) * 1000);
+                $cap = (int) config('trading.nobitex.retry.max_ms', 4_000);
+                return max(0, min($ms, $cap));
+            }
+        }
+
         $expo = max(1, $attemptIndex + 1);
         $jitter = random_int(0, 250);
-        usleep(($baseSleepMs * $expo + $jitter) * 1000);
+        return $baseSleepMs * $expo + $jitter;
     }
 
     protected function logFail(string $method, string $path, array $query, ?array $json, array $data): void
