@@ -38,8 +38,8 @@ class TestNobitexCommand extends Command
         // Test 4: Orderbook
         $this->testOrderbook();
 
-        // Test 5: User Profile (if API key provided)
-        $this->testUserProfile();
+        // Test 5 (User Profile) removed: NobitexService exposes no method that
+        // returns the profile body, so there is no real call to map it to.
 
         // Test 6: Balance (if API key provided)
         $this->testBalance();
@@ -64,17 +64,28 @@ class TestNobitexCommand extends Command
         $this->info('🔌 Testing basic connection...');
 
         try {
-            $result = $this->nobitexService->testConnection();
-            
+            // NobitexService has no testConnection(); healthCheck() is the real
+            // method. It probes the authenticated /users/profile endpoint and
+            // returns: ok(bool), status('ok'|'failed'), overall_status, error
+            // (only on failure), response_time_ms, mode, endpoint.
+            $result = $this->nobitexService->healthCheck();
+
             if (isset($result['status']) && $result['status'] === 'ok') {
                 $this->line('   ✅ Connection successful');
-                
-                if ($this->option('detailed') && isset($result['public_api']['response_time_ms'])) {
-                    $this->line("   ⏱️  Response time: {$result['public_api']['response_time_ms']}ms");
+
+                if ($this->option('detailed')) {
+                    if (isset($result['response_time_ms'])) {
+                        $this->line("   ⏱️  Response time: {$result['response_time_ms']}ms");
+                    }
+                    if (isset($result['mode'])) {
+                        $this->line("   🧭 Mode: {$result['mode']}");
+                    }
                 }
             } else {
                 $this->error('   ❌ Connection failed');
-                if (isset($result['error'])) {
+                // healthCheck() only populates 'error' on its failure branch —
+                // surface it so operators see WHY (e.g. the 401 توکن غیر مجاز body).
+                if (!empty($result['error'])) {
                     $this->error('   🔍 Error: ' . $result['error']);
                 }
             }
@@ -200,62 +211,6 @@ class TestNobitexCommand extends Command
         }
     }
 
-    private function testUserProfile(): void
-    {
-        $this->info('👤 Testing user profile...');
-
-        $apiKey = config('services.nobitex.api_key');
-        
-        if (empty($apiKey) || $apiKey === 'your_nobitex_api_token_here') {
-            $this->warn('   ⚠️  No valid API key configured - skipping user tests');
-            $this->line('   💡 Set NOBITEX_API_KEY in your .env file to test private APIs');
-            return;
-        }
-
-        try {
-            $profile = $this->nobitexService->getUserProfile();
-            
-            if (isset($profile['profile'])) {
-                $this->line('   ✅ Profile retrieved successfully');
-                
-                if ($this->option('detailed')) {
-                    $p = $profile['profile'];
-                    $verifications = $p['verifications'] ?? [];
-                    
-                    $this->table(
-                        ['Field', 'Value'],
-                        [
-                            ['Email', $p['email'] ?? 'N/A'],
-                            ['Username', $p['username'] ?? 'N/A'],
-                            ['Phone', $p['mobile'] ?? 'N/A'],
-                            ['Identity Verified', ($verifications['identity'] ?? false) ? '✅ Yes' : '❌ No'],
-                            ['Phone Verified', ($verifications['phone'] ?? false) ? '✅ Yes' : '❌ No'],
-                            ['Email Verified', ($verifications['email'] ?? false) ? '✅ Yes' : '❌ No'],
-                            ['Bank Account Verified', ($verifications['bankAccount'] ?? false) ? '✅ Yes' : '❌ No'],
-                            ['Trading Enabled', ($verifications['identity'] ?? false) ? '✅ Yes' : '❌ No'],
-                            ['Withdraw Eligible', ($p['withdrawEligible'] ?? false) ? '✅ Yes' : '❌ No'],
-                        ]
-                    );
-
-                    // Show trading stats if available
-                    if (isset($profile['tradeStats'])) {
-                        $stats = $profile['tradeStats'];
-                        $this->line('   📈 Trading Statistics:');
-                        $this->line("      Monthly Volume: " . number_format($stats['monthTradesTotal'] ?? 0) . " IRT");
-                        $this->line("      Monthly Trades: " . ($stats['monthTradesCount'] ?? 0));
-                    }
-                }
-            } else {
-                $this->error('   ❌ Failed to retrieve profile');
-                if (isset($profile['error'])) {
-                    $this->error('   🔍 Error: ' . $profile['error']);
-                }
-            }
-        } catch (\Exception $e) {
-            $this->error('   ❌ Profile error: ' . $e->getMessage());
-        }
-    }
-
     private function testBalance(): void
     {
         $this->info('💰 Testing balance data...');
@@ -300,29 +255,21 @@ class TestNobitexCommand extends Command
         $this->info('🔑 Testing API key status...');
 
         try {
-            $status = $this->nobitexService->checkApiKeyStatus();
-            
-            if ($status['valid']) {
-                $this->line('   ✅ API key is valid');
-                
-                if ($this->option('detailed')) {
-                    $features = $status['features'];
-                    $this->table(
-                        ['Feature', 'Available'],
-                        [
-                            ['Public Data', $features['public_data'] ? '✅ Yes' : '❌ No'],
-                            ['Private Data', $features['private_data'] ? '✅ Yes' : '❌ No'],
-                            ['Trading', $features['trading'] ? '✅ Yes' : '❌ No'],
-                        ]
-                    );
+            // NobitexService has no checkApiKeyStatus(); healthCheck() hits the
+            // authenticated /users/profile endpoint, so its result is the
+            // authoritative signal for whether the configured token is valid.
+            $status = $this->nobitexService->healthCheck();
 
-                    if (isset($status['user_info'])) {
-                        $this->line('   👤 User: ' . ($status['user_info']['email'] ?? 'Unknown'));
-                    }
+            if (!empty($status['ok'])) {
+                $this->line('   ✅ API key is valid');
+
+                if ($this->option('detailed') && isset($status['mode'])) {
+                    $this->line('   🧭 Mode: ' . $status['mode']);
                 }
             } else {
                 $this->warn('   ⚠️  API key issues detected');
-                if (isset($status['error'])) {
+                // 'error' is only present on healthCheck()'s failure branch.
+                if (!empty($status['error'])) {
                     $this->error('   🔍 Error: ' . $status['error']);
                 }
             }
