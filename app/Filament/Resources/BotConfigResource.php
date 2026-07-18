@@ -384,6 +384,8 @@ class BotConfigResource extends Resource
                             $result = $tradingEngine->initializeGrid($record);
                             
                             if ($result['success']) {
+                                // stop_reason پرشدنی نیست؛ پاک‌سازی مستقیم تا نشان سلامت قابل‌اعتماد بماند
+                                $record->stop_reason = null;
                                 $record->update(['is_active' => true]);
                                 
                                 Notification::make()

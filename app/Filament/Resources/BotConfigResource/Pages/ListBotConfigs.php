@@ -96,6 +96,8 @@ class ListBotConfigs extends ListRecords
                     $result = $tradingEngine->initializeGrid($bot);
                     
                     if ($result['success']) {
+                        // stop_reason پرشدنی نیست؛ پاک‌سازی مستقیم تا نشان سلامت قابل‌اعتماد بماند
+                        $bot->stop_reason = null;
                         $bot->update(['is_active' => true]);
                         $successCount++;
                     } else {
