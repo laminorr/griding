@@ -122,25 +122,17 @@ class TestNobitexCommand extends Command
             $market = $this->option('market');
             $stats = $this->nobitexService->getMarketStats($market);
             
-            if (isset($stats['latest'])) {
+            if (isset($stats['symbol'])) {
                 $this->line('   ✅ Market stats retrieved');
-                
+
                 if ($this->option('detailed')) {
                     $this->table(
                         ['Metric', 'Value'],
                         [
                             ['Symbol', $stats['symbol'] ?? $market],
-                            ['Latest Price', $this->formatPrice($stats['latest'], $market)],
-                            ['24h Change', $stats['dayChange'] . '%'],
-                            ['24h High', $this->formatPrice($stats['dayHigh'], $market)],
-                            ['24h Low', $this->formatPrice($stats['dayLow'], $market)],
-                            ['Best Ask', $this->formatPrice($stats['bestSell'], $market)],
-                            ['Best Bid', $this->formatPrice($stats['bestBuy'], $market)],
                             ['Spread', number_format($stats['spread'] ?? 0)],
-                            ['Volume (Source)', number_format($stats['volumeSrc'] ?? 0, 4)],
-                            ['Volume (Destination)', number_format($stats['volumeDst'] ?? 0, 0)],
-                            ['Market Status', ($stats['isClosed'] ?? false) ? 'Closed' : 'Open'],
-                            ['Volatility', $stats['volatility'] ?? 'Unknown'],
+                            ['Spread %', number_format($stats['spreadPercent'] ?? 0, 4) . '%'],
+                            ['24h Change', ($stats['dayChange'] ?? 0) . '%'],
                         ]
                     );
                 }
@@ -160,38 +152,34 @@ class TestNobitexCommand extends Command
             $market = $this->option('market');
             $orderbook = $this->nobitexService->getOrderbook($market, 10);
             
-            $askCount = count($orderbook['asks'] ?? []);
-            $bidCount = count($orderbook['bids'] ?? []);
-            
+            $askCount = count($orderbook->asks);
+            $bidCount = count($orderbook->bids);
+
             $this->line("   ✅ Orderbook retrieved: {$askCount} asks, {$bidCount} bids");
-            
+
             if ($this->option('detailed') && $askCount > 0 && $bidCount > 0) {
-                $this->line("   📈 Best Ask: " . $this->formatPrice($orderbook['asks'][0][0], $market));
-                $this->line("   📉 Best Bid: " . $this->formatPrice($orderbook['bids'][0][0], $market));
-                
-                if (isset($orderbook['lastUpdate']) && $orderbook['lastUpdate'] > 0) {
-                    $updateTime = date('Y-m-d H:i:s', intval($orderbook['lastUpdate'] / 1000));
+                $this->line("   📈 Best Ask: " . $this->formatPrice((float) $orderbook->asks[0]['price'], $market));
+                $this->line("   📉 Best Bid: " . $this->formatPrice((float) $orderbook->bids[0]['price'], $market));
+
+                if ($orderbook->ts > 0) {
+                    $updateTime = date('Y-m-d H:i:s', $orderbook->ts);
                     $this->line("   🕐 Last Update: {$updateTime}");
                 }
 
-                if (isset($orderbook['analysis'])) {
-                    $analysis = $orderbook['analysis'];
-                    $this->line("   💧 Liquidity Score: " . ($analysis['liquidity_score'] ?? 'N/A'));
-                    $this->line("   🎯 Market Condition: " . ($analysis['market_condition'] ?? 'Unknown'));
-                }
+                $this->line("   ⚖️  Mid Price: " . $this->formatPrice((float) $orderbook->midPrice(), $market));
 
                 // Show top 3 levels
                 $this->line('   📊 Top 3 Ask Levels:');
                 for ($i = 0; $i < min(3, $askCount); $i++) {
-                    $price = $this->formatPrice($orderbook['asks'][$i][0], $market);
-                    $amount = number_format($orderbook['asks'][$i][1], 6);
+                    $price = $this->formatPrice((float) $orderbook->asks[$i]['price'], $market);
+                    $amount = number_format((float) $orderbook->asks[$i]['quantity'], 6);
                     $this->line("      {$price} x {$amount}");
                 }
 
                 $this->line('   📊 Top 3 Bid Levels:');
                 for ($i = 0; $i < min(3, $bidCount); $i++) {
-                    $price = $this->formatPrice($orderbook['bids'][$i][0], $market);
-                    $amount = number_format($orderbook['bids'][$i][1], 6);
+                    $price = $this->formatPrice((float) $orderbook->bids[$i]['price'], $market);
+                    $amount = number_format((float) $orderbook->bids[$i]['quantity'], 6);
                     $this->line("      {$price} x {$amount}");
                 }
             }
@@ -270,7 +258,7 @@ class TestNobitexCommand extends Command
         try {
             // Test IRT balance
             $irtBalance = $this->nobitexService->getBalance('rls');
-            $this->line('   ✅ IRT Balance: ' . number_format($irtBalance) . ' ریال');
+            $this->line('   ✅ IRT Balance: ' . number_format((float) $irtBalance->available) . ' ریال');
 
             if ($this->option('detailed')) {
                 // Test other currencies
@@ -280,8 +268,9 @@ class TestNobitexCommand extends Command
                 foreach ($currencies as $currency) {
                     try {
                         $balance = $this->nobitexService->getBalance($currency);
-                        if ($balance > 0) {
-                            $this->line("      📈 " . strtoupper($currency) . ": " . number_format($balance, 8));
+                        $available = (float) $balance->available;
+                        if ($available > 0) {
+                            $this->line("      📈 " . strtoupper($currency) . ": " . number_format($available, 8));
                         } else {
                             $this->line("      📉 " . strtoupper($currency) . ": 0");
                         }
