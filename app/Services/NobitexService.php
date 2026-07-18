@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Contracts\ExchangeClient;
+use App\Contracts\RateLimiter as RateLimiterContract;
 use App\DTOs\ApiOkDto;
 use App\DTOs\BalanceDto;
 use App\DTOs\CreateOrderDto;
@@ -94,12 +95,27 @@ class NobitexService implements ExchangeClient
     ): array {
         $url = '/' . ltrim($path, '/');
 
-        // Soft rate limit per-route (best‑effort)
-        $rpm = (int) (config('trading.nobitex.rate_limit.rpm', 60) ?: 60);
-        $limiterKey = sprintf('nobitex:%s:%s', strtoupper($method), $url);
-        $allowed = RateLimiter::attempt($limiterKey, $rpm, fn () => true);
-        if (!$allowed) {
-            usleep(200_000); // 200ms
+        // Rate limiting. Two mutually-exclusive paths, selected by a
+        // default-OFF flag so this ships dark:
+        //
+        //  • enforce=false (default) → the LEGACY soft path below, byte-for-byte
+        //    today's behaviour: a best-effort per-route attempt that, when the
+        //    per-route budget is hit, naps 200ms ONCE and then sends anyway. It
+        //    never actually prevents an over-limit request.
+        //
+        //  • enforce=true → the soft path is skipped entirely and the new global
+        //    blocking gate runs INSIDE the retry loop instead (see below), so it
+        //    can genuinely block or throw before each send.
+        $enforce = (bool) (config('trading.nobitex.rate_limit.enforce', false));
+
+        if (!$enforce) {
+            // Soft rate limit per-route (best‑effort)
+            $rpm = (int) (config('trading.nobitex.rate_limit.rpm', 60) ?: 60);
+            $limiterKey = sprintf('nobitex:%s:%s', strtoupper($method), $url);
+            $allowed = RateLimiter::attempt($limiterKey, $rpm, fn () => true);
+            if (!$allowed) {
+                usleep(200_000); // 200ms
+            }
         }
 
         $attempts = max(1, $this->retryTimes);
@@ -107,6 +123,15 @@ class NobitexService implements ExchangeClient
         $lastEx   = null;
 
         for ($i = 0; $i < $attempts; $i++) {
+            // The gate sits at the TOP of every loop iteration, not once before
+            // the loop: a retried request is still a request against the
+            // account budget, so each attempt must pass the gate. It blocks up
+            // to max_wait_ms for a permit and throws RateLimitExceededException
+            // (non-retryable) rather than send over-limit. Off unless enforced.
+            if ($enforce) {
+                $this->rateGate();
+            }
+
             try {
                 $res = match (strtoupper($method)) {
                     'GET'    => $this->http($headers)->get($url, $query),
@@ -143,6 +168,23 @@ class NobitexService implements ExchangeClient
         }
 
         throw $lastEx ?: new \RuntimeException('Nobitex request failed');
+    }
+
+    /**
+     * Global enforcing rate gate (only reached when
+     * config('trading.nobitex.rate_limit.enforce') is true).
+     *
+     * Uses a single account-wide key ('global') — NOT a per-method/per-path key
+     * — so the whole Nobitex account shares one budget, matching how Nobitex
+     * actually meters. Blocks up to max_wait_ms for a permit; on timeout the
+     * limiter throws App\Exceptions\RateLimitExceededException, which is not a
+     * RequestException and is therefore never retried by isRetryable().
+     */
+    protected function rateGate(): void
+    {
+        $maxWaitMs = (int) config('trading.nobitex.rate_limit.max_wait_ms', 10_000);
+
+        app(RateLimiterContract::class)->block('global', $maxWaitMs, 1);
     }
 
     /**
