@@ -8,6 +8,8 @@ use App\Contracts\ExchangeClient;
 use App\Services\NobitexService;
 use App\Contracts\MarketData;
 use App\Services\MarketDataLayer;
+use App\Contracts\RateLimiter;
+use App\Services\RateLimiting\CacheRateLimiter;
 use App\Models\GridOrder;
 use App\Observers\GridOrderObserver;
 use Illuminate\Support\Facades\Log;
@@ -24,6 +26,11 @@ class AppServiceProvider extends ServiceProvider
 
         // Market data source (WS-first, REST-fallback)
         $this->app->bind(MarketData::class, MarketDataLayer::class);
+
+        // Enforcing rate limiter (used by NobitexService only when
+        // trading.nobitex.rate_limit.enforce is true). Bound fresh per resolve
+        // so it reads the current rpm/window_seconds config each time.
+        $this->app->bind(RateLimiter::class, CacheRateLimiter::class);
     }
 
     /**
