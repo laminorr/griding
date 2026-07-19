@@ -8,6 +8,7 @@ use App\Models\GridOrder;
 use App\Services\GridOrderExecutor;
 use App\Services\NobitexService;
 use App\Support\OrderRegistry;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use Mockery;
 use RuntimeException;
@@ -134,6 +135,46 @@ final class GridOrderExecutorTest extends TestCase
 
         $executor = new GridOrderExecutor($svc, new OrderRegistry());
         $executor->applyForBot(self::BOT_ID, $this->buyDiff(), simulation: false);
+
+        $this->assertSame(1, GridOrder::count());
+        $order = GridOrder::first();
+        $this->assertSame('submission_unknown', $order->status);
+        $this->assertSame($this->expectedClientOrderId(), $order->client_order_id);
+    }
+
+    /**
+     * 4. End-to-end (Phase 12 Step 5): a LIVE createOrder against the REAL
+     *    NobitexService whose /market/orders/add POST raises a
+     *    ConnectionException. Because that endpoint now uses the non-idempotent
+     *    retry policy, request() must NOT blind-retry — so exactly ONE HTTP
+     *    attempt is made — and the ambiguous failure must surface (as
+     *    AmbiguousOrderSubmissionException) into the executor's catch, leaving
+     *    the intent row in 'submission_unknown'. This is the whole point of the
+     *    step: a lost-response timeout can never silently re-place the order.
+     */
+    public function test_live_connection_exception_makes_one_attempt_and_marks_submission_unknown(): void
+    {
+        // Deterministic, fast: real service, no sleeping between (non-existent) retries.
+        config([
+            'trading.nobitex.base_url'    => 'https://apiv2.nobitex.ir',
+            'trading.nobitex.api_key'     => '',
+            'trading.nobitex.retry.times' => 3,
+            'trading.nobitex.retry.sleep' => 0,
+        ]);
+
+        $calls = 0;
+        Http::fake(function () use (&$calls) {
+            $calls++;
+            throw new ConnectionException('cURL error 28: Operation timed out');
+        });
+
+        $executor = new GridOrderExecutor(new NobitexService(), new OrderRegistry());
+        $executor->applyForBot(self::BOT_ID, $this->buyDiff(), simulation: false);
+
+        // The in-closure counter is the authoritative "exactly one attempt"
+        // proof: a thrown ConnectionException never produces a response, so
+        // Http's recorder never logs it (assertSentCount would see 0).
+        $this->assertSame(1, $calls, 'The order POST must be attempted exactly once — no blind retry.');
 
         $this->assertSame(1, GridOrder::count());
         $order = GridOrder::first();
