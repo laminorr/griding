@@ -25,6 +25,14 @@ class CheckTradesJob implements ShouldQueue
 
     /**
      * تعداد تلاش‌های مجدد در صورت خطا
+     *
+     * Phase 12 Step 6: kept at 3 deliberately. A queue retry re-enters the
+     * pairing path, but a fill whose placement ended ambiguous now keeps its
+     * committed intent row (status 'submission_unknown') and its
+     * paired_order_id back-link, so processBot()'s whereNull(paired_order_id)
+     * filter skips it and — even on a direct re-entry — the client_order_id
+     * dedup guard in createPairOrderLocked() blocks a second send. Retries
+     * therefore only re-run genuinely safe work (status polling, other bots).
      */
     public $tries = 3;
 
@@ -724,10 +732,13 @@ class CheckTradesJob implements ShouldQueue
 
         Log::info("CheckTradesJob: Creating pair order - Type: {$newType}, Price: {$newPrice}, Amount: {$pairAmount} for filled order {$filledOrder->id}");
 
-        // Dedup guard — abort before opening a transaction if this pair was already placed.
+        // Dedup guard — abort before opening a transaction if this pair was
+        // already placed. 'submission_unknown' is in the list because such a row
+        // means a placement attempt already reached (or may have reached) the
+        // exchange; re-placing before reconciliation could duplicate the order.
         $existingOrder = GridOrder::where('bot_config_id', $bot->id)
             ->where('client_order_id', $clientOrderId)
-            ->whereIn('status', ['pending', 'placed', 'filled', 'partially_filled'])
+            ->whereIn('status', ['pending', 'placed', 'filled', 'partially_filled', 'submission_unknown'])
             ->first();
 
         if ($existingOrder) {
@@ -740,6 +751,16 @@ class CheckTradesJob implements ShouldQueue
             return;
         }
 
+        // ------------------------------------------------------------------
+        // Transaction boundary (Phase 12 Step 6): ONLY the pairing linkage is
+        // transactional. The lockForUpdate re-read, the 'pending' intent row,
+        // and the filled order's paired_order_id back-link commit together —
+        // atomically deciding "this fill is being paired, by this row" against
+        // any concurrent pairer. The exchange call happens strictly AFTER this
+        // commit, outside any transaction, so an ambiguous failure can no
+        // longer roll the intent row out of existence (the old behaviour left
+        // a possibly-live exchange order with zero local trace).
+        // ------------------------------------------------------------------
         DB::beginTransaction();
         try {
             // Re-read under a row lock to confirm no other process paired this
@@ -755,8 +776,6 @@ class CheckTradesJob implements ShouldQueue
                 return;
             }
 
-            // Persist the intent row BEFORE the API call so a timeout-retry sees
-            // the 'pending' record and the dedup guard above blocks the duplicate.
             Log::channel('trading')->info('PAIR_ORDER_PRE_CREATE', [
                 'bot_id'          => $bot->id,
                 'type'            => $newType,
@@ -777,6 +796,41 @@ class CheckTradesJob implements ShouldQueue
                 'role'            => 'cycle_exit',
             ]);
 
+            // Back-link BEFORE the exchange call. paired_order_id means "a
+            // continuation intent exists for this fill", not "a confirmed live
+            // order exists": Phase 9's CompletedTrade booking only fires when
+            // the partner reaches status 'filled', and the Phase 11 inventory
+            // observer only counts cycle_exit rows at 'placed', so a partner
+            // stuck at 'pending'/'submission_unknown' books nothing and locks
+            // nothing. Linking now also keeps processBot() from re-selecting
+            // this fill on a queue retry ($tries = 3) — the strongest
+            // duplicate-placement guard we have.
+            $filledOrder->update(['paired_order_id' => $newOrder->id]);
+
+            DB::commit();
+        } catch (\Exception $e) {
+            // Nothing has been sent to the exchange yet — rolling back the
+            // intent row and the linkage together is safe and leaves the fill
+            // eligible for pairing on the next run.
+            DB::rollBack();
+
+            $logger->logError($bot->id, 'خطا در ایجاد سفارش جفت: ' . $e->getMessage(), [
+                'filled_order_id' => $filledOrder->id,
+                'exception'       => get_class($e),
+            ]);
+
+            Log::error("CheckTradesJob: Failed to create pair intent row for filled order {$filledOrder->id}: " . $e->getMessage());
+            Log::error($e->getTraceAsString());
+            return;
+        }
+
+        // ------------------------------------------------------------------
+        // Placement phase — deliberately OUTSIDE any transaction. The intent
+        // row is already durable; from here on a failure only downgrades its
+        // status, mirroring GridOrderExecutor's $apiCallAttempted distinction.
+        // ------------------------------------------------------------------
+        $apiCallAttempted = false;
+        try {
             if ($bot->simulation) {
                 // SIMULATION MODE - never call the real exchange API.
                 $nobitexOrderId = 'SIM-' . uniqid() . '-' . time();
@@ -805,7 +859,8 @@ class CheckTradesJob implements ShouldQueue
                 $nobitexService = app(NobitexService::class);
 
                 // Call exchange API
-                $startTime   = microtime(true);
+                $startTime        = microtime(true);
+                $apiCallAttempted = true;
                 $apiResponse = $nobitexService->placeOrder(
                     $symbol,
                     $newType,
@@ -845,21 +900,32 @@ class CheckTradesJob implements ShouldQueue
                 'price_match' => ($newOrder->price == $newPrice) ? 'YES' : 'NO',
             ]);
 
-            $filledOrder->update(['paired_order_id' => $newOrder->id]);
-
             Log::info("CheckTradesJob: Successfully created pair order {$newOrder->id} (Nobitex ID: {$nobitexOrderId}) - Type: {$newType}, Price: {$newPrice} for filled order {$filledOrder->id}");
 
-            DB::commit();
-
         } catch (\Exception $e) {
-            DB::rollBack();
+            if ($apiCallAttempted) {
+                // The exchange call was attempted (AmbiguousOrderSubmissionException,
+                // dropped response, unexpected reply shape, …) — Nobitex MAY hold
+                // this order. Park the row for reconciliation; the dedup guard
+                // above and the paired_order_id back-link both block any re-place
+                // until a reconciler (Step 7) resolves it.
+                $newOrder->update(['status' => 'submission_unknown']);
+            } else {
+                // The failure happened before anything left our process — no
+                // exchange order can exist. Cancel the row and unlink the fill
+                // so the next run may attempt pairing again.
+                $newOrder->update(['status' => 'cancelled']);
+                $filledOrder->update(['paired_order_id' => null]);
+            }
 
             $logger->logError($bot->id, 'خطا در ایجاد سفارش جفت: ' . $e->getMessage(), [
-                'filled_order_id' => $filledOrder->id,
-                'exception'       => get_class($e),
+                'filled_order_id'    => $filledOrder->id,
+                'pair_order_id'      => $newOrder->id,
+                'exception'          => get_class($e),
+                'api_call_attempted' => $apiCallAttempted,
             ]);
 
-            Log::error("CheckTradesJob: Failed to create pair order for filled order {$filledOrder->id}: " . $e->getMessage());
+            Log::error("CheckTradesJob: Failed to place pair order {$newOrder->id} for filled order {$filledOrder->id} (api_call_attempted=" . var_export($apiCallAttempted, true) . "): " . $e->getMessage());
             Log::error($e->getTraceAsString());
         }
     }
