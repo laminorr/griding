@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature\Nobitex;
 
+use App\Exceptions\AmbiguousOrderSubmissionException;
 use App\Services\NobitexService;
 use GuzzleHttp\Psr7\Response as Psr7Response;
 use Illuminate\Http\Client\ConnectionException;
@@ -79,6 +80,23 @@ final class NobitexRequestRetryTest extends TestCase
         $ref->setAccessible(true);
 
         return $ref->invoke($svc, $method, $path, [], $json);
+    }
+
+    /**
+     * Same as invokeRequest(), but drives request() with the NON-idempotent
+     * policy ($idempotentRetry = false) that order-creating / value-moving POSTs
+     * use — this is the sixth positional argument to request().
+     *
+     * @param  array<string,mixed>  $json
+     * @return array<string,mixed>
+     */
+    private function invokeNonIdempotent(string $method = 'POST', string $path = '/market/orders/add', array $json = ['x' => 1]): array
+    {
+        $svc = new NobitexService();
+        $ref = new ReflectionMethod($svc, 'request');
+        $ref->setAccessible(true);
+
+        return $ref->invoke($svc, $method, $path, [], $json, [], false);
     }
 
     /** 1. Transient 500 then 200 → retried, succeeds on attempt 2. */
@@ -278,6 +296,129 @@ final class NobitexRequestRetryTest extends TestCase
 
         $this->assertTrue($threw, 'A non-JSON 200 body must raise BadResponse.');
         Http::assertSentCount(1); // BadResponse is not retried, by design
+    }
+
+    /*
+     |------------------------------------------------------------------
+     | Phase 12 Step 5 additions — non-idempotent policy for order POSTs.
+     |
+     | These exercise request() with $idempotentRetry = false (the policy
+     | createOrder / placeOrder / withdraw / … use). The retry decision keys on
+     | the FLAG, not on the path, so the idempotent-path proofs below drive the
+     | very same /market/orders/add URL with the default policy to show reads /
+     | cancels are untouched.
+     |------------------------------------------------------------------
+     */
+
+    /**
+     * 12. Order POST + ConnectionException → exactly ONE attempt, then throws
+     *     AmbiguousOrderSubmissionException (wrapping the ConnectionException).
+     *     A connect- and a read-timeout are indistinguishable, so the order may
+     *     already be on the book: we must NOT blind-retry.
+     */
+    public function test_order_post_connection_exception_makes_one_attempt_and_throws(): void
+    {
+        $calls = 0;
+        Http::fake(function () use (&$calls) {
+            $calls++;
+            throw new ConnectionException('cURL error 28: Operation timed out');
+        });
+
+        $threw = false;
+        try {
+            $this->invokeNonIdempotent(json: ['client_ref' => 'grid:1:BTCIRT:buy:100']);
+        } catch (AmbiguousOrderSubmissionException $e) {
+            $threw = true;
+            $this->assertInstanceOf(ConnectionException::class, $e->getPrevious());
+            $this->assertSame('grid:1:BTCIRT:buy:100', $e->clientRef);
+        }
+
+        $this->assertTrue($threw, 'A ConnectionException on an order POST must surface as AmbiguousOrderSubmissionException.');
+        // The in-closure counter is the authoritative proof of "exactly one
+        // attempt": a request that throws a ConnectionException never yields a
+        // response, so Http's recorder never logs it and assertSentCount would
+        // see 0. $calls === 1 is the real "no blind retry" assertion.
+        $this->assertSame(1, $calls, 'Order POST must be attempted exactly once — no blind retry.');
+    }
+
+    /**
+     * 13. Order POST + 500 → ONE attempt, throws AmbiguousOrderSubmissionException.
+     *     The server may have created the order before erroring, so a resend
+     *     risks a duplicate.
+     */
+    public function test_order_post_500_makes_one_attempt_and_throws(): void
+    {
+        Http::fake([self::HOST => Http::response(['error' => 'server boom'], 500)]);
+
+        $threw = false;
+        try {
+            $this->invokeNonIdempotent();
+        } catch (AmbiguousOrderSubmissionException $e) {
+            $threw = true;
+            $this->assertInstanceOf(RequestException::class, $e->getPrevious());
+        }
+
+        $this->assertTrue($threw, 'A 500 on an order POST must surface as AmbiguousOrderSubmissionException.');
+        Http::assertSentCount(1); // the 500 is NOT retried under the non-idempotent policy
+    }
+
+    /**
+     * 14. Order POST + 429 then 200 → RETRIED and succeeds. A 429 is a
+     *     definitive rate-limit rejection: the order was not created, so
+     *     resending is safe even under the non-idempotent policy.
+     */
+    public function test_order_post_429_then_200_is_retried_and_succeeds(): void
+    {
+        Http::fake([self::HOST => Http::sequence()
+            ->push(['error' => 'rate limited'], 429)
+            ->push(['status' => 'ok', 'order' => ['id' => 555]], 200),
+        ]);
+
+        $data = $this->invokeNonIdempotent();
+
+        $this->assertSame('ok', $data['status']);
+        Http::assertSentCount(2); // 429 is retried; the 200 then succeeds
+    }
+
+    /**
+     * 15. Cancel POST (/market/orders/update-status) + ConnectionException then
+     *     200 → still RETRIED (assertSentCount 2). Cancel keeps the DEFAULT
+     *     idempotent policy, so its resilience is unchanged: this drives
+     *     request() with the default flag, exactly as cancelOrder() does.
+     */
+    public function test_cancel_post_connection_exception_then_200_is_still_retried(): void
+    {
+        $calls = 0;
+        Http::fake(function () use (&$calls) {
+            $calls++;
+            if ($calls === 1) {
+                throw new ConnectionException('cURL error 28: Operation timed out');
+            }
+
+            return Http::response(['status' => 'ok'], 200);
+        });
+
+        $data = $this->invokeRequest('POST', '/market/orders/update-status', ['order' => '42', 'status' => 'canceled']);
+
+        $this->assertSame('ok', $data['status']);
+        $this->assertSame(2, $calls, 'Cancel must still retry a ConnectionException — its policy is unchanged.');
+    }
+
+    /**
+     * 16. GET read + 500 then 200 → still RETRIED (assertSentCount 2). Reads keep
+     *     the default idempotent policy untouched.
+     */
+    public function test_get_read_500_then_200_is_still_retried(): void
+    {
+        Http::fake([self::HOST => Http::sequence()
+            ->push(['error' => 'server boom'], 500)
+            ->push(['status' => 'ok', 'stats' => []], 200),
+        ]);
+
+        $data = $this->invokeRequest('GET', '/market/stats', []);
+
+        $this->assertSame('ok', $data['status']);
+        Http::assertSentCount(2);
     }
 
     /*
