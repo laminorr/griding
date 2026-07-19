@@ -39,6 +39,7 @@ class NobitexService implements ExchangeClient
     protected string $baseUrl;
     protected string $apiKey;
     protected int    $timeout;
+    protected float  $connectTimeout;
     protected int    $retryTimes;
     protected int    $retrySleepMs;
 
@@ -54,9 +55,12 @@ class NobitexService implements ExchangeClient
             '/'
         );
 
-        $this->apiKey       = (string) ($cfg['api_key'] ?? env('NOBITEX_API_KEY', ''));
-        $this->timeout      = (int) ($cfg['http']['timeout'] ?? env('NOBITEX_HTTP_TIMEOUT', 8));
-        $this->retryTimes   = (int) ($cfg['retry']['times'] ?? env('NOBITEX_RETRY_MAX_ATTEMPTS', 3));
+        $this->apiKey         = (string) ($cfg['api_key'] ?? env('NOBITEX_API_KEY', ''));
+        $this->timeout        = (int) ($cfg['http']['timeout'] ?? env('NOBITEX_HTTP_TIMEOUT', 8));
+        // Separate connect budget: distinguishes "couldn't reach the server"
+        // (connect timeout) from "server is slow to answer" (read timeout).
+        $this->connectTimeout = (float) ($cfg['http']['connect_timeout'] ?? env('NOBITEX_HTTP_CONNECT_TIMEOUT', 5.0));
+        $this->retryTimes     = (int) ($cfg['retry']['times'] ?? env('NOBITEX_RETRY_MAX_ATTEMPTS', 3));
         $this->retrySleepMs = (int) ($cfg['retry']['sleep'] ?? 200);
     }
 
@@ -72,6 +76,7 @@ class NobitexService implements ExchangeClient
 
         $req = Http::baseUrl($this->baseUrl)
             ->timeout($this->timeout)
+            ->connectTimeout($this->connectTimeout)
             ->acceptJson()
             ->withHeaders($defaultHeaders + $headers);
 
