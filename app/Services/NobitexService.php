@@ -5,6 +5,7 @@ namespace App\Services;
 
 use App\Contracts\ExchangeClient;
 use App\Contracts\RateLimiter as RateLimiterContract;
+use App\Exceptions\AmbiguousOrderSubmissionException;
 use App\DTOs\ApiOkDto;
 use App\DTOs\BalanceDto;
 use App\DTOs\CreateOrderDto;
@@ -90,13 +91,27 @@ class NobitexService implements ExchangeClient
 
     /**
      * Unified request: retry/backoff + soft rate limit + error mapping.
+     *
+     * $idempotentRetry expresses, AT THE CALL SITE, whether replaying this exact
+     * request after an ambiguous failure is safe. It defaults to true so every
+     * existing caller — all GETs, cancelOrder, the wallet/status reads — keeps
+     * today's resilient behaviour untouched. Order-creating and value-moving
+     * POSTs (see the private methods below) pass false: for those, a
+     * ConnectionException or a server 408/5xx is treated as "the exchange may
+     * already have done this", so request() surfaces immediately instead of
+     * blindly resending and risking a duplicate order/withdraw. A 429 stays
+     * retryable even for those, because a rate-limit rejection is definitive —
+     * the request was refused before it could act. A bool (rather than an enum
+     * or options array) is the minimal-diff shape that reads clearly here: there
+     * are exactly two policies, and the flag names the axis directly.
      */
     protected function request(
         string $method,
         string $path,
         array $query = [],
         ?array $json = null,
-        array $headers = []
+        array $headers = [],
+        bool $idempotentRetry = true
     ): array {
         $url = '/' . ltrim($path, '/');
 
@@ -163,16 +178,75 @@ class NobitexService implements ExchangeClient
 
                 return $data;
             } catch (ConnectionException $e) {
-                // Transport-level failure: always retried in this step (Step 5
-                // will change POST behaviour). Formula backoff — no server signal.
+                // Transport-level failure. For an idempotent call it is always
+                // retried (formula backoff — no server signal to honour). For a
+                // non-idempotent call it is AMBIGUOUS: connect- and read-timeouts
+                // both surface as ConnectionException (cURL 28) and are
+                // indistinguishable, so the order may already be on the book.
+                // Refuse to retry and surface it wrapped, so the caller's
+                // submission_unknown path triggers instead of a blind resend.
+                if (!$idempotentRetry) {
+                    $this->logSuppressedOrderRetry($url, $json, 'ConnectionException (connect/read timeout indistinguishable — order may already be placed)');
+                    throw new AmbiguousOrderSubmissionException($url, $this->clientRefOf($json), $e);
+                }
                 $lastEx = $e; $this->sleepBackoff($i, $sleepMs);
             } catch (Throwable $e) {
-                if ($this->isRetryable($e)) { $lastEx = $e; $this->sleepBackoff($i, $sleepMs, $e); continue; }
+                if ($this->isRetryable($e, $idempotentRetry)) { $lastEx = $e; $this->sleepBackoff($i, $sleepMs, $e); continue; }
+
+                // Non-retryable. On a non-idempotent call, a server 408/5xx is
+                // ambiguous (the exchange may have created the order before the
+                // error), so wrap it the same way; domain errors / BadResponse
+                // stay exactly as before — they are not RequestExceptions and
+                // mean the order was definitively NOT created.
+                if (!$idempotentRetry && $this->isAmbiguousServerFailure($e)) {
+                    $this->logSuppressedOrderRetry($url, $json, sprintf('HTTP %s (server may have created the order before failing)', $e instanceof RequestException ? (string) $e->response?->status() : '?'));
+                    throw new AmbiguousOrderSubmissionException($url, $this->clientRefOf($json), $e);
+                }
+
                 throw $e;
             }
         }
 
         throw $lastEx ?: new \RuntimeException('Nobitex request failed');
+    }
+
+    /**
+     * Does this failure, on a non-idempotent order POST, leave the outcome
+     * unknown? True only for a server-side 408 or 5xx RequestException — the
+     * exchange answered late/erroring and may already have created the order.
+     * Domain errors and BadResponse are plain RuntimeExceptions (not
+     * RequestExceptions) and mean the order was NOT created, so they return
+     * false and surface unchanged.
+     */
+    protected function isAmbiguousServerFailure(Throwable $e): bool
+    {
+        if (!$e instanceof RequestException) {
+            return false;
+        }
+        $status = $e->response?->status();
+        return $status !== null && ($status === 408 || $status >= 500);
+    }
+
+    /** Pull client_ref out of the JSON payload for logging/exception context. */
+    protected function clientRefOf(?array $json): ?string
+    {
+        $ref = $json['client_ref'] ?? null;
+        return $ref !== null ? (string) $ref : null;
+    }
+
+    /**
+     * Loud breadcrumb at the point a retry is suppressed on an order-creating
+     * POST — the line an operator follows when reconciling a possibly-placed
+     * order. Names the endpoint, the client_ref (if any), and why we did not
+     * resend.
+     */
+    protected function logSuppressedOrderRetry(string $url, ?array $json, string $reason): void
+    {
+        Log::channel('nobitex')->error('Nobitex order retry SUPPRESSED (ambiguous outcome)', [
+            'endpoint'   => $url,
+            'client_ref' => $this->clientRefOf($json),
+            'reason'     => $reason,
+        ]);
     }
 
     /**
@@ -217,13 +291,26 @@ class NobitexService implements ExchangeClient
      *    $res->throw() long before this branch, so they stay retryable via the
      *    status path. Hence BadResponse is deliberately NON-retryable.
      *  • ConnectionException never reaches here — it is caught first in the
-     *    retry loop and always retried in this step.
+     *    retry loop (and, for non-idempotent calls, refused there).
+     *
+     * $idempotentRetry narrows the policy for order-creating POSTs: when false,
+     * ONLY a 429 is retryable. A 429 is a definitive rate-limit rejection — the
+     * exchange refused the request before it could create anything — so
+     * resending is safe. A 408/5xx, by contrast, is ambiguous (the order may
+     * have been created before the error) and must NOT be retried, so it is
+     * excluded from the set here and handled as an ambiguous failure by request().
      */
-    protected function isRetryable(Throwable $e): bool
+    protected function isRetryable(Throwable $e, bool $idempotentRetry = true): bool
     {
         if ($e instanceof RequestException) {
             $status = $e->response?->status();
-            return $status !== null && in_array($status, $this->retryableStatuses(), true);
+            if ($status === null) {
+                return false;
+            }
+            if (!$idempotentRetry) {
+                return $status === 429;
+            }
+            return in_array($status, $this->retryableStatuses(), true);
         }
 
         return false;
@@ -420,7 +507,9 @@ class NobitexService implements ExchangeClient
             'price_value' => $payload['price'] ?? null,
         ]);
 
-        $data = $this->request('POST', '/market/orders/add', [], $payload);
+        // Order-creating POST → non-idempotent: never blind-retry an ambiguous
+        // failure, or we risk placing this order twice with real money.
+        $data = $this->request('POST', '/market/orders/add', [], $payload, [], idempotentRetry: false);
 
         if (method_exists(CreateOrderResponse::class, 'fromApi')) {
             /** @var CreateOrderResponse $resp */
@@ -437,6 +526,11 @@ class NobitexService implements ExchangeClient
     /** لغو سفارش */
     public function cancelOrder(string $orderId): ApiOkDto
     {
+        // Cancel is effectively idempotent: re-cancelling an already-cancelled
+        // (or already-filled) order is harmless, and losing a cancel to a
+        // duplicate leaves a stale order on the book — the risky direction. So
+        // it keeps the DEFAULT retry policy (idempotentRetry: true), unlike the
+        // order-creating POSTs.
         $data = $this->request('POST', '/market/orders/update-status', [], [
             'order'  => $orderId,
             'status' => 'canceled',
@@ -546,7 +640,8 @@ class NobitexService implements ExchangeClient
     public function createMarginOcoOrder(array $dto): array
     {
         $payload = $dto + ['mode' => 'oco'];
-        $data = $this->request('POST', '/market/orders/add', [], $payload);
+        // Also posts to /market/orders/add → non-idempotent, same as createOrder.
+        $data = $this->request('POST', '/market/orders/add', [], $payload, [], idempotentRetry: false);
         return ['orders' => $data['orders'] ?? []];
     }
 
@@ -581,13 +676,17 @@ class NobitexService implements ExchangeClient
 
     public function closePosition(int $positionId, array $dto): array
     {
-        $data = $this->request('POST', "/positions/{$positionId}/close", [], $dto);
+        // Creates a closing order → non-idempotent; a blind retry could open a
+        // second closing order.
+        $data = $this->request('POST', "/positions/{$positionId}/close", [], $dto, [], idempotentRetry: false);
         return $data['order'] ?? [];
     }
 
     public function editCollateral(int $positionId, string $collateral): array
     {
-        $data = $this->request('POST', "/positions/{$positionId}/edit-collateral", [], ['collateral' => $collateral]);
+        // Moves collateral on the position → non-idempotent (a resend could
+        // apply the collateral change twice).
+        $data = $this->request('POST', "/positions/{$positionId}/edit-collateral", [], ['collateral' => $collateral], [], idempotentRetry: false);
         return $data['position'] ?? [];
     }
 
@@ -597,14 +696,17 @@ class NobitexService implements ExchangeClient
     public function createWithdraw(array $dto, ?string $totp = null): array
     {
         $headers = $totp ? ['X-TOTP' => $totp] : [];
-        $data = $this->request('POST', '/users/wallets/withdraw', [], $dto, $headers);
+        // Creates a withdraw (MOVES money) → non-idempotent: a blind retry after
+        // an ambiguous failure could submit the withdrawal twice.
+        $data = $this->request('POST', '/users/wallets/withdraw', [], $dto, $headers, idempotentRetry: false);
         return $data['withdraw'] ?? [];
     }
 
     public function confirmWithdraw(int $withdrawId, ?int $otp = null): array
     {
         $payload = ['withdraw' => $withdrawId] + ($otp !== null ? ['otp' => $otp] : []);
-        $data = $this->request('POST', '/users/wallets/withdraw-confirm', [], $payload);
+        // Executes/moves the withdraw → non-idempotent, same reasoning as create.
+        $data = $this->request('POST', '/users/wallets/withdraw-confirm', [], $payload, [], idempotentRetry: false);
         return $data['withdraw'] ?? [];
     }
 
@@ -642,7 +744,11 @@ class NobitexService implements ExchangeClient
 
     public function addressBookAdd(array $dto): array
     {
-        $data = $this->request('POST', '/address_book', [], $dto);
+        // Creates a (withdrawal-target) address book entry → non-idempotent; a
+        // duplicate resend would attempt to create the same whitelisted address
+        // twice. Losing this to a blind retry is not a money move, but it MODIFIES
+        // security-sensitive state, so it gets the conservative policy.
+        $data = $this->request('POST', '/address_book', [], $dto, [], idempotentRetry: false);
         return $data['data'] ?? [];
     }
 
@@ -815,7 +921,8 @@ class NobitexService implements ExchangeClient
             $payload['client_ref'] = $clientRef;
         }
 
-        return $this->request('POST', '/market/orders/add', [], $payload);
+        // Order-creating POST → non-idempotent, same policy as createOrder.
+        return $this->request('POST', '/market/orders/add', [], $payload, [], idempotentRetry: false);
     }
 
     /* -----------------------------------------------------------------
