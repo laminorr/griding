@@ -605,14 +605,15 @@ class NobitexService implements ExchangeClient
     /* -----------------------------------------------------------------
      | Read-only reconciliation lookups (Phase 12 Step 7)
      |------------------------------------------------------------------
-     | Both methods below are STRICTLY read-only against the exchange and
-     | exist for the submission_unknown reconciler. Neither existed before
-     | Step 7; the Nobitex API documents both capabilities (order status by
-     | clientOrderId; the account's order list). Our order payloads tag
-     | orders with the documented 'clientOrderId' field (Step 7b), so the
-     | lookup below is expected to resolve orders we actually placed — but
-     | the reconciler still never concludes "absent" from this probe alone
-     | (see SubmissionReconciler for the corroborating open-orders check).
+     | The methods below are STRICTLY read-only against the exchange and
+     | exist for the submission_unknown reconciler. None existed before
+     | Step 7; the Nobitex API documents all of these capabilities (order
+     | status by clientOrderId; the account's order list; the account's
+     | trade history). Our order payloads tag orders with the documented
+     | 'clientOrderId' field (Step 7b), so the lookup below is expected to
+     | resolve orders we actually placed — but the reconciler still never
+     | concludes "absent" from this probe alone (see SubmissionReconciler
+     | for the corroborating open-orders and trade-history checks).
      |------------------------------------------------------------------*/
 
     /**
@@ -624,7 +625,8 @@ class NobitexService implements ExchangeClient
      * ⚠ Nobitex officially marks the clientOrderId parameter as EXPERIMENTAL
      * and may change it — a future API change here is a known risk. Also per
      * the docs, clientOrderId is only searched among open/active/inactive
-     * orders: a FILLED order answers NotFound.
+     * orders: a FILLED order answers NotFound, which is why the reconciler
+     * additionally consults listRecentTrades() before concluding absence.
      *
      * @return array<string,mixed>|null The raw order payload, or null ONLY on
      *         an explicit NotFound answer from the exchange. Every other
@@ -675,6 +677,37 @@ class NobitexService implements ExchangeClient
         return array_map(
             static fn ($o) => (array) $o,
             array_values((array) ($data['orders'] ?? []))
+        );
+    }
+
+    /**
+     * List the account's recent trades for one market.
+     *
+     * GET /market/trades/list — the account's executed trades, newest first.
+     * Same IRT→rls mapping as the other private market endpoints. A pure
+     * read, so it keeps the default idempotent retry policy.
+     *
+     * Exists for the reconciler's filled-order gap: clientOrderId lookups
+     * only cover open/active/inactive orders (see getOrderByClientOrderId),
+     * so an order that filled while its submission outcome was unknown is
+     * invisible to both the status probe and the open-orders list. Its
+     * trades, however, appear here.
+     *
+     * @return array<int,array<string,mixed>> Raw trade rows (possibly empty),
+     *         each carrying at least orderId/type/price/amount/timestamp.
+     */
+    public function listRecentTrades(string $symbol): array
+    {
+        [$src, $dst] = GridOrderExecutor::splitSymbol($symbol);
+
+        $data = $this->request('GET', '/market/trades/list', [
+            'srcCurrency' => $src,
+            'dstCurrency' => $dst,
+        ]);
+
+        return array_map(
+            static fn ($t) => (array) $t,
+            array_values((array) ($data['trades'] ?? []))
         );
     }
 

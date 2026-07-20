@@ -24,7 +24,11 @@ use Tests\TestCase;
  * resolution rules:
  *
  *   found by clientOrderId            → 'placed' + real nobitex_order_id
- *   NotFound twice + nothing open     → 'cancelled' (+ parent fill unlinked)
+ *   NotFound twice + nothing open
+ *     + empty trade history           → 'cancelled' (+ parent fill unlinked)
+ *   NotFound + nothing open BUT a
+ *     matching trade in history       → 'placed' (fill observed late; NEVER
+ *                                       cancelled — Step 7b filled-order gap)
  *   probe error / ambiguous evidence  → unchanged, attempt recorded, logged
  *   row younger than the age guard    → untouched, no HTTP
  *   simulation bot                    → untouched, no HTTP
@@ -177,14 +181,16 @@ final class SubmissionReconcilerTest extends TestCase
 
     /**
      * 2. Confirmed absent: NotFound by clientOrderId on two consecutive runs
-     * with no matching open order → 'cancelled', and the parent fill's
-     * paired_order_id back-link is cleared so the level can be re-paired.
+     * with no matching open order AND empty trade history → 'cancelled', and
+     * the parent fill's paired_order_id back-link is cleared so the level can
+     * be re-paired.
      */
     public function test_not_found_twice_resolves_to_cancelled_and_unlinks_fill(): void
     {
         Http::fake([
             'apiv2.nobitex.ir/market/orders/status*' => Http::response($this->fakeStatusNotFound()),
             'apiv2.nobitex.ir/market/orders/list*'   => Http::response(['status' => 'ok', 'orders' => []]),
+            'apiv2.nobitex.ir/market/trades/list*'   => Http::response(['status' => 'ok', 'trades' => []]),
             '*' => Http::response(['status' => 'failed'], 500),
         ]);
 
@@ -470,6 +476,7 @@ final class SubmissionReconcilerTest extends TestCase
                     ['id' => 424242, 'type' => 'sell', 'price' => (string) self::PRICE, 'amount' => self::AMOUNT, 'status' => 'Active'],
                 ],
             ]),
+            'apiv2.nobitex.ir/market/trades/list*'   => Http::response(['status' => 'ok', 'trades' => []]),
             '*' => Http::response(['status' => 'failed'], 500),
         ]);
 
@@ -496,6 +503,128 @@ final class SubmissionReconcilerTest extends TestCase
             $row->fresh()->status,
             'A claimed open order is no evidence of presence; confirmed NotFound must cancel.'
         );
+        $this->assertSame(1, $summary['cancelled']);
+
+        $this->assertNoExchangeWrites();
+    }
+
+    /**
+     * 12. Step 7b filled-order gap: clientOrderId lookup only covers
+     * open/active/inactive orders, so an order that FILLED while parked
+     * answers NotFound and is absent from the open-orders list. With a
+     * matching execution in recent trade history (here split across two
+     * partial trades of the same exchange order), the row must be resolved
+     * as 'placed' with that order's id — CheckTradesJob's next id-based poll
+     * then observes the fill through the normal handleFilledOrder path — and
+     * must NEVER be cancelled.
+     */
+    public function test_matching_trade_in_history_resolves_to_placed_not_cancelled(): void
+    {
+        Http::fake([
+            'apiv2.nobitex.ir/market/orders/status*' => Http::response($this->fakeStatusNotFound()),
+            'apiv2.nobitex.ir/market/orders/list*'   => Http::response(['status' => 'ok', 'orders' => []]),
+            'apiv2.nobitex.ir/market/trades/list*'   => Http::response([
+                'status' => 'ok',
+                'trades' => [
+                    // Two partial executions of the SAME exchange order,
+                    // together summing to the row's exact amount (0.00123456).
+                    ['id' => 1, 'orderId' => 888777, 'type' => 'sell', 'price' => (string) self::PRICE, 'amount' => '0.00061728', 'timestamp' => now()->subMinutes(30)->toIso8601String()],
+                    ['id' => 2, 'orderId' => 888777, 'type' => 'sell', 'price' => (string) self::PRICE, 'amount' => '0.00061728', 'timestamp' => now()->subMinutes(29)->toIso8601String()],
+                    // Noise: wrong side and wrong price must be ignored.
+                    ['id' => 3, 'orderId' => 999111, 'type' => 'buy',  'price' => (string) self::PRICE, 'amount' => self::AMOUNT, 'timestamp' => now()->subMinutes(20)->toIso8601String()],
+                    ['id' => 4, 'orderId' => 999222, 'type' => 'sell', 'price' => '102000000', 'amount' => self::AMOUNT, 'timestamp' => now()->subMinutes(20)->toIso8601String()],
+                ],
+            ]),
+            '*' => Http::response(['status' => 'failed'], 500),
+        ]);
+
+        $bot = $this->makeBot();
+        $row = $this->makeParkedRow($bot);
+        // Even one confirmation away from cancellation, the trade evidence wins.
+        $row->forceFill(['reconcile_not_found_count' => 1])->save();
+
+        $summary = $this->runReconciler();
+
+        $fresh = $row->fresh();
+        $this->assertSame('placed', $fresh->status, 'A row whose fill is visible in trade history must never be cancelled.');
+        $this->assertSame('888777', $fresh->nobitex_order_id);
+        $this->assertSame(1, $summary['placed']);
+        $this->assertSame(0, $summary['cancelled']);
+
+        $this->assertNoExchangeWrites();
+    }
+
+    /**
+     * 13. If the trade-history probe itself fails, absence is unprovable:
+     * the row stays parked (streak untouched) instead of being cancelled.
+     */
+    public function test_trade_history_probe_failure_blocks_cancellation(): void
+    {
+        Http::fake([
+            'apiv2.nobitex.ir/market/orders/status*' => Http::response($this->fakeStatusNotFound()),
+            'apiv2.nobitex.ir/market/orders/list*'   => Http::response(['status' => 'ok', 'orders' => []]),
+            'apiv2.nobitex.ir/market/trades/list*'   => Http::response('upstream exploded', 500),
+            '*' => Http::response(['status' => 'failed'], 500),
+        ]);
+
+        $bot = $this->makeBot();
+        $row = $this->makeParkedRow($bot);
+        $row->forceFill(['reconcile_not_found_count' => 1])->save();
+
+        $summary = $this->runReconciler();
+
+        $fresh = $row->fresh();
+        $this->assertSame('submission_unknown', $fresh->status);
+        $this->assertSame(1, (int) $fresh->reconcile_not_found_count, 'A failed trades probe must not advance the absence streak.');
+        $this->assertSame(1, $summary['unresolved']);
+        $this->assertSame(0, $summary['cancelled']);
+
+        $this->assertNoExchangeWrites();
+    }
+
+    /**
+     * 14. Trades that cannot be this row's fill — already claimed by another
+     * local row, or printed before the row existed — do not block a confirmed
+     * absence from cancelling.
+     */
+    public function test_claimed_or_stale_trades_do_not_block_cancellation(): void
+    {
+        Http::fake([
+            'apiv2.nobitex.ir/market/orders/status*' => Http::response($this->fakeStatusNotFound()),
+            'apiv2.nobitex.ir/market/orders/list*'   => Http::response(['status' => 'ok', 'orders' => []]),
+            'apiv2.nobitex.ir/market/trades/list*'   => Http::response([
+                'status' => 'ok',
+                'trades' => [
+                    // Full fingerprint, but the exchange order belongs to
+                    // another local row.
+                    ['id' => 5, 'orderId' => 424242, 'type' => 'sell', 'price' => (string) self::PRICE, 'amount' => self::AMOUNT, 'timestamp' => now()->subMinutes(10)->toIso8601String()],
+                    // Full fingerprint, but printed two hours BEFORE the row
+                    // was created (created_at is 1h ago) — outside the window.
+                    ['id' => 6, 'orderId' => 535353, 'type' => 'sell', 'price' => (string) self::PRICE, 'amount' => self::AMOUNT, 'timestamp' => now()->subHours(3)->toIso8601String()],
+                ],
+            ]),
+            '*' => Http::response(['status' => 'failed'], 500),
+        ]);
+
+        $bot = $this->makeBot();
+
+        // Another local row already owns exchange order 424242.
+        GridOrder::create([
+            'bot_config_id'    => $bot->id,
+            'price'            => self::PRICE,
+            'amount'           => self::AMOUNT,
+            'type'             => 'sell',
+            'status'           => 'filled',
+            'client_order_id'  => 'other-row',
+            'nobitex_order_id' => '424242',
+        ]);
+
+        $row = $this->makeParkedRow($bot);
+        $row->forceFill(['reconcile_not_found_count' => 1])->save();
+
+        $summary = $this->runReconciler();
+
+        $this->assertSame('cancelled', $row->fresh()->status);
         $this->assertSame(1, $summary['cancelled']);
 
         $this->assertNoExchangeWrites();

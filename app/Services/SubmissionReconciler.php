@@ -27,16 +27,22 @@ use Illuminate\Support\Facades\Log;
  *   'cancelled' — the exchange definitively does not know the order: the
  *                 clientOrderId lookup answered NotFound on
  *                 `not_found_confirmations` consecutive runs AND no unclaimed
- *                 open order sits at the row's price/side. The grid level is
+ *                 open order sits at the row's price/side AND recent trade
+ *                 history holds no matching execution. The grid level is
  *                 freed (a pair row's parent fill is unlinked for re-pairing).
+ *                 The trade-history leg is load-bearing: Nobitex only indexes
+ *                 clientOrderId for open/active/inactive orders, so an order
+ *                 that FILLED while parked answers NotFound and is absent
+ *                 from the open-orders list — without the trades check it
+ *                 would be wrongly cancelled on top of a real position.
  *   unchanged   — anything ambiguous. The row stays parked, an attempt is
  *                 recorded, and after max_attempts / max_age_hours it is
  *                 escalated loudly (error log + the bot's last_error_code
  *                 health surface from Phase 11). NEVER guessed.
  *
  * SAFETY INVARIANT: this class performs no exchange mutations — the only
- * NobitexService calls are getOrderByClientOrderId() and listOpenOrders(),
- * both reads. Local rows are the only thing written.
+ * NobitexService calls are getOrderByClientOrderId(), listOpenOrders() and
+ * listRecentTrades(), all reads. Local rows are the only thing written.
  *
  * Pending rows share the same resolution ladder deliberately: a process that
  * died mid-placement leaves 'pending' with exactly the same ambiguity as
@@ -56,6 +62,13 @@ use Illuminate\Support\Facades\Log;
 class SubmissionReconciler
 {
     public const STATUSES_IN_SCOPE = ['submission_unknown', 'pending'];
+
+    /**
+     * Trade-history matching: a trade older than the row's created_at minus
+     * this slack cannot be this row's fill (slack covers DB↔exchange clock
+     * skew).
+     */
+    protected const TRADE_MATCH_CLOCK_SLACK_SECONDS = 300;
 
     public function __construct(protected NobitexService $svc)
     {
@@ -279,6 +292,65 @@ class SubmissionReconciler
 
         // ---- Absence: NotFound by clientOrderId AND nothing open here. ---
         if ($notFoundByClientId && (bool) config('trading.reconcile.cancel_on_not_found', true)) {
+            // ---- Probe C: recent trade history. --------------------------
+            // Nobitex only indexes clientOrderId for open/active/inactive
+            // orders (and officially marks the parameter EXPERIMENTAL — a
+            // future API change is a known risk): an order that FILLED while
+            // parked answers NotFound AND is absent from the open-orders
+            // list, i.e. exactly the evidence pattern reached here. Absence
+            // may only be concluded once trade history is ALSO silent.
+            try {
+                $trades = $this->svc->listRecentTrades($symbol);
+            } catch (\Throwable $e) {
+                Log::channel('trading')->warning('RECONCILE_PROBE_FAILED', [
+                    'order_id' => $row->id,
+                    'bot_id'   => $bot->id,
+                    'probe'    => 'trades/list (recent)',
+                    'error'    => $e->getMessage(),
+                ]);
+
+                return $this->leaveUnresolved($row, $bot, 'trade-history probe failed: ' . $e->getMessage());
+            }
+
+            $fillCandidates = $this->matchingFillCandidates($trades, $row);
+
+            if (count($fillCandidates) === 1) {
+                // The order reached the exchange and EXECUTED. Resolve as
+                // 'placed' with the real exchange id rather than hand-rolling
+                // a 'filled' row here: CheckTradesJob's next status poll (by
+                // order id, which — unlike clientOrderId — resolves filled
+                // orders too) observes the fill and drives the row through
+                // the normal handleFilledOrder path, so filled_amount
+                // bookkeeping, Phase 9 CompletedTrade pairing and the Phase
+                // 11 observer all run exactly as for any other fill.
+                Log::channel('trading')->warning('RECONCILE_FILL_FOUND_IN_TRADE_HISTORY', [
+                    'order_id'         => $row->id,
+                    'bot_id'           => $bot->id,
+                    'nobitex_order_id' => $fillCandidates[0],
+                    'note'             => 'clientOrderId lookup said NotFound but trade history shows this level executed — the trade is real; the row must NOT be cancelled.',
+                ]);
+
+                return $this->resolveAsPlaced($row, $bot, $fillCandidates[0], 'matching trade(s) in recent trade history');
+            }
+
+            if ($fillCandidates !== []) {
+                // Several distinct exchange orders each match the full
+                // fingerprint — identity is unprovable, but absence is
+                // positively contradicted: something DID execute at this
+                // level. Never guess, and do not let the absence streak grow.
+                if ($row->reconcile_not_found_count > 0) {
+                    $row->forceFill(['reconcile_not_found_count' => 0])->save();
+                }
+
+                Log::channel('trading')->warning('RECONCILE_AMBIGUOUS_TRADE_HISTORY', [
+                    'order_id'   => $row->id,
+                    'bot_id'     => $bot->id,
+                    'candidates' => $fillCandidates,
+                ]);
+
+                return $this->leaveUnresolved($row, $bot, 'multiple matching executions in trade history — identity unprovable');
+            }
+
             $confirmations = max(1, (int) config('trading.reconcile.not_found_confirmations', 2));
             $streak        = (int) $row->reconcile_not_found_count + 1;
 
@@ -497,6 +569,67 @@ class SubmissionReconciler
             ->pluck('nobitex_order_id')
             ->map(static fn ($id) => (string) $id)
             ->all();
+    }
+
+    /**
+     * Exchange order ids from $trades that plausibly ARE this row's fill:
+     * same side, same price (a resting limit order executes at its limit
+     * price, possibly split across several partial trades — hence the
+     * group-by-orderId sum), executed after the row was created (minus clock
+     * slack), summing to exactly the row's amount, and not already claimed by
+     * another local row. Grid amounts are computed odd values, so a foreign
+     * order matching the full fingerprint is very unlikely.
+     *
+     * @param array<int,array<string,mixed>> $trades
+     * @return array<int,string>
+     */
+    protected function matchingFillCandidates(array $trades, GridOrder $row): array
+    {
+        $createdAt = $row->created_at instanceof Carbon ? $row->created_at : null;
+        if ($createdAt === null) {
+            return [];
+        }
+
+        // This row's trades can only have printed after the row was created;
+        // the slack absorbs clock skew between our DB and the exchange.
+        $windowStart = $createdAt->getTimestamp() - self::TRADE_MATCH_CLOCK_SLACK_SECONDS;
+
+        $totals = [];
+        foreach ($trades as $t) {
+            $orderId = (string) ($t['orderId'] ?? '');
+            $ts      = strtotime((string) ($t['timestamp'] ?? ''));
+
+            if ($orderId === ''
+                || $ts === false
+                || $ts < $windowStart
+                || strtolower((string) ($t['type'] ?? '')) !== strtolower((string) $row->type)
+                || (string) (int) ($t['price'] ?? 0) !== (string) (int) $row->price) {
+                continue;
+            }
+
+            $totals[$orderId] = ($totals[$orderId] ?? 0.0) + (float) ($t['amount'] ?? 0);
+        }
+
+        if ($totals === []) {
+            return [];
+        }
+
+        // An order id already owned by another local row cannot be this
+        // row's fill (mirrors claimedExchangeIds for the open-orders probe).
+        $claimed = GridOrder::whereIn('nobitex_order_id', array_keys($totals))
+            ->pluck('nobitex_order_id')
+            ->map(static fn ($id) => (string) $id)
+            ->all();
+
+        $candidates = [];
+        foreach ($totals as $orderId => $total) {
+            $orderId = (string) $orderId;
+            if (! in_array($orderId, $claimed, true) && $this->amountsMatch($total, $row->amount)) {
+                $candidates[] = $orderId;
+            }
+        }
+
+        return $candidates;
     }
 
     /**
