@@ -33,7 +33,7 @@ final class AmbiguousOrderSubmissionException extends RuntimeException
             sprintf(
                 'Ambiguous order submission on POST %s%s: retry suppressed because the exchange may already hold this order (%s). Reconcile before resubmitting.',
                 $endpoint,
-                $clientRef !== null ? sprintf(' (client_ref=%s)', $clientRef) : '',
+                $clientRef !== null ? sprintf(' (clientOrderId=%s)', $clientRef) : '',
                 $previous->getMessage(),
             ),
             0,

@@ -231,7 +231,7 @@ class SubmissionReconciler
 
         // B1 — the list echoes our clientOrderId back: certain identity.
         foreach ($candidates as $o) {
-            $echoed = (string) ($o['clientOrderId'] ?? $o['client_ref'] ?? '');
+            $echoed = (string) ($o['clientOrderId'] ?? '');
             if ($row->client_order_id && $echoed === (string) $row->client_order_id) {
                 return $this->resolveAsPlaced($row, $bot, (string) $o['id'], 'clientOrderId echoed in open-orders list');
             }

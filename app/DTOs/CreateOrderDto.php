@@ -84,7 +84,9 @@ public function toApiPayload(): array
     }
 
     if ($this->clientRef) {
-        $payload['client_ref'] = $this->clientRef;
+        // Official Nobitex field name for the client-supplied order tag.
+        // (Documented as experimental — see NobitexService::getOrderByClientOrderId.)
+        $payload['clientOrderId'] = $this->clientRef;
     }
 
     return $payload;

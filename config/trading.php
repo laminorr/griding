@@ -140,8 +140,8 @@ return [
         // NotFound for its clientOrderId on this many consecutive runs (with
         // no matching open order either time). Set cancel_on_not_found=false
         // to disable automatic cancellation entirely (rows then escalate to
-        // manual review instead) — e.g. until the client_ref tagging has been
-        // verified once against the live API.
+        // manual review instead) — e.g. until the clientOrderId tagging has
+        // been verified once against the live API.
         'not_found_confirmations' => (int) env('TRADING_RECONCILE_NOT_FOUND_CONFIRMATIONS', 2),
         'cancel_on_not_found'     => (bool) env('TRADING_RECONCILE_CANCEL_ON_NOT_FOUND', true),
 

@@ -228,25 +228,25 @@ class NobitexService implements ExchangeClient
         return $status !== null && ($status === 408 || $status >= 500);
     }
 
-    /** Pull client_ref out of the JSON payload for logging/exception context. */
+    /** Pull the clientOrderId tag out of the JSON payload for logging/exception context. */
     protected function clientRefOf(?array $json): ?string
     {
-        $ref = $json['client_ref'] ?? null;
+        $ref = $json['clientOrderId'] ?? null;
         return $ref !== null ? (string) $ref : null;
     }
 
     /**
      * Loud breadcrumb at the point a retry is suppressed on an order-creating
      * POST — the line an operator follows when reconciling a possibly-placed
-     * order. Names the endpoint, the client_ref (if any), and why we did not
-     * resend.
+     * order. Names the endpoint, the clientOrderId (if any), and why we did
+     * not resend.
      */
     protected function logSuppressedOrderRetry(string $url, ?array $json, string $reason): void
     {
         Log::channel('nobitex')->error('Nobitex order retry SUPPRESSED (ambiguous outcome)', [
-            'endpoint'   => $url,
-            'client_ref' => $this->clientRefOf($json),
-            'reason'     => $reason,
+            'endpoint'        => $url,
+            'client_order_id' => $this->clientRefOf($json),
+            'reason'          => $reason,
         ]);
     }
 
@@ -608,12 +608,11 @@ class NobitexService implements ExchangeClient
      | Both methods below are STRICTLY read-only against the exchange and
      | exist for the submission_unknown reconciler. Neither existed before
      | Step 7; the Nobitex API documents both capabilities (order status by
-     | clientOrderId; the account's order list), but note the caveat that
-     | our order payloads tag the id under 'client_ref' — if the exchange
-     | expects 'clientOrderId' and silently ignored the tag, the lookup
-     | below returns NotFound for a live order. The reconciler therefore
-     | never concludes "absent" from this probe alone (see
-     | SubmissionReconciler for the corroborating open-orders check).
+     | clientOrderId; the account's order list). Our order payloads tag
+     | orders with the documented 'clientOrderId' field (Step 7b), so the
+     | lookup below is expected to resolve orders we actually placed — but
+     | the reconciler still never concludes "absent" from this probe alone
+     | (see SubmissionReconciler for the corroborating open-orders check).
      |------------------------------------------------------------------*/
 
     /**
@@ -621,6 +620,11 @@ class NobitexService implements ExchangeClient
      *
      * POST /market/orders/status is a pure read despite the POST verb, so it
      * keeps the default idempotent retry policy.
+     *
+     * ⚠ Nobitex officially marks the clientOrderId parameter as EXPERIMENTAL
+     * and may change it — a future API change here is a known risk. Also per
+     * the docs, clientOrderId is only searched among open/active/inactive
+     * orders: a FILLED order answers NotFound.
      *
      * @return array<string,mixed>|null The raw order payload, or null ONLY on
      *         an explicit NotFound answer from the exchange. Every other
@@ -994,7 +998,8 @@ class NobitexService implements ExchangeClient
         ];
 
         if ($clientRef !== null) {
-            $payload['client_ref'] = $clientRef;
+            // Official Nobitex field name for the client-supplied order tag.
+            $payload['clientOrderId'] = $clientRef;
         }
 
         // Order-creating POST → non-idempotent, same policy as createOrder.
