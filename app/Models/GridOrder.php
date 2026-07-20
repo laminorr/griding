@@ -16,6 +16,7 @@ class GridOrder extends Model
         'bot_config_id','price','type','nobitex_order_id','paired_order_id','filled_at',
         'original_amount','filled_amount','remaining_amount','average_fill_price','last_fill_at',
         'role',
+        'reconcile_attempts','reconcile_not_found_count','reconcile_last_attempt_at',
     ];
 
     protected $casts = [
@@ -36,6 +37,9 @@ class GridOrder extends Model
         'filled_amount'      => 'decimal:8',
         'remaining_amount'   => 'decimal:8',
         'last_fill_at'       => 'datetime',
+        'reconcile_attempts'        => 'integer',
+        'reconcile_not_found_count' => 'integer',
+        'reconcile_last_attempt_at' => 'datetime',
     ];
 
     /**

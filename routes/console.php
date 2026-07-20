@@ -5,7 +5,8 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Schedule;
 use App\Jobs\CheckTradesJob;
 use App\Jobs\AdjustGridJob;
-use App\Jobs\ReadMarketStatsJob; 
+use App\Jobs\ReadMarketStatsJob;
+use App\Jobs\ReconcileSubmissionsJob;
 
 Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
@@ -27,6 +28,15 @@ if ((bool) config('trading.enable_scheduler', true)) {
         ->everyTenMinutes()
         ->withoutOverlapping(20)
         ->onOneServer();  // Requires CACHE_STORE=database or redis
+
+    // Phase 12 Step 7 — resolve orders parked in submission_unknown (and
+    // stale pending). Read-only against the exchange; safe alongside
+    // CheckTradesJob (per-row locks). Same cadence as check-trades so a
+    // parked level is unfrozen within minutes.
+    Schedule::job(new ReconcileSubmissionsJob())
+        ->everyFiveMinutes()
+        ->withoutOverlapping()
+        ->name('reconcile-submissions');
 
     Schedule::command('queue:prune-batches --hours=48')
         ->name('queue-prune-batches')

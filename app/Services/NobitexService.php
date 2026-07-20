@@ -6,6 +6,7 @@ namespace App\Services;
 use App\Contracts\ExchangeClient;
 use App\Contracts\RateLimiter as RateLimiterContract;
 use App\Exceptions\AmbiguousOrderSubmissionException;
+use App\Exceptions\OrderNotFoundException;
 use App\DTOs\ApiOkDto;
 use App\DTOs\BalanceDto;
 use App\DTOs\CreateOrderDto;
@@ -227,25 +228,25 @@ class NobitexService implements ExchangeClient
         return $status !== null && ($status === 408 || $status >= 500);
     }
 
-    /** Pull client_ref out of the JSON payload for logging/exception context. */
+    /** Pull the clientOrderId tag out of the JSON payload for logging/exception context. */
     protected function clientRefOf(?array $json): ?string
     {
-        $ref = $json['client_ref'] ?? null;
+        $ref = $json['clientOrderId'] ?? null;
         return $ref !== null ? (string) $ref : null;
     }
 
     /**
      * Loud breadcrumb at the point a retry is suppressed on an order-creating
      * POST — the line an operator follows when reconciling a possibly-placed
-     * order. Names the endpoint, the client_ref (if any), and why we did not
-     * resend.
+     * order. Names the endpoint, the clientOrderId (if any), and why we did
+     * not resend.
      */
     protected function logSuppressedOrderRetry(string $url, ?array $json, string $reason): void
     {
         Log::channel('nobitex')->error('Nobitex order retry SUPPRESSED (ambiguous outcome)', [
-            'endpoint'   => $url,
-            'client_ref' => $this->clientRefOf($json),
-            'reason'     => $reason,
+            'endpoint'        => $url,
+            'client_order_id' => $this->clientRefOf($json),
+            'reason'          => $reason,
         ]);
     }
 
@@ -418,7 +419,10 @@ class NobitexService implements ExchangeClient
             'Inactive2FA'                 => new \RuntimeException('2FA inactive for user'),
             'InvalidOTPCode'              => new \RuntimeException('Invalid OTP code'),
             'InvalidCodeLength'           => new \InvalidArgumentException('Anti-phishing code length invalid'),
-            'NotFound'                    => new \RuntimeException('Requested resource not found'),
+            // Dedicated subtype (still a RuntimeException, same message) so the
+            // Step 7 reconciler can recognise a definitive "does not exist"
+            // answer by type instead of by message sniffing.
+            'NotFound'                    => new OrderNotFoundException('Requested resource not found'),
             default                       => new \RuntimeException($msg ?: ('Nobitex failed: ' . $code)),
         };
 
@@ -596,6 +600,115 @@ class NobitexService implements ExchangeClient
         }
 
         return $out;
+    }
+
+    /* -----------------------------------------------------------------
+     | Read-only reconciliation lookups (Phase 12 Step 7)
+     |------------------------------------------------------------------
+     | The methods below are STRICTLY read-only against the exchange and
+     | exist for the submission_unknown reconciler. None existed before
+     | Step 7; the Nobitex API documents all of these capabilities (order
+     | status by clientOrderId; the account's order list; the account's
+     | trade history). Our order payloads tag orders with the documented
+     | 'clientOrderId' field (Step 7b), so the lookup below is expected to
+     | resolve orders we actually placed — but the reconciler still never
+     | concludes "absent" from this probe alone (see SubmissionReconciler
+     | for the corroborating open-orders and trade-history checks).
+     |------------------------------------------------------------------*/
+
+    /**
+     * Look up a single order by the client-supplied id it was created with.
+     *
+     * POST /market/orders/status is a pure read despite the POST verb, so it
+     * keeps the default idempotent retry policy.
+     *
+     * ⚠ Nobitex officially marks the clientOrderId parameter as EXPERIMENTAL
+     * and may change it — a future API change here is a known risk. Also per
+     * the docs, clientOrderId is only searched among open/active/inactive
+     * orders: a FILLED order answers NotFound, which is why the reconciler
+     * additionally consults listRecentTrades() before concluding absence.
+     *
+     * @return array<string,mixed>|null The raw order payload, or null ONLY on
+     *         an explicit NotFound answer from the exchange. Every other
+     *         failure (transport, 5xx, malformed body) throws — callers must
+     *         treat those as "could not determine", never as absence.
+     */
+    public function getOrderByClientOrderId(string $clientOrderId): ?array
+    {
+        try {
+            $data = $this->request('POST', '/market/orders/status', [], [
+                'clientOrderId' => $clientOrderId,
+            ]);
+        } catch (OrderNotFoundException) {
+            return null;
+        }
+
+        $row = (array) ($data['order'] ?? []);
+        if ($row === []) {
+            // status ok but no order payload — an answer we cannot interpret.
+            // Throw rather than return null: null means definitive absence.
+            throw new \RuntimeException('BadResponse: ok status without order payload');
+        }
+
+        return $row;
+    }
+
+    /**
+     * List the account's OPEN orders for one market.
+     *
+     * GET /market/orders/list. The IRT→rls mapping matches the private
+     * order-placement endpoints (see GridOrderExecutor::splitSymbol).
+     * details=2 asks for the fuller order objects (incl. clientOrderId
+     * where the exchange has one).
+     *
+     * @return array<int,array<string,mixed>> Raw order rows (possibly empty).
+     */
+    public function listOpenOrders(string $symbol): array
+    {
+        [$src, $dst] = GridOrderExecutor::splitSymbol($symbol);
+
+        $data = $this->request('GET', '/market/orders/list', [
+            'srcCurrency' => $src,
+            'dstCurrency' => $dst,
+            'status'      => 'open',
+            'details'     => 2,
+        ]);
+
+        return array_map(
+            static fn ($o) => (array) $o,
+            array_values((array) ($data['orders'] ?? []))
+        );
+    }
+
+    /**
+     * List the account's recent trades for one market.
+     *
+     * GET /market/trades/list — the account's executed trades, newest first.
+     * Same IRT→rls mapping as the other private market endpoints. A pure
+     * read, so it keeps the default idempotent retry policy.
+     *
+     * Exists for the reconciler's filled-order gap: clientOrderId lookups
+     * only cover open/active/inactive orders (see getOrderByClientOrderId),
+     * so an order that filled while its submission outcome was unknown is
+     * invisible to both the status probe and the open-orders list. Its
+     * trades, however, appear here.
+     *
+     * @return array<int,array<string,mixed>> Raw trade rows (possibly empty),
+     *         each carrying at least orderId/type/price/amount/timestamp.
+     */
+    public function listRecentTrades(string $symbol): array
+    {
+        [$src, $dst] = GridOrderExecutor::splitSymbol($symbol);
+
+        $data = $this->request('GET', '/market/trades/list', [
+            'srcCurrency' => $src,
+            'dstCurrency' => $dst,
+        ]);
+
+        return array_map(
+            static fn ($t) => (array) $t,
+            array_values((array) ($data['trades'] ?? []))
+        );
     }
 
     /** موجودی یک ارز */
@@ -918,7 +1031,8 @@ class NobitexService implements ExchangeClient
         ];
 
         if ($clientRef !== null) {
-            $payload['client_ref'] = $clientRef;
+            // Official Nobitex field name for the client-supplied order tag.
+            $payload['clientOrderId'] = $clientRef;
         }
 
         // Order-creating POST → non-idempotent, same policy as createOrder.

@@ -68,6 +68,10 @@ trait BuildsGridSchema
             $table->decimal('step_pct', 8, 3)->nullable();
             $table->decimal('active_capital_percent', 8, 2)->nullable();
             $table->timestamp('stopped_at')->nullable();
+            // Phase 11 health surface consumed by the Step 7 reconciler's
+            // escalation path (last_error_summary / scopeHasError).
+            $table->string('last_error_code')->nullable();
+            $table->string('last_error_message')->nullable();
             $table->timestamps();
         });
 
@@ -90,6 +94,11 @@ trait BuildsGridSchema
             $table->decimal('average_fill_price', 20, 0)->nullable();
             $table->timestamp('last_fill_at')->nullable();
             $table->string('role')->nullable();
+            // Phase 12 Step 7 reconcile-tracking columns (same shape as
+            // 2026_07_20_000001_add_reconcile_tracking_to_grid_orders).
+            $table->unsignedInteger('reconcile_attempts')->default(0);
+            $table->unsignedInteger('reconcile_not_found_count')->default(0);
+            $table->timestamp('reconcile_last_attempt_at')->nullable();
             $table->timestamps();
         });
 

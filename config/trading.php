@@ -120,6 +120,40 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Submission reconciler (Phase 12 Step 7)
+    |--------------------------------------------------------------------------
+    | Resolves grid_orders rows parked in 'submission_unknown' (and stale
+    | 'pending') by read-only lookups against Nobitex. See
+    | App\Services\SubmissionReconciler.
+    */
+    'reconcile' => [
+        'enabled' => (bool) env('TRADING_RECONCILE_ENABLED', true),
+
+        // Age guard: never touch a row younger than this — the process that
+        // created it may still be mid-placement.
+        'min_age_seconds'         => (int) env('TRADING_RECONCILE_MIN_AGE_SECONDS', 300),
+        // 'pending' is also a normal transient state during a live placement,
+        // so stuck-pending rows get a longer grace period before sweeping.
+        'pending_min_age_seconds' => (int) env('TRADING_RECONCILE_PENDING_MIN_AGE_SECONDS', 900),
+
+        // A row is only resolved to 'cancelled' after the exchange answered
+        // NotFound for its clientOrderId on this many consecutive runs (with
+        // no matching open order either time). Set cancel_on_not_found=false
+        // to disable automatic cancellation entirely (rows then escalate to
+        // manual review instead) — e.g. until the clientOrderId tagging has
+        // been verified once against the live API.
+        'not_found_confirmations' => (int) env('TRADING_RECONCILE_NOT_FOUND_CONFIRMATIONS', 2),
+        'cancel_on_not_found'     => (bool) env('TRADING_RECONCILE_CANCEL_ON_NOT_FOUND', true),
+
+        // Escalation: after this many attempts OR this age, the row is logged
+        // at error level and surfaced on the bot's last_error_code health
+        // surface (it keeps being retried, just loudly).
+        'max_attempts'  => (int) env('TRADING_RECONCILE_MAX_ATTEMPTS', 12),
+        'max_age_hours' => (int) env('TRADING_RECONCILE_MAX_AGE_HOURS', 6),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Grid Strategy Defaults & Risk
     |--------------------------------------------------------------------------
     */

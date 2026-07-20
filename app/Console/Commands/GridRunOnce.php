@@ -62,9 +62,9 @@ class GridRunOnce extends Command
             }
 
             // Live placing via NobitexService — inherits timeouts (connect+read),
-            // retry policy, rate limiting, and the correct `client_ref`
+            // retry policy, rate limiting, and the documented `clientOrderId`
             // idempotency field. Previously this was a raw Http::post that
-            // bypassed all of that and sent `clientOrderId` (wrong field).
+            // bypassed all of that.
             $nobitex = app(\App\Services\NobitexService::class);
 
             $placed = 0; $errors = 0;
@@ -75,19 +75,18 @@ class GridRunOnce extends Command
 
                 // Per-run-unique idempotency ref. Kept as-is (not
                 // GridOrder::buildClientOrderId) because this standalone CLI run
-                // has no botId and intentionally scopes ids to the run; only the
-                // field NAME changes (clientOrderId → client_ref).
+                // has no botId and intentionally scopes ids to the run.
                 $clientRef = "grid-run-{$run->id}-".uniqid();
 
                 // Snapshot for the event log. placeOrder() derives src/dst and
                 // builds the wire payload itself, so this mirrors the inputs.
                 $payload = [
-                    'type'        => $side,       // buy|sell
-                    'execution'   => 'limit',
-                    'symbol'      => $symbol,
-                    'amount'      => $qty,
-                    'price'       => $price,
-                    'client_ref'  => $clientRef,
+                    'type'          => $side,       // buy|sell
+                    'execution'     => 'limit',
+                    'symbol'        => $symbol,
+                    'amount'        => $qty,
+                    'price'         => $price,
+                    'clientOrderId' => $clientRef,
                 ];
 
                 $rec->event('OrderPlaceRequested', ['payload' => $payload]);
@@ -104,7 +103,7 @@ class GridRunOnce extends Command
 
                 if (($res['status'] ?? 'failed') === 'ok') {
                     $order = $res['order'] ?? [];
-                    $rec->event('OrderPlaced', ['id'=>$order['id'] ?? null,'client_ref'=>$clientRef,'status'=>$order['status'] ?? null]);
+                    $rec->event('OrderPlaced', ['id'=>$order['id'] ?? null,'clientOrderId'=>$clientRef,'status'=>$order['status'] ?? null]);
                     $rec->addOrder(array_merge($order, ['client_order_id' => $clientRef]));
                     $placed++;
                 } else {
