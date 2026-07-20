@@ -6,6 +6,7 @@ namespace App\Services;
 use App\Contracts\ExchangeClient;
 use App\Contracts\RateLimiter as RateLimiterContract;
 use App\Exceptions\AmbiguousOrderSubmissionException;
+use App\Exceptions\OrderNotFoundException;
 use App\DTOs\ApiOkDto;
 use App\DTOs\BalanceDto;
 use App\DTOs\CreateOrderDto;
@@ -418,7 +419,10 @@ class NobitexService implements ExchangeClient
             'Inactive2FA'                 => new \RuntimeException('2FA inactive for user'),
             'InvalidOTPCode'              => new \RuntimeException('Invalid OTP code'),
             'InvalidCodeLength'           => new \InvalidArgumentException('Anti-phishing code length invalid'),
-            'NotFound'                    => new \RuntimeException('Requested resource not found'),
+            // Dedicated subtype (still a RuntimeException, same message) so the
+            // Step 7 reconciler can recognise a definitive "does not exist"
+            // answer by type instead of by message sniffing.
+            'NotFound'                    => new OrderNotFoundException('Requested resource not found'),
             default                       => new \RuntimeException($msg ?: ('Nobitex failed: ' . $code)),
         };
 
@@ -596,6 +600,78 @@ class NobitexService implements ExchangeClient
         }
 
         return $out;
+    }
+
+    /* -----------------------------------------------------------------
+     | Read-only reconciliation lookups (Phase 12 Step 7)
+     |------------------------------------------------------------------
+     | Both methods below are STRICTLY read-only against the exchange and
+     | exist for the submission_unknown reconciler. Neither existed before
+     | Step 7; the Nobitex API documents both capabilities (order status by
+     | clientOrderId; the account's order list), but note the caveat that
+     | our order payloads tag the id under 'client_ref' — if the exchange
+     | expects 'clientOrderId' and silently ignored the tag, the lookup
+     | below returns NotFound for a live order. The reconciler therefore
+     | never concludes "absent" from this probe alone (see
+     | SubmissionReconciler for the corroborating open-orders check).
+     |------------------------------------------------------------------*/
+
+    /**
+     * Look up a single order by the client-supplied id it was created with.
+     *
+     * POST /market/orders/status is a pure read despite the POST verb, so it
+     * keeps the default idempotent retry policy.
+     *
+     * @return array<string,mixed>|null The raw order payload, or null ONLY on
+     *         an explicit NotFound answer from the exchange. Every other
+     *         failure (transport, 5xx, malformed body) throws — callers must
+     *         treat those as "could not determine", never as absence.
+     */
+    public function getOrderByClientOrderId(string $clientOrderId): ?array
+    {
+        try {
+            $data = $this->request('POST', '/market/orders/status', [], [
+                'clientOrderId' => $clientOrderId,
+            ]);
+        } catch (OrderNotFoundException) {
+            return null;
+        }
+
+        $row = (array) ($data['order'] ?? []);
+        if ($row === []) {
+            // status ok but no order payload — an answer we cannot interpret.
+            // Throw rather than return null: null means definitive absence.
+            throw new \RuntimeException('BadResponse: ok status without order payload');
+        }
+
+        return $row;
+    }
+
+    /**
+     * List the account's OPEN orders for one market.
+     *
+     * GET /market/orders/list. The IRT→rls mapping matches the private
+     * order-placement endpoints (see GridOrderExecutor::splitSymbol).
+     * details=2 asks for the fuller order objects (incl. clientOrderId
+     * where the exchange has one).
+     *
+     * @return array<int,array<string,mixed>> Raw order rows (possibly empty).
+     */
+    public function listOpenOrders(string $symbol): array
+    {
+        [$src, $dst] = GridOrderExecutor::splitSymbol($symbol);
+
+        $data = $this->request('GET', '/market/orders/list', [
+            'srcCurrency' => $src,
+            'dstCurrency' => $dst,
+            'status'      => 'open',
+            'details'     => 2,
+        ]);
+
+        return array_map(
+            static fn ($o) => (array) $o,
+            array_values((array) ($data['orders'] ?? []))
+        );
     }
 
     /** موجودی یک ارز */
