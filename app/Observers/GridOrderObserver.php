@@ -81,7 +81,7 @@ class GridOrderObserver
 
             $this->recomputeInventoryForBot($bot);
         } catch (\Throwable $e) {
-            Log::warning('GRID_ORDER_OBSERVER_RECOMPUTE_FAILED', [
+            Log::channel('trading')->warning('GRID_ORDER_OBSERVER_RECOMPUTE_FAILED', [
                 'grid_order_id' => $order->id ?? null,
                 'bot_config_id' => $order->bot_config_id ?? null,
                 'exception'     => get_class($e),
