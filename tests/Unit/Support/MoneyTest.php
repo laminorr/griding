@@ -245,6 +245,76 @@ final class MoneyTest extends TestCase
     }
 
     // =====================================================================
+    // Native float / int operands to arithmetic.
+    // Nearly every arithmetic assertion above passes STRINGS. These pin what
+    // happens when a caller hands a float or int straight to add/sub/mul/div —
+    // exactly the boundary where the pre-BCMath truncation bugs lived.
+    // =====================================================================
+
+    public function test_float_and_int_operands_to_arithmetic_throw_typeerror_under_strict_types(): void
+    {
+        // CHARACTERIZATION: add/sub/mul/div are typed (string $a, string $b) and,
+        // unlike normalize(), do NO coercion. Under strict_types=1 — declared by
+        // every caller in this codebase, including this very file — a native float
+        // or int argument is a \TypeError raised BEFORE bcmath is reached. The
+        // pre-BCMath truncation the brief worried about (a float silently losing
+        // precision on the way into bcmath) therefore CANNOT happen through these
+        // methods directly: the type system forces a caller to Money::normalize()
+        // the float into a string first, and normalize()'s sprintf('%.20F', ...)
+        // is the single place where that float->string precision is decided (see
+        // the next test).
+        $cases = [
+            'float first operand'  => static fn () => Money::mul(0.0003, '98500000000'),
+            'float second operand' => static fn () => Money::mul('98500000000', 0.0003),
+            'int operand'          => static fn () => Money::add(98500000000, '1'),
+        ];
+        foreach ($cases as $label => $call) {
+            try {
+                $call();
+                $this->fail("expected a TypeError for: $label");
+            } catch (\TypeError $e) {
+                $this->addToAssertionCount(1);
+            }
+        }
+    }
+
+    public function test_float_operands_via_normalize_may_diverge_from_string_operands(): void
+    {
+        // The ONLY way a float can reach bcmath is to Money::normalize() it first.
+        // That channel carries the float's IEEE-754 representation error into the
+        // exact-decimal domain, so at BTCIRT magnitude the two paths can DISAGREE.
+        //
+        // CHARACTERIZATION: 0.0003 has no exact double, so its normalized form is
+        // NOT '0.0003' — the trailing digits are the double's real value:
+        $this->assertSame('0.00029999999999999997', Money::normalize(0.0003));
+
+        // Same multiplication, string vs float-via-normalize operands.
+        $stringPath = Money::mul('0.0003', '98500000000');
+        $floatPath  = Money::mul(Money::normalize(0.0003), '98500000000');
+
+        $this->assertSame('29550000', $stringPath, 'exact string operands give a clean 29,550,000 IRT');
+        // CHARACTERIZATION: the float channel is short by ~2.955e-9 IRT here.
+        $this->assertSame('29549999.999999997045', $floatPath);
+        $this->assertNotSame($stringPath, $floatPath, 'float and string operands DISAGREE at BTCIRT magnitude');
+
+        // MAGNITUDE THIS BITES: the absolute gap is 29550000 - 29549999.999999997045
+        // = 2.955e-9 IRT on a ~2.955e7 IRT notional — about one double ULP (~1e-16
+        // relative). Real order notionals are integers >= 3,000,000 IRT, so this
+        // sub-rial drift can never change a placed order value; it is a correctness
+        // SMELL, not a live bug — and precisely why the codebase passes strings.
+
+        // A float whose normalize() happens to be exact agrees byte-for-byte:
+        // 0.00006841 round-trips cleanly, so both paths coincide.
+        $this->assertSame('0.00006841', Money::normalize(0.00006841));
+        $this->assertSame(
+            Money::mul('0.00006841', '98500000000'),
+            Money::mul(Money::normalize(0.00006841), '98500000000'),
+            'a float whose normalize() is exact agrees with its string operand'
+        );
+        $this->assertSame('6738385', Money::mul(Money::normalize(0.00006841), '98500000000'));
+    }
+
+    // =====================================================================
     // compare / min / max / sign predicates / abs
     // =====================================================================
 
@@ -387,6 +457,76 @@ final class MoneyTest extends TestCase
             '1e18 + .5'       => ['1000000000000000000.5'],
             '20-digit'        => ['12345678901234567890'],
         ];
+    }
+
+    /** Assert Money::round($value, $scale) throws \ValueError (the float->string scientific-notation cliff). */
+    private function assertRoundThrows(string $value, int $scale): void
+    {
+        try {
+            Money::round($value, $scale);
+            $this->fail("expected \\ValueError from Money::round('$value', $scale)");
+        } catch (\ValueError $e) {
+            $this->addToAssertionCount(1);
+        }
+    }
+
+    public function test_round_scale_zero_real_precision_staircase(): void
+    {
+        // roundLargeValueProvider above pins throwing at 1e18 and a 20-digit value
+        // — thousands of times ABOVE where round() actually breaks. Walk the real
+        // staircase at scale 0. round() casts bcmul(value, 1, scale+1) to a native
+        // float and back via (string); (string)(float) switches to scientific
+        // notation ("1.0E+14") the moment the value needs 15 integer digits under
+        // PHP's default precision=14, and PHP 8 bcmath rejects that non-well-formed
+        // operand inside bcdiv with a \ValueError.
+        $this->assertSame('1000000000000',  Money::round('1000000000000', 0));   // 1e12: ok
+        $this->assertSame('10000000000000', Money::round('10000000000000', 0));  // 1e13: ok
+        $this->assertRoundThrows('100000000000000', 0);                          // 1e14: throws
+        $this->assertRoundThrows('1000000000000000', 0);                         // 1e15: throws
+    }
+
+    public function test_round_scale_zero_exact_boundary(): void
+    {
+        // The exact edge at scale 0, pinned on both sides:
+        //   largest magnitude that STILL SUCCEEDS = 99,999,999,999,999  (1e14 - 1, 14 digits)
+        //   smallest magnitude that THROWS        = 100,000,000,000,000 (1e14,     15 digits)
+        // Real BTCIRT prices (~1e11) sit ~1000x below this edge, so price rounding
+        // is safe; only IRT *notionals* reaching >= 1e14 would trip it — and no
+        // call site rounds one.
+        $this->assertSame('99999999999999', Money::round('99999999999999', 0), 'last magnitude that still rounds');
+        $this->assertRoundThrows('100000000000000', 0);                          // one rial higher: throws
+    }
+
+    public function test_round_threshold_moves_by_a_factor_of_ten_per_unit_of_scale(): void
+    {
+        // round() multiplies by 10^scale BEFORE the float cast:
+        //   bcdiv((string) round((float) bcmul($value, 10^scale, scale+1)), 10^scale, scale)
+        // so the scientific-notation cliff applies to the PRODUCT value*10^scale,
+        // not to $value. The safe ceiling is therefore 10^(14 - scale): it drops by
+        // a factor of ten for every extra unit of scale.
+        //
+        // PRODUCTION RELEVANCE: the minimum order value is 3,000,000 IRT. All seven
+        // current round() call sites pass scale 0, so nothing throws today. But if
+        // a caller ever rounded an IRT notional at scale 8, 3,000,000 * 10^8 = 3e14
+        // forces scientific notation and the VERY FIRST order would throw a
+        // \ValueError. This pins the relationship so a future scale argument
+        // announces that hazard by moving the numbers below in lockstep.
+
+        // scale 0 -> ceiling 10^14
+        $this->assertSame('10000000000000', Money::round('10000000000000', 0)); // 1e13 ok
+        $this->assertRoundThrows('100000000000000', 0);                         // 1e14 throws
+
+        // scale 4 -> ceiling 10^10 (down 10^4 from scale 0)
+        $this->assertSame('1000000000', Money::round('1000000000', 4));         // 1e9 ok
+        $this->assertRoundThrows('10000000000', 4);                             // 1e10 throws
+
+        // scale 8 -> ceiling 10^6 (down 10^8 from scale 0)
+        $this->assertSame('100000', Money::round('100000', 8));                 // 1e5 ok
+        $this->assertRoundThrows('1000000', 8);                                 // 1e6 throws
+
+        // The production hazard made concrete: a min-order-magnitude IRT notional
+        // rounded at scale 8 throws from the first order.
+        $this->assertRoundThrows('3000000', 8);
     }
 
     // =====================================================================
