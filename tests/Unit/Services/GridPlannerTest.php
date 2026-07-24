@@ -257,6 +257,40 @@ final class GridPlannerTest extends TestCase
         $this->assertSame(0, $sell['price'] % 10);
     }
 
+    public function test_buys_floor_and_sells_ceil_at_realistic_btcirt_magnitude(): void
+    {
+        // The mid=100000 floor/ceil test above sits SIX orders of magnitude below a
+        // real BTCIRT price. This repeats the floor-down / ceil-up characterization
+        // at a realistic mid, chosen so BOTH pre-alignment (raw) prices land
+        // STRICTLY BETWEEN two ticks — so direction genuinely matters:
+        //   mid=98,543,211,041, stepPct=0.25 (step 0.0025), tick=10, levels=2 (1+1)
+        //   buy  i=1: round(mid * 0.9975) = 98,296,853,013 -> floor(10) = 98,296,853,010
+        //   sell i=1: round(mid * 1.0025) = 98,789,569,069 -> ceil (10) = 98,789,569,070
+        // Both raws end in a non-zero digit (…013 / …069), so a floor and a ceil of
+        // the SAME raw would differ — the buy rounds DOWN, the sell rounds UP. The
+        // expected integers were derived independently from the geometric factor
+        // and the tick rule (the raw fractional parts, 0.398 and 0.602, sit ~0.10
+        // clear of the .5 rounding boundary, so the raws are unambiguous), never by
+        // re-calling plan().
+        $plan = $this->planner()->plan(self::SYMBOL, 98_543_211_041, 2, 0.25, 'both', tick: 10);
+
+        $buy  = $this->side($plan, 'buy')[0];
+        $sell = $this->side($plan, 'sell')[0];
+
+        $this->assertSame(98_296_853_010, $buy['price'], 'buy aligns DOWN to the tick at real magnitude');
+        $this->assertSame(98_789_569_070, $sell['price'], 'sell aligns UP to the tick at real magnitude');
+
+        // Every returned price is an exact multiple of the tick.
+        foreach ($plan['items'] as $it) {
+            $this->assertSame(0, $it['price'] % 10, "price {$it['price']} must be a clean multiple of the tick");
+        }
+
+        // Floor vs ceil genuinely diverge: the buy landed below its raw, the sell
+        // above its raw — proving the two directions produce different answers.
+        $this->assertLessThan(98_296_853_013, $buy['price'], 'buy floored below its raw 98,296,853,013');
+        $this->assertGreaterThan(98_789_569_069, $sell['price'], 'sell ceiled above its raw 98,789,569,069');
+    }
+
     public function test_every_returned_price_is_an_exact_multiple_of_the_tick(): void
     {
         $plan = $this->planner()->plan(self::SYMBOL, 100_000, 6, 0.25, 'both', tick: 10);
@@ -501,6 +535,47 @@ final class GridPlannerTest extends TestCase
         }
         foreach ($this->side($plan, 'buy') as $b) {
             $this->assertSame('0.001', $b['quantity'], 'fixedQty wins on buys');
+        }
+    }
+
+    public function test_fixed_qty_and_preset_base_qty_precedence_answered(): void
+    {
+        // The Step-2 brief left this OPEN: when BOTH fixedQty and presetBaseQty are
+        // passed, which wins? The sizing loop settles it — plan() checks
+        // presetSellQty FIRST (`if ($presetSellQty !== null && side === 'sell')`),
+        // then falls through to fixedQty. So the precedence is SIDE-SPLIT, not
+        // global:
+        //   * SELL levels: presetBaseQty wins (its per-sell split); fixedQty is ignored.
+        //   * BUY  levels: presetBaseQty never applies, so fixedQty wins.
+        // FOOTGUN: a caller passing both and expecting fixedQty on EVERY level gets
+        // the preset split on their sells instead — silently. This pins all three
+        // configurations side by side as the definitive answer.
+        $args = [self::SYMBOL, 100_000, 6, 1.0, 'both', 60_000_000];
+
+        // (a) fixedQty ALONE -> every level carries the fixed quantity.
+        $fixedOnly = $this->planner()->plan(...$args, fixedQty: '0.001', tick: 10, presetBaseQty: null);
+        foreach ($fixedOnly['items'] as $it) {
+            $this->assertSame('0.001', $it['quantity'], 'fixedQty alone: every level is fixed');
+        }
+
+        // (b) presetBaseQty ALONE -> sells split the preset (0.006/3 = 0.002); buys
+        // fall back to budget-derived sizing (neither fixed nor preset).
+        $presetOnly = $this->planner()->plan(...$args, fixedQty: null, tick: 10, presetBaseQty: '0.006');
+        foreach ($this->side($presetOnly, 'sell') as $s) {
+            $this->assertSame('0.002', $s['quantity'], 'preset alone: sells split the preset');
+        }
+        foreach ($this->side($presetOnly, 'buy') as $b) {
+            $this->assertNotSame('0.002', $b['quantity'], 'preset alone: buys are budget-sized, not preset');
+            $this->assertNotSame('0.001', $b['quantity'], 'preset alone: buys are budget-sized, not fixed');
+        }
+
+        // (c) BOTH -> preset wins on sells, fixedQty wins on buys (the split rule).
+        $both = $this->planner()->plan(...$args, fixedQty: '0.001', tick: 10, presetBaseQty: '0.006');
+        foreach ($this->side($both, 'sell') as $s) {
+            $this->assertSame('0.002', $s['quantity'], 'both passed: preset split wins on sells (NOT fixedQty)');
+        }
+        foreach ($this->side($both, 'buy') as $b) {
+            $this->assertSame('0.001', $b['quantity'], 'both passed: fixedQty wins on buys');
         }
     }
 

@@ -647,4 +647,47 @@ final class TradingEngineServiceHelpersTest extends TestCase
         // Notional stays clear of the Money precision cliff (1e14).
         $this->assertLessThan(0, Money::compare($notional, '100000000000000'));
     }
+
+    public function test_simulation_flag_is_not_read_by_the_helper_it_engages_on_a_real_balance(): void
+    {
+        // DOCUMENTATION PIN — where the simulation guard actually lives.
+        //
+        // computePresetBaseQty does NOT read $botConfig->simulation. Simulation
+        // independence is enforced ONE LAYER UP, in initializeGrid — the
+        // `if ($needsBalanceCheck && !$botConfig->simulation)` block currently at
+        // TradingEngineService.php:607. There $btcBalance is initialised to null and
+        // NEVER written for a simulation bot, so this helper is always handed null
+        // and returns null via its first guard (see
+        // test_simulation_bot_returns_null_via_the_null_balance_contract). The
+        // guarantee is real, but it lives in the CALLER, not the helper.
+        //
+        // To prove the guard is not in the helper, invoke it the way the caller's
+        // guard normally prevents: a simulation bot together with a NON-null,
+        // otherwise-engageable balance. The helper engages and returns a quantity
+        // anyway, because it never inspects the flag. This is NOT a bug, and
+        // production code must NOT change to make it return null.
+        //
+        // The purpose of this test is documentation: if anyone later moves or
+        // deletes that initializeGrid condition, THIS test still passes (the helper
+        // is unchanged) while the simulation-independence guarantee quietly
+        // disappears. So it records exactly what that condition was protecting, and
+        // where the guard must stay.
+        //
+        // Inputs are the engage case from
+        // test_engage_case_returns_the_full_base_quantity, with simulation flipped
+        // to true:
+        //   mid=98,500,000,000, budget=40,000,000 IRT, mode=sell, base=0.0003 BTC
+        //   notional 29,550,000; threshold 20,000,000; 20M <= 29.55M <= 40M -> ENGAGE.
+        $simBot = new BotConfig([
+            'mode'          => 'sell',
+            'simulation'    => true,          // a simulation bot ...
+            'total_capital' => 40_000_000,
+        ]);
+
+        // ... handed a real, engageable balance (which initializeGrid would never
+        // pass for a simulation bot — it leaves $btcBalance null).
+        $result = $this->presetBaseQty($simBot, '0.0003', 98_500_000_000.0);
+
+        $this->assertSame('0.0003', $result, 'the helper engages regardless of the simulation flag');
+    }
 }
