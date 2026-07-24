@@ -13,6 +13,7 @@ use App\Services\GridPlanner;
 use App\Services\KillSwitchService;
 use App\Services\NobitexService;
 use App\Services\TradingEngineService;
+use App\Support\Money;
 use Mockery;
 use PHPUnit\Framework\Attributes\DataProvider;
 use ReflectionMethod;
@@ -606,16 +607,22 @@ final class TradingEngineServiceHelpersTest extends TestCase
 
         $this->assertSame('0.0003', $result, 'engage returns the full normalized base quantity');
 
-        // Independent re-check of the engagement band, spelled out with integers
-        // so the assertion does not lean on the helper's own arithmetic.
+        // Independent re-check of the engagement band. CHARACTERIZATION: the
+        // oracle uses App\Support\Money (exact bcmath decimals), NOT native PHP
+        // float arithmetic. `0.0003 * 98_500_000_000` does NOT land on an exact
+        // double — it evaluates to 29549999.999999996, so an assertSame against
+        // 29_550_000.0 fails even though echo (precision=14) prints "29550000".
+        // Inexact multiplication at BTCIRT magnitude is precisely why Money
+        // exists, so the re-check must use the same exact arithmetic the helper
+        // uses rather than re-introducing the drift the project migrated away from.
         $mid              = 98_500_000_000;
-        $budget           = 40_000_000;
-        $notional         = 0.0003 * $mid;          // 29,550,000
-        $threshold        = $budget * 0.5;          // 20,000,000  (sell-only: naiveSellNotional = budget)
-        $this->assertSame(29_550_000.0, $notional);
-        $this->assertSame(20_000_000.0, $threshold);
-        $this->assertGreaterThanOrEqual($threshold, $notional);
-        $this->assertLessThanOrEqual((float) $budget, $notional);
+        $budget           = '40000000';
+        $notional         = Money::mul('0.0003', (string) $mid);   // 29,550,000
+        $threshold        = Money::mul($budget, '0.5');            // 20,000,000  (sell-only: naiveSellNotional = budget)
+        $this->assertSame('29550000', $notional);
+        $this->assertSame('20000000', $threshold);
+        $this->assertGreaterThanOrEqual(0, Money::compare($notional, $threshold));
+        $this->assertLessThanOrEqual(0, Money::compare($notional, $budget));
     }
 
     public function test_engage_result_stays_far_below_the_money_float_cliff(): void
@@ -630,8 +637,14 @@ final class TradingEngineServiceHelpersTest extends TestCase
 
         $this->assertSame('0.0006', $this->presetBaseQty($bot, '0.0006', 98_500_000_000.0));
 
-        $notional = 0.0006 * 98_500_000_000; // 59,100,000
-        $this->assertSame(59_100_000.0, $notional);
-        $this->assertLessThan(1e14, $notional, 'notional stays clear of the Money precision cliff');
+        // CHARACTERIZATION: computed with App\Support\Money (exact bcmath), NOT
+        // native floats. `0.0006 * 98_500_000_000` yields 59099999.99999999 as a
+        // double — assertSame against 59_100_000.0 would fail despite echo
+        // printing "59100000" at precision=14. Money's exact decimal arithmetic
+        // is exactly what eliminates that magnitude-dependent drift.
+        $notional = Money::mul('0.0006', '98500000000'); // 59,100,000
+        $this->assertSame('59100000', $notional);
+        // Notional stays clear of the Money precision cliff (1e14).
+        $this->assertLessThan(0, Money::compare($notional, '100000000000000'));
     }
 }
