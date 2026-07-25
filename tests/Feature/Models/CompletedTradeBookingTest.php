@@ -55,7 +55,12 @@ final class CompletedTradeBookingTest extends TestCase
     {
         parent::setUp();
         $this->buildGridSchema();
-        \Carbon\Carbon::setTestNow(self::NOW);
+        // Freeze at an explicit UTC instant, not a naive literal parsed in the
+        // app's local timezone. now()->toISOString() serialises in UTC, so a
+        // local-timezone freeze would make the pinned timestamp host-dependent
+        // (e.g. 3.5h earlier under Asia/Tehran). Anchoring the clock to UTC keeps
+        // it identical on every host.
+        \Carbon\Carbon::setTestNow(\Carbon\CarbonImmutable::parse(self::NOW, 'UTC'));
 
         // Cold cache by default. Individual tests seed btc_price* explicitly.
         Cache::flush();
@@ -494,9 +499,11 @@ final class CompletedTradeBookingTest extends TestCase
 
         $trade = CompletedTrade::createFromOrders($buy, $sell)->fresh();
 
+        // Timestamp is derived from the same frozen clock the code reads
+        // (now()->toISOString()), so the assertion stays timezone-independent.
         $this->assertSame([
             'btc_price_at_trade' => null,
-            'timestamp'          => '2026-01-01T00:00:00.000000Z',
+            'timestamp'          => now()->toISOString(),
             'trend'              => 'sideways',
         ], $trade->market_conditions);
     }
@@ -516,9 +523,11 @@ final class CompletedTradeBookingTest extends TestCase
 
         $trade = CompletedTrade::createFromOrders($buy, $sell)->fresh();
 
+        // Timestamp is derived from the same frozen clock the code reads
+        // (now()->toISOString()), so the assertion stays timezone-independent.
         $this->assertSame([
             'btc_price_at_trade' => 100_000_000_000,
-            'timestamp'          => '2026-01-01T00:00:00.000000Z',
+            'timestamp'          => now()->toISOString(),
             'trend'              => 'bullish',
         ], $trade->market_conditions);
     }
