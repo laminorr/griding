@@ -448,22 +448,18 @@ final class CompletedTradeBookingTest extends TestCase
     // ─────────────────────────────────────────────────────────────────────────
 
     /**
-     * CHARACTERIZATION — execution_time_seconds is the NEGATION of the real
-     * elapsed time. It is computed as
-     *   $sellOrder->updated_at->diffInSeconds($buyOrder->created_at)
+     * execution_time_seconds is the NON-NEGATIVE elapsed time from buy creation
+     * to sell update. It is computed as
+     *   $buyOrder->created_at->diffInSeconds($sellOrder->updated_at)
      * and this project runs Carbon 3 (nesbot/carbon 3.10.3), whose diff methods
-     * are SIGNED by default. Calling `$later->diffInSeconds($earlier)` therefore
-     * yields a negative number: here the sell is updated 120s after the buy is
-     * created, and the booked duration is -120, not +120. (Carbon 2 returned the
-     * absolute value; the code reads as if it still does.)
+     * are SIGNED by default. Calling `$earlier->diffInSeconds($later)` therefore
+     * yields a positive number: here the sell is updated 120s after the buy is
+     * created, so the booked duration is +120.
      *
-     * MAGNITUDE / BLAST RADIUS: this bites EVERY normal round-trip (sell always
-     * completes after the buy), so 100% of booked trades store a negative
-     * duration. getExecutionTimeFormattedAttribute() then formats it as e.g.
-     * "-2 دقیقه، 0 ثانیه", and any avg/sum over execution_time_seconds is
-     * sign-flipped. This is locked, not fixed.
+     * A same-second fill (buy and sell in the same instant) yields exactly 0 —
+     * not a negative and not an error.
      */
-    public function test_execution_time_seconds_is_negated_elapsed_time(): void
+    public function test_execution_time_seconds_is_elapsed_time_and_non_negative(): void
     {
         $bot = BotConfigFactory::new()->create(['fee_bps' => 35]);
         // buy created 00:00:00, sell updated 00:02:00 → 120s elapsed.
@@ -478,10 +474,23 @@ final class CompletedTradeBookingTest extends TestCase
 
         $trade = CompletedTrade::createFromOrders($buy, $sell)->fresh();
 
-        // CHARACTERIZATION: negative, because Carbon 3 diffInSeconds is signed
-        // and the receiver (sell.updated_at) is LATER than the argument
-        // (buy.created_at).
-        $this->assertSame(-120, $trade->execution_time_seconds);
+        // Positive elapsed seconds: the receiver (buy.created_at) is EARLIER
+        // than the argument (sell.updated_at), so Carbon 3's signed diff is +120.
+        $this->assertSame(120, $trade->execution_time_seconds);
+
+        // Same-second fill: buy and sell share the instant → exactly 0.
+        [$buyFast, $sellFast] = $this->filledPair(
+            $bot->id,
+            '98000000000',
+            '99000000000',
+            '0.00100000',
+            buyCreatedAt: '2026-01-01 00:00:00',
+            sellUpdatedAt: '2026-01-01 00:00:00',
+        );
+
+        $fastTrade = CompletedTrade::createFromOrders($buyFast, $sellFast)->fresh();
+
+        $this->assertSame(0, $fastTrade->execution_time_seconds);
     }
 
     /**

@@ -394,7 +394,7 @@ class CompletedTrade extends Model
             : Money::mul(Money::div($grossProfit, $buyNotional), '100');
 
         // محاسبه زمان اجرا
-        $executionTime = $sellOrder->updated_at->diffInSeconds($buyOrder->created_at);
+        $executionTime = $buyOrder->created_at->diffInSeconds($sellOrder->updated_at);
 
         return self::create([
             'bot_config_id' => $buyOrder->bot_config_id,
