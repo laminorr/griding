@@ -160,8 +160,11 @@ final class CompletedTradeBookingTest extends TestCase
         // fee = feeRate × (buyNotional + sellNotional), feeRate = 20/10000
         $this->assertSame('394000.00000000', $trade->fee);
 
-        // profit and net_profit are both the NET figure.
-        $this->assertSame('606000.00000000', $trade->profit);
+        // profit and net_profit are both written from the NET figure. profit is
+        // cast decimal:0 (matching its DECIMAL(20,0) column), so it reads back as
+        // a whole rial; net_profit keeps its decimal:8 form. For a net that is
+        // already integral (606,000) the two only differ in trailing zeros.
+        $this->assertSame('606000', $trade->profit);
         $this->assertSame('606000.00000000', $trade->net_profit);
 
         // profit_percentage is GROSS/buyNotional×100, read back through the
@@ -200,7 +203,7 @@ final class CompletedTradeBookingTest extends TestCase
 
         $this->assertSame('985000.00000000', $trade->fee);
         $this->assertSame('15000.00000000', $trade->net_profit);
-        $this->assertSame('15000.00000000', $trade->profit);
+        $this->assertSame('15000', $trade->profit); // decimal:0 cast → whole rial
     }
 
     /**
@@ -242,7 +245,7 @@ final class CompletedTradeBookingTest extends TestCase
         $this->assertSame('0.00000000', $tradeZero->fee);
         $this->assertSame('1000000.00000000', $tradeZero->gross_profit);
         $this->assertSame('1000000.00000000', $tradeZero->net_profit);
-        $this->assertSame('1000000.00000000', $tradeZero->profit);
+        $this->assertSame('1000000', $tradeZero->profit); // decimal:0 cast → whole rial
     }
 
     /**
@@ -268,7 +271,7 @@ final class CompletedTradeBookingTest extends TestCase
         $this->assertSame('0.00000000', $trade->gross_profit);
         $this->assertSame('0.00000000', $trade->fee);
         $this->assertSame('0.00000000', $trade->net_profit);
-        $this->assertSame('0.00000000', $trade->profit);
+        $this->assertSame('0', $trade->profit); // decimal:0 cast → whole rial
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -299,9 +302,12 @@ final class CompletedTradeBookingTest extends TestCase
 
         $trade = CompletedTrade::createFromOrders($buy, $sell)->fresh();
 
-        // profit & net_profit are the NET figure (decimal:8, HALF_UP).
+        // Both are written from the NET figure, but read back through different
+        // casts: net_profit is decimal:8 (keeps the fraction); profit is decimal:0
+        // (matching its DECIMAL(20,0) column, HALF_UP → whole rial). 52145.765… ⇒
+        // net_profit "52145.76549515", profit "52146".
         $this->assertSame('52145.76549515', $trade->net_profit);
-        $this->assertSame('52145.76549515', $trade->profit);
+        $this->assertSame('52146', $trade->profit);
         $this->assertSame('168410.00000000', $trade->gross_profit);
 
         // profit_percentage is GROSS-based, NOT net-based.
@@ -310,41 +316,36 @@ final class CompletedTradeBookingTest extends TestCase
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // decimal(20,0) `profit` vs decimal:8 read cast — the discrepancy, pinned
+    // decimal(20,0) `profit` vs its read cast — the cast now matches the column
     // ─────────────────────────────────────────────────────────────────────────
 
     /**
-     * The migration declares `profit` as DECIMAL(20,0) (zero scale) while the
-     * model casts it to decimal:8 on read; `net_profit` is genuinely
-     * DECIMAL(20,8). Both columns receive the SAME netProfit value. What actually
-     * lands in each?
+     * CHARACTERIZATION — column-vs-cast history.
      *
-     * The fractional netProfit here is 52145.76549515157 (fee 35bps does not
+     * The migration declares `profit` as DECIMAL(20,0) (ZERO decimal places)
+     * while `net_profit` is genuinely DECIMAL(20,8). createFromOrders writes the
+     * SAME netProfit into both. Originally the model cast `profit` to 'decimal:8',
+     * which LIED about the column: the DECIMAL(20,0) storage physically cannot
+     * hold a fraction, yet the read cast pretended 8 places existed and appended
+     * ".00000000" to an already-rounded integer. Phase-2 cleanup changed the cast
+     * to 'decimal:0' so it tells the truth about the column. This test pins that
+     * the cast now matches the column while net_profit keeps the real fraction.
+     *
+     * The fractional netProfit here is 52145.76549515157 (fee 35 bps does not
      * divide the notionals evenly).
      *
      * WHAT SQLITE DOES (observed): sqlite's NUMERIC affinity ignores the (20,0)
-     * declared scale and stores the full fractional double in `profit`. So the
-     * raw `profit` and raw `net_profit` columns are byte-for-byte the same value
-     * (52145.76549515157), and both read back through the model as
-     * "52145.76549515". They AGREE.
-     *
-     * CHARACTERIZATION — SQLITE CANNOT PROVE THE PRODUCTION BEHAVIOUR HERE.
-     * Under MySQL, DECIMAL(20,0) would ROUND netProfit to zero decimals on
-     * INSERT: 52145.76549515157 → 52146 (HALF_UP). Then:
-     *   • raw `profit`   = 52146              (integer, rounded)
-     *   • raw `net_profit` = 52145.76549515157 (full scale)
-     *   → the two columns DIVERGE by ~0.2345 IRT.
-     *   • the model's decimal:8 read cast on `profit` would surface
-     *     "52146.00000000" — i.e. the decimal:8 cast is cosmetic on a column
-     *     that physically cannot hold a fraction; it can only ever append
-     *     ".00000000" to an already-rounded integer.
-     * The divergence is bounded by 0.5 IRT (max HALF_UP rounding delta) — on a
-     * ~5.2e4 IRT profit that is < 0.001%, economically negligible, but it means
-     * `profit` and `net_profit`, documented to be equal, are NOT equal under the
-     * production engine, and `profit`'s decimal:8 cast is a latent lie. This is
-     * exactly the kind of finding that justifies revisiting the MySQL decision.
+     * declared scale and stores the full fractional double in the raw `profit`
+     * column — so the RAW `profit` and RAW `net_profit` columns are still
+     * byte-for-byte the same double. The rounding to whole rial now happens on
+     * READ, in the decimal:0 cast (BigDecimal::toScale(0, HALF_UP)), so the model
+     * surfaces "52146" — exactly the whole-rial value MySQL's DECIMAL(20,0)
+     * column would have physically stored on INSERT. The decimal:0 read cast thus
+     * reconciles the sqlite test engine with the MySQL production engine: both
+     * present `profit` as a rounded whole rial, diverging from net_profit's
+     * fractional value by < 0.5 IRT (cosmetic on IRT, a whole-rial currency).
      */
-    public function test_profit_column_agrees_with_net_profit_under_sqlite_only(): void
+    public function test_profit_read_cast_rounds_to_whole_rial_matching_its_column(): void
     {
         $bot = BotConfigFactory::new()->create(['fee_bps' => 35]);
         [$buy, $sell] = $this->filledPair($bot->id, '98123456789', '99123456789', '0.00016841');
@@ -359,25 +360,63 @@ final class CompletedTradeBookingTest extends TestCase
         // value, never stringify it.
         $raw = DB::table('completed_trades')->where('id', $trade->id)->first();
 
-        // CHARACTERIZATION: the two columns hold the byte-for-byte SAME double —
-        // sqlite ignored `profit`'s DECIMAL(20,0) zero-scale and kept the
-        // fraction, so it did not diverge from net_profit's DECIMAL(20,8).
+        // CHARACTERIZATION: the two RAW columns still hold the byte-for-byte SAME
+        // double — sqlite ignored `profit`'s DECIMAL(20,0) zero-scale on write and
+        // kept the fraction, so the divergence is not visible at the storage layer
+        // under sqlite (it would be under MySQL, which rounds on INSERT).
         $this->assertSame($raw->net_profit, $raw->profit);
 
-        // Proof sqlite preserved a FRACTION (did not round to an integer): the
-        // value sits strictly between 52145 and 52146. MySQL's DECIMAL(20,0)
-        // would instead have stored exactly 52146.0 in `profit` (HALF_UP),
-        // diverging from net_profit by ~0.2345 IRT — sqlite cannot reproduce
-        // that, so this green does NOT prove the production behaviour.
+        // Proof sqlite preserved a FRACTION on write (did not round to an
+        // integer): the raw value sits strictly between 52145 and 52146.
         $this->assertGreaterThan(52145.0, (float) $raw->profit);
         $this->assertLessThan(52146.0, (float) $raw->profit);
 
-        // Through the model's casts they also agree — again, only because sqlite
-        // did not truncate. Do NOT read this green as proof of production parity.
+        // Through the model's casts they now DIVERGE: the decimal:0 cast rounds
+        // profit to the whole rial "52146" (matching what DECIMAL(20,0) stores),
+        // while net_profit's decimal:8 cast keeps the fraction. The cast no longer
+        // lies about the column.
         $fresh = $trade->fresh();
-        $this->assertSame('52145.76549515', $fresh->profit);
+        $this->assertSame('52146', $fresh->profit);
         $this->assertSame('52145.76549515', $fresh->net_profit);
-        $this->assertSame($fresh->net_profit, $fresh->profit);
+        $this->assertNotSame($fresh->net_profit, $fresh->profit);
+    }
+
+    /**
+     * CHARACTERIZATION — the Phase-2 cast fix, stated as its own contract.
+     *
+     * Books a trade whose netProfit has a genuine fractional part (fee_bps = 35
+     * does not divide the notionals evenly, giving 52145.76549515157 IRT), then
+     * asserts the two columns that both receive that value read back per their
+     * ACTUAL types:
+     *   • profit     — DECIMAL(20,0) column, now cast 'decimal:0' → "52146"
+     *                  (whole rial, HALF_UP), matching the storage that cannot
+     *                  hold a fraction.
+     *   • net_profit — DECIMAL(20,8) column, cast 'decimal:8' → "52145.76549515"
+     *                  (fraction preserved, unchanged by this fix).
+     *
+     * Before the fix `profit` was cast 'decimal:8' and would have read back
+     * "52145.76549515" — a fraction the DECIMAL(20,0) column can never actually
+     * store. The delta between the two figures is < 0.5 IRT and IRT is a
+     * whole-rial currency, so this is cosmetic; the fix is about the cast matching
+     * the column, not about changing any economic value.
+     */
+    public function test_fractional_net_reads_as_whole_rial_profit_but_precise_net_profit(): void
+    {
+        $bot = BotConfigFactory::new()->create(['fee_bps' => 35]);
+        [$buy, $sell] = $this->filledPair($bot->id, '98123456789', '99123456789', '0.00016841');
+
+        $trade = CompletedTrade::createFromOrders($buy, $sell)->fresh();
+
+        // profit reads back as the whole-rial value the DECIMAL(20,0) column
+        // actually stores (decimal:0, HALF_UP): 52145.765… → "52146".
+        $this->assertSame('52146', $trade->profit);
+
+        // net_profit still carries the fractional value (decimal:8, unchanged).
+        $this->assertSame('52145.76549515', $trade->net_profit);
+
+        // They are genuinely different string representations now — profit no
+        // longer pretends to hold decimals its column cannot store.
+        $this->assertNotSame($trade->net_profit, $trade->profit);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
