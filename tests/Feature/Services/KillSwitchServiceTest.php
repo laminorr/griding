@@ -296,8 +296,15 @@ final class KillSwitchServiceTest extends TestCase
         $this->assertFalse($fresh->is_active, 'The switch must flip is_active false.');
         $this->assertSame('kill_switch:stop_loss', $fresh->stop_reason);
         $this->assertNotNull($fresh->stopped_at);
-        $this->assertTrue(
-            $expectedNow->equalTo($fresh->stopped_at),
+        // Compare the wall-clock string, not the instant, so the assertion is
+        // timezone-independent: the stored value carries no zone and Eloquent
+        // rebuilds it tagged UTC on read, so matching the 'Y-m-d H:i:s' rendering
+        // of each side pins stopped_at to the frozen now() under any app timezone
+        // (a ->utc() or epoch comparison would spuriously fail off-UTC because
+        // only one side would be shifted).
+        $this->assertSame(
+            $expectedNow->format('Y-m-d H:i:s'),
+            $fresh->stopped_at->format('Y-m-d H:i:s'),
             'stopped_at must be the frozen now() instant.'
         );
 
@@ -508,7 +515,7 @@ final class KillSwitchServiceTest extends TestCase
         $fresh = $bot->fresh();
         $this->assertFalse($fresh->is_active);
         $this->assertSame('kill_switch:max_drawdown', $fresh->stop_reason);
-        $this->assertTrue($expectedNow->equalTo($fresh->stopped_at));
+        $this->assertSame($expectedNow->format('Y-m-d H:i:s'), $fresh->stopped_at->format('Y-m-d H:i:s'));
 
         $tradingLog->shouldHaveReceived('warning')
             ->once()
