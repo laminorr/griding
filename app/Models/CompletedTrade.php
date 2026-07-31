@@ -39,7 +39,7 @@ class CompletedTrade extends Model
         'buy_price' => 'decimal:8',
         'sell_price' => 'decimal:8',
         'amount' => 'decimal:8',
-        'profit' => 'decimal:8',
+        'profit' => 'decimal:0',
         'fee' => 'decimal:8',
         'gross_profit' => 'decimal:8',
         'net_profit' => 'decimal:8',
