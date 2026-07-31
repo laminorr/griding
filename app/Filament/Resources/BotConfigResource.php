@@ -154,11 +154,11 @@ class BotConfigResource extends Resource
                             ->label('حد ضرر')
                             ->numeric()
                             ->suffix('%')
-                            ->default(5)
+                            ->default(15)
                             ->minValue(1)
                             ->maxValue(20)
                             ->step(0.5)
-                            ->helperText('برای مدیریت ریسک'),
+                            ->helperText('درصد فاصله حد ضرر کیل‌سوییچ برای مدیریت ریسک'),
                     ]),
                 ]),
 

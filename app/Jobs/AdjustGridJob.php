@@ -65,9 +65,14 @@ class AdjustGridJob implements ShouldQueue
                 'bot_ids' => $activeBots->pluck('id')->toArray()
             ]);
 
-            // Whitelist allowed symbols from env
-            $allowedSymbols = collect(explode(',', env('TRADING_ALLOWED_SYMBOLS', 'BTCIRT')))
-                ->map(fn($s) => strtoupper(trim($s)))
+            // Whitelist allowed symbols. Read from config (config/trading.php
+            // 'adjust_grid.allowed_symbols'), NOT env() directly: under
+            // `php artisan config:cache` an env() call here returns null and
+            // collapses the whitelist. The config key reads the same
+            // TRADING_ALLOWED_SYMBOLS env var (default 'BTCIRT') inside the
+            // config file, so the effective list is unchanged.
+            $allowedSymbols = collect(config('trading.adjust_grid.allowed_symbols', ['BTCIRT']))
+                ->map(fn($s) => strtoupper(trim((string) $s)))
                 ->filter()
                 ->values();
 
