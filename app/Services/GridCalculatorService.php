@@ -8,6 +8,12 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Cache;
 use App\Services\NobitexService;
 
+// NOTE: declare(strict_types=1) intentionally omitted here. Money::normalize()
+// coerces float/int inputs to safe decimal strings at all call sites, and
+// enabling strict types would change int-to-string coercion behaviour across
+// this large calculator without a proven benefit. Deferred as a documented
+// latent risk (Cleanup Phase 4).
+
 /**
  * GridCalculatorService - Professional Grid Trading Calculator
  * 
