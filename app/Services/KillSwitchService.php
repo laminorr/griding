@@ -44,6 +44,10 @@ class KillSwitchService
      */
     public function checkAndTrigger(BotConfig $bot): array
     {
+        // INTENTIONAL: no simulation guard here. The kill switch runs for
+        // simulation (paper-traded) bots too, so a paper bot halts under exactly
+        // the same conditions a live bot would — omitting the guard keeps the
+        // simulation faithful. Locked by KillSwitchServiceTest.
         $noTrigger = ['triggered' => false, 'reason' => null, 'details' => []];
 
         $stopLossSet     = $bot->stop_loss_percent !== null && (float) $bot->stop_loss_percent > 0;
@@ -104,6 +108,10 @@ class KillSwitchService
         $currentStr = Money::normalize($currentPrice);
 
         // abs((current - anchor) / anchor * 100)
+        // INTENTIONALLY symmetric: the abs() means a sharp move in EITHER
+        // direction — including an upward rally — trips the switch. It acts as a
+        // volatility circuit-breaker around the grid centre, not a directional
+        // stop-loss. Locked by KillSwitchServiceTest.
         $distancePct = Money::abs(
             Money::mul(Money::div(Money::sub($currentStr, $anchorStr), $anchorStr), '100')
         );

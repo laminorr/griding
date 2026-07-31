@@ -10,6 +10,11 @@ use Illuminate\Support\Facades\Log;
 use App\Support\Money;
 use Carbon\Carbon;
 
+// NOTE: declare(strict_types=1) intentionally omitted here. Money::normalize()
+// coerces float/int inputs to safe decimal strings at all call sites, and
+// enabling strict types would change int-to-string coercion behaviour across
+// this large model without a proven benefit. Deferred as a documented latent
+// risk (Cleanup Phase 4).
 class CompletedTrade extends Model
 {
     use HasFactory;
@@ -235,6 +240,9 @@ class CompletedTrade extends Model
      */
     public function getExecutionTimeFormattedAttribute(): ?string
     {
+        // BY DESIGN: a zero-second (same-second fill) duration returns null, so
+        // the UI shows an empty duration rather than "0s". The falsy check below
+        // treats 0 and null identically. Locked by CompletedTradeExecutionTimeFormatTest.
         if (!$this->execution_time_seconds) {
             return null;
         }
@@ -377,6 +385,12 @@ class CompletedTrade extends Model
         // سفارش‌ها خواند. منبع رسمی کارمزد، fee_bps خودِ ربات است (override در
         // سطح هر ربات) و در صورت نبود، مقدار سراسری config('trading.exchange.fee_bps').
         // fee_bps بر حسب basis point است (35 = 0.35% = 0.0035).
+        // A fee_bps of 0 is taken LITERALLY as a zero-fee configuration, not
+        // replaced by the config fallback — the ?? null-coalesce only fires on
+        // null, never on 0. Safe because the column is NOT NULL DEFAULT 35 and
+        // fee_bps is not exposed in any Filament form (Cleanup Phase 3), so an
+        // accidental 0 cannot enter via the admin UI; a deliberate 0 legitimately
+        // means zero fee.
         $feeBps  = $buyOrder->botConfig?->fee_bps ?? config('trading.exchange.fee_bps', 35);
         $feeRate = Money::div((string) $feeBps, '10000'); // bps → نرخ (35 bps = 0.0035)
 
