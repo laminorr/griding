@@ -190,6 +190,11 @@ return [
         'interval_adjust_grid'  => (int) env('TRADING_INTERVAL_ADJUST_GRID', 600),
         'align_to_minute'       => (bool) env('TRADING_SCHEDULER_ALIGN', true),
         'jitter'                => (int) env('TRADING_SCHEDULER_JITTER', 0),
+        // QueueDepthHealthCheck fires a CRITICAL log once the `jobs` backlog
+        // grows past this many rows — an early-warning guard against the
+        // one-job-per-minute worker misconfiguration silently ballooning the
+        // database queue again.
+        'queue_depth_alert_threshold' => (int) env('TRADING_QUEUE_DEPTH_ALERT', 500),
     ],
 
     /*
