@@ -291,7 +291,9 @@ $responseTime = round($healthCheck['response_time_ms'] ?? 0, 2);
                 'completedTrades as profitable_trades_count' => function ($query) {
                     $query->where('profit', '>', 0);
                 },
-                'activeGridRunOrders as active_orders_count'
+                // 'activeGridRunOrders as active_orders_count' removed in P1:
+                // System B (grid_run_orders) was retired. This count was never
+                // displayed and always 0 (grid:run never set grid_runs.bot_id).
             ])
             ->withSum('completedTrades', 'profit')
             ->with(['completedTrades' => function ($query) {

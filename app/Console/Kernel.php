@@ -10,13 +10,12 @@ use Illuminate\Foundation\Console\Kernel as ConsoleKernel;
 class Kernel extends ConsoleKernel
 {
     /**
-     * ثبت دستی کامندها (این یکی حتماً لازم است).
+     * ثبت دستی کامندها. کامندها به صورت خودکار از پوشه‌ی Commands
+     * لود می‌شوند (متد commands())، پس این آرایه خالی است.
      *
      * @var array<class-string>
      */
-    protected $commands = [
-        \App\Console\Commands\GridRunOnce::class,
-    ];
+    protected $commands = [];
 
     /**
      * زمان‌بندی دستورات.

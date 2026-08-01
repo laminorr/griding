@@ -138,11 +138,6 @@ class GridOrder extends Model
         );
     }
 
-    public function run(): BelongsTo
-    {
-        return $this->belongsTo(GridRun::class, 'run_id');
-    }
-
     public function botConfig(): BelongsTo
     {
         return $this->belongsTo(BotConfig::class, 'bot_config_id');
