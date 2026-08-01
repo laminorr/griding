@@ -37,8 +37,10 @@ class BotStatusWidget extends BaseWidget
             ->whereYear('created_at', now()->year)
             ->sum('profit');
         
-        // محاسبه آمار بیشتر
-        $activeOrders = GridOrder::where('status', 'placed')->count();
+        // محاسبه آمار بیشتر - سفارشات باز فقط برای ربات‌های فعال
+        $activeOrders = GridOrder::where('status', 'placed')
+            ->whereHas('botConfig', fn ($q) => $q->where('is_active', true))
+            ->count();
         $totalTrades = CompletedTrade::count();
         $successfulTrades = CompletedTrade::where('profit', '>', 0)->count();
         $winRate = $totalTrades > 0 ? ($successfulTrades / $totalTrades) * 100 : 0;
