@@ -38,7 +38,7 @@ class PerformanceChartWidget extends ChartWidget
         return [
             'datasets' => [
                 [
-                    'label' => 'سود/زیان تجمعی ($)',
+                    'label' => 'سود/زیان تجمعی (ریال)',
                     'data' => $data,
                     'borderColor' => $color,
                     'backgroundColor' => $color . '20',
@@ -81,7 +81,7 @@ class PerformanceChartWidget extends ChartWidget
                         'font' => [
                             'family' => 'Vazirmatn',
                         ],
-                        'callback' => "function(value) { return '$' + value.toLocaleString(); }",
+                        'callback' => "function(value) { return value.toLocaleString() + ' ریال'; }",
                     ],
                 ],
                 'x' => [

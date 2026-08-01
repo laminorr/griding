@@ -160,8 +160,8 @@ class BotIntelDashboard extends Page
             ];
         }
 
-        $buyOrders = $activeOrders->where('side', 'buy')->count();
-        $sellOrders = $activeOrders->where('side', 'sell')->count();
+        $buyOrders = $activeOrders->where('type', 'buy')->count();
+        $sellOrders = $activeOrders->where('type', 'sell')->count();
         $total = $activeOrders->count();
 
         if ($total === 0) {
@@ -250,7 +250,7 @@ class BotIntelDashboard extends Page
             $levels[] = [
                 'index' => $index++,
                 'price' => number_format($order->price, 0),
-                'side' => $order->side,
+                'side' => $order->type,
                 'amount' => $order->amount,
                 'status' => $order->status,
                 'order_id' => $order->id,
@@ -282,8 +282,8 @@ class BotIntelDashboard extends Page
             ->get()
             ->map(fn($order) => [
                 'id' => $order->id,
-                'type' => ucfirst($order->side ?? 'unknown'),
-                'side' => $order->side,
+                'type' => ucfirst($order->type ?? 'unknown'),
+                'side' => $order->type,
                 'price' => number_format($order->price, 0),
                 'amount' => number_format($order->amount, 8),
                 'time_ago' => $order->created_at->diffForHumans(),
@@ -330,8 +330,8 @@ class BotIntelDashboard extends Page
             ->whereIn('status', ['placed', 'active'])
             ->get();
 
-        $buyOrders = $activeOrders->where('side', 'buy');
-        $sellOrders = $activeOrders->where('side', 'sell');
+        $buyOrders = $activeOrders->where('type', 'buy');
+        $sellOrders = $activeOrders->where('type', 'sell');
 
         $buyCapital = $buyOrders->sum(fn($o) => $o->price * $o->amount);
         $sellCapital = $sellOrders->sum(fn($o) => $o->price * $o->amount);
@@ -383,7 +383,7 @@ class BotIntelDashboard extends Page
             ];
         }
 
-        $buyOrders = $activeOrders->where('side', 'buy')->count();
+        $buyOrders = $activeOrders->where('type', 'buy')->count();
         $totalOrders = $activeOrders->count();
 
         $buyPercent = ($buyOrders / $totalOrders) * 100;

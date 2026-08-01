@@ -92,16 +92,17 @@ class ConnectionTest extends Page
             $startTime = microtime(true);
             
             if ($this->simulationMode) {
-                // Simulation mode test
-                sleep(1); // Simulate network delay
+                // Simulation mode — the live API is intentionally not called, so
+                // there is no real latency to report. Do NOT fabricate a
+                // response-time figure; leave it null so the UI shows "--".
                 $this->connectionStatus = 'success';
-                $this->responseTime = rand(50, 200);
+                $this->responseTime = null;
                 $this->lastChecked = now()->format('Y-m-d H:i:s');
-                
+
                 Notification::make()
-                    ->title('✅ اتصال موفق (شبیه‌سازی)')
-                    ->body("زمان پاسخ: {$this->responseTime}ms - حالت تست")
-                    ->success()
+                    ->title('حالت شبیه‌سازی')
+                    ->body('در حالت شبیه‌سازی — تماس زنده انجام نشد')
+                    ->info()
                     ->duration(3000)
                     ->send();
             } else {
