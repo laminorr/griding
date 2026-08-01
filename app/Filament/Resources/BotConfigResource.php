@@ -34,7 +34,6 @@ use Filament\Support\Enums\ActionSize;
 use Filament\Support\Enums\Alignment;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\HtmlString;
-use Illuminate\Support\Facades\Cache;
 
 class BotConfigResource extends Resource
 {
@@ -170,8 +169,7 @@ class BotConfigResource extends Resource
                             ->label('قیمت مرکزی (IRR)')
                             ->numeric()
                             ->disabled()
-                            ->default(fn () => Cache::get('btc_price', 6000000000))
-                            ->helperText('تنظیم خودکار بر اساس قیمت فعلی BTC'),
+                            ->helperText('خالی بگذارید تا قیمت فعلی بازار استفاده شود'),
                         
                         TextInput::make('max_drawdown_percent')
                             ->label('حداکثر افت سرمایه')

@@ -60,14 +60,37 @@
             max-height: 400px;
             overflow-y: auto;
         }
+
+        /* --- P3 structural repair -----------------------------------------
+           The admin panel serves only Filament's precompiled stylesheet (the
+           project's Tailwind theme build is disabled), so the w-* / h-* sizing
+           utilities these icons use are absent from it. The filament icon
+           component renders each heroicon as a raw SVG whose class carries
+           those utilities — with them missing the SVG has no width/height and
+           renders unbounded (the "giant clock" empty state, and the smaller
+           icons that overlap their rows). Pin the sizes here, in this always
+           served inline style block, mirroring how Bot Monitoring keeps its
+           structure in inline CSS. */
+        .bot-intel .intel-icon     { flex: none; display: inline-block; }
+        .bot-intel .intel-icon-xs  { width: 0.875rem; height: 0.875rem; }
+        .bot-intel .intel-icon-sm  { width: 1.25rem;  height: 1.25rem; }
+        .bot-intel .intel-icon-md  { width: 2rem;     height: 2rem; }
+        .bot-intel .intel-icon-lg  { width: 3rem;     height: 3rem; }
+        .bot-intel .intel-icon-xl  { width: 4rem;     height: 4rem; }
+        .bot-intel .intel-badge    { flex: none; display: inline-flex; align-items: center; justify-content: center; }
+        .bot-intel .intel-badge-sm { width: 1.5rem; height: 1.5rem; }
+        .bot-intel .intel-badge-lg { width: 4rem;   height: 4rem; }
+        /* Card padding/radius fallbacks so sections read as cards even when
+           the panel bundle lacks p-5 / rounded-2xl. */
+        .bot-intel .intel-card     { padding: 1.25rem; border-radius: 1rem; }
     </style>
 
     {{-- Main Container - Centered and Constrained --}}
-    <div class="max-w-6xl mx-auto w-full space-y-6">
+    <div class="bot-intel max-w-6xl mx-auto w-full space-y-6">
 
         @if($selectedBot)
             {{-- A. HEADER SECTION - Floating Card --}}
-            <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm px-5 py-4">
+            <div class="intel-card bg-white dark:bg-gray-800 rounded-2xl shadow-sm">
                 <div class="flex items-center justify-between flex-wrap gap-4">
                     {{-- Left: Title & Subtitle --}}
                     <div>
@@ -107,7 +130,7 @@
             </div>
 
             {{-- B. SNAPSHOT METRICS - Floating Card with Compact Metric Strip --}}
-            <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm px-4 py-4">
+            <div class="intel-card bg-white dark:bg-gray-800 rounded-2xl shadow-sm">
                 <div class="metric-strip flex gap-4 pb-2 -mx-1 px-1">
                     @foreach($metrics as $key => $metric)
                         <div class="metric-card min-w-[180px] max-w-[220px] bg-gray-50 dark:bg-gray-900/50 border border-gray-100 dark:border-gray-700 rounded-xl px-4 py-3 flex flex-col justify-between">
@@ -118,7 +141,7 @@
                                 </p>
                                 <x-filament::icon
                                     :icon="$metric['icon']"
-                                    class="w-5 h-5 text-{{ $metric['color'] }}-500"
+                                    class="intel-icon intel-icon-sm w-5 h-5 text-{{ $metric['color'] }}-500"
                                 />
                             </div>
                             {{-- Middle: Value --}}
@@ -135,7 +158,7 @@
             </div>
 
             {{-- C. GRID MAP - Floating Card --}}
-            <div class="section-card bg-white dark:bg-gray-800 rounded-2xl shadow-sm p-5">
+            <div class="section-card intel-card bg-white dark:bg-gray-800 rounded-2xl shadow-sm">
                 <div class="mb-4">
                     <h2 class="text-sm font-semibold text-gray-800 dark:text-white">Grid Map</h2>
                     <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Active order distribution across grid levels</p>
@@ -189,7 +212,7 @@
                     <div class="text-center py-12">
                         <x-filament::icon
                             icon="heroicon-o-chart-bar-square"
-                            class="w-12 h-12 mx-auto text-gray-400"
+                            class="intel-icon intel-icon-lg w-12 h-12 mx-auto text-gray-400"
                         />
                         <p class="mt-2 text-sm text-gray-500">{{ $gridMap['message'] ?? 'No data available' }}</p>
                     </div>
@@ -199,7 +222,7 @@
             {{-- D. OPEN ORDERS & COMPLETED PAIRS - Side by Side --}}
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 {{-- Open Orders --}}
-                <div class="section-card bg-white dark:bg-gray-800 rounded-2xl shadow-sm p-5">
+                <div class="section-card intel-card bg-white dark:bg-gray-800 rounded-2xl shadow-sm">
                     <div class="mb-4">
                         <h2 class="text-sm font-semibold text-gray-800 dark:text-white">Open Orders</h2>
                         <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Recent active orders</p>
@@ -231,7 +254,7 @@
                 </div>
 
                 {{-- Completed Pairs --}}
-                <div class="section-card bg-white dark:bg-gray-800 rounded-2xl shadow-sm p-5">
+                <div class="section-card intel-card bg-white dark:bg-gray-800 rounded-2xl shadow-sm">
                     <div class="mb-4">
                         <h2 class="text-sm font-semibold text-gray-800 dark:text-white">Completed Trades</h2>
                         <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Recent completed cycles</p>
@@ -270,7 +293,7 @@
             {{-- E. RISK & DRIFT INDICATORS - Three Column Grid --}}
             <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 {{-- Capital Concentration --}}
-                <div class="section-card bg-white dark:bg-gray-800 rounded-2xl shadow-sm p-5">
+                <div class="section-card intel-card bg-white dark:bg-gray-800 rounded-2xl shadow-sm">
                     <div class="mb-4">
                         <h3 class="text-sm font-semibold text-gray-800 dark:text-white">Capital Concentration</h3>
                         <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Distribution across order types</p>
@@ -316,14 +339,14 @@
                 </div>
 
                 {{-- Grid Drift --}}
-                <div class="section-card bg-white dark:bg-gray-800 rounded-2xl shadow-sm p-5">
+                <div class="section-card intel-card bg-white dark:bg-gray-800 rounded-2xl shadow-sm">
                     <div class="mb-4">
                         <h3 class="text-sm font-semibold text-gray-800 dark:text-white">Grid Drift</h3>
                         <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Trading zone indicator</p>
                     </div>
 
                     <div class="text-center py-3">
-                        <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-{{ $gridDrift['color'] }}-100 dark:bg-{{ $gridDrift['color'] }}-900/30 mb-3">
+                        <div class="intel-badge intel-badge-lg inline-flex items-center justify-center w-16 h-16 rounded-full bg-{{ $gridDrift['color'] }}-100 dark:bg-{{ $gridDrift['color'] }}-900/30 mb-3">
                             <span class="text-xl font-bold text-{{ $gridDrift['color'] }}-600 dark:text-{{ $gridDrift['color'] }}-400">
                                 {{ round($gridDrift['position']) }}%
                             </span>
@@ -347,17 +370,17 @@
                 </div>
 
                 {{-- Stability Snapshot --}}
-                <div class="section-card bg-white dark:bg-gray-800 rounded-2xl shadow-sm p-5">
+                <div class="section-card intel-card bg-white dark:bg-gray-800 rounded-2xl shadow-sm">
                     <div class="mb-4">
                         <h3 class="text-sm font-semibold text-gray-800 dark:text-white">Stability</h3>
                         <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Error monitoring (24h)</p>
                     </div>
 
                     <div class="text-center py-3">
-                        <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-{{ $systemHealth['stability']['color'] }}-100 dark:bg-{{ $systemHealth['stability']['color'] }}-900/30 mb-3">
+                        <div class="intel-badge intel-badge-lg inline-flex items-center justify-center w-16 h-16 rounded-full bg-{{ $systemHealth['stability']['color'] }}-100 dark:bg-{{ $systemHealth['stability']['color'] }}-900/30 mb-3">
                             <x-filament::icon
                                 :icon="$systemHealth['stability']['errors_24h'] === 0 ? 'heroicon-o-check-circle' : 'heroicon-o-exclamation-triangle'"
-                                class="w-8 h-8 text-{{ $systemHealth['stability']['color'] }}-600 dark:text-{{ $systemHealth['stability']['color'] }}-400"
+                                class="intel-icon intel-icon-md w-8 h-8 text-{{ $systemHealth['stability']['color'] }}-600 dark:text-{{ $systemHealth['stability']['color'] }}-400"
                             />
                         </div>
                         <p class="text-sm font-medium text-gray-900 dark:text-white">{{ $systemHealth['stability']['value'] }}</p>
@@ -375,7 +398,7 @@
             </div>
 
             {{-- F. SYSTEM HEALTH - Floating Card --}}
-            <div class="section-card bg-white dark:bg-gray-800 rounded-2xl shadow-sm p-5">
+            <div class="section-card intel-card bg-white dark:bg-gray-800 rounded-2xl shadow-sm">
                 <div class="mb-4">
                     <h2 class="text-sm font-semibold text-gray-800 dark:text-white">System Health</h2>
                     <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Infrastructure and connectivity status</p>
@@ -401,7 +424,7 @@
             </div>
 
             {{-- G. ACTIVITY TIMELINE - Floating Card --}}
-            <div class="section-card bg-white dark:bg-gray-800 rounded-2xl shadow-sm p-5">
+            <div class="section-card intel-card bg-white dark:bg-gray-800 rounded-2xl shadow-sm">
                 <div class="mb-4">
                     <h2 class="text-sm font-semibold text-gray-800 dark:text-white">Activity Timeline</h2>
                     <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Recent bot activity and events</p>
@@ -413,10 +436,10 @@
                             <div class="relative flex gap-3">
                                 {{-- Icon with connector line --}}
                                 <div class="relative flex-shrink-0">
-                                    <div class="w-6 h-6 rounded-full bg-{{ $log['color'] }}-100 dark:bg-{{ $log['color'] }}-900/30 flex items-center justify-center">
+                                    <div class="intel-badge intel-badge-sm w-6 h-6 rounded-full bg-{{ $log['color'] }}-100 dark:bg-{{ $log['color'] }}-900/30 flex items-center justify-center">
                                         <x-filament::icon
                                             :icon="$log['icon']"
-                                            class="w-3.5 h-3.5 text-{{ $log['color'] }}-600 dark:text-{{ $log['color'] }}-400"
+                                            class="intel-icon intel-icon-xs w-3.5 h-3.5 text-{{ $log['color'] }}-600 dark:text-{{ $log['color'] }}-400"
                                         />
                                     </div>
                                     @if(!$loop->last)
@@ -482,7 +505,7 @@
                     <div class="text-center py-12">
                         <x-filament::icon
                             icon="heroicon-o-clock"
-                            class="w-12 h-12 mx-auto text-gray-400"
+                            class="intel-icon intel-icon-lg mx-auto text-gray-400"
                         />
                         <p class="mt-2 text-sm text-gray-500">No activity logs yet</p>
                     </div>
@@ -491,11 +514,11 @@
 
         @else
             {{-- No bot selected state --}}
-            <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm p-12">
+            <div class="intel-card bg-white dark:bg-gray-800 rounded-2xl shadow-sm p-12">
                 <div class="text-center">
                     <x-filament::icon
                         icon="heroicon-o-cpu-chip"
-                        class="w-16 h-16 mx-auto text-gray-400"
+                        class="intel-icon intel-icon-xl mx-auto text-gray-400"
                     />
                     <p class="mt-4 text-lg font-medium text-gray-900 dark:text-white">No Bot Selected</p>
                     <p class="mt-1 text-sm text-gray-500">Please create a bot configuration to view the dashboard</p>
