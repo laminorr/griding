@@ -273,15 +273,7 @@ class AdjustGridJob implements ShouldQueue
                     $diff = $sync->diff($plan, $existing, 1, 3.0);
 
                     // 4) Apply changes with bot_id context
-                    if (method_exists($exec, 'applyForBot')) {
-                        $exec->applyForBot($bot->id, $diff, simulation: $simulate, role: 'rebalance');
-                    } else {
-                        $exec->apply($diff, simulation: $simulate);
-                        Log::channel('trading')->warning('USING_UNSCOPED_APPLY', [
-                            'bot_id' => $bot->id,
-                            'message' => 'GridOrderExecutor::applyForBot not implemented'
-                        ]);
-                    }
+                    $exec->applyForBot($bot->id, $diff, simulation: $simulate, role: 'rebalance');
 
                     Log::channel('trading')->info('ADJUST_GRID_BOT_COMPLETE', [
                         'bot_id' => $bot->id,
