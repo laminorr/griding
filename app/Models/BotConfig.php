@@ -5,13 +5,12 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\HasMany;
-use Illuminate\Database\Eloquent\Relations\HasManyThrough;
 use Illuminate\Support\Facades\Log;
 
 /**
  * مدل تنظیمات ربات (BotConfig)
  * - شامل فیلدهای نسل جدید + فیلدهای قدیمی برای سازگاری
- * - ریلیشن با GridRun و GridRunOrder
+ * - ریلیشن با GridOrder و CompletedTrade (System A)
  * - اسکوپ‌ها، پراپرتی‌های محاسباتی، اکشن‌های ساده start/stop
  */
 class BotConfig extends Model
@@ -174,52 +173,17 @@ class BotConfig extends Model
     // ========= Relations =========
 
     /**
-     * اجرای‌ها (Grid Runs) مربوط به این ربات.
-     */
-    public function gridRuns(): HasMany
-    {
-        // از string استفاده می‌کنیم تا اگر مدل‌ها ناموجود بودند، Parse Error ندهد.
-        return $this->hasMany('App\Models\GridRun', 'bot_id');
-    }
-
-    /**
-     * سفارش‌های اجرای گرید از طریق GridRun.
-     */
-    public function gridRunOrders(): HasManyThrough
-    {
-        return $this->hasManyThrough(
-            'App\Models\GridRunOrder', // مدل مقصد
-            'App\Models\GridRun',      // مدل میانی
-            'bot_id',                  // FK در GridRun که به این مدل وصل است
-            'run_id',                  // FK در GridRunOrder که به GridRun وصل است
-            'id',                      // PK این مدل
-            'id'                       // PK مدل میانی
-        );
-    }
-
-    /**
      * سفارش‌های گرید مستقیم مربوط به این ربات (grid_orders table).
      * این جدول دارای bot_config_id است و نیازی به hasManyThrough ندارد.
+     *
+     * نکته: ریلیشن‌های System B (gridRuns / gridRunOrders / activeGridRunOrders
+     * که از جدول‌های grid_runs / grid_run_orders می‌خواندند) در فاز P1 حذف شدند.
+     * آن سیستم (grid:run) بازنشسته شد و هرگز bot_id را ست نمی‌کرد، پس آن
+     * ریلیشن‌ها همیشه خالی بودند.
      */
     public function gridOrders(): HasMany
     {
         return $this->hasMany(GridOrder::class, 'bot_config_id');
-    }
-
-    /**
-     * سفارش‌های فعال (placed) از طریق GridRun.
-     * این ریلیشن برای جلوگیری از ambiguous column در کوئری‌ها استفاده می‌شود.
-     */
-    public function activeGridRunOrders(): HasManyThrough
-    {
-        return $this->hasManyThrough(
-            'App\Models\GridRunOrder',
-            'App\Models\GridRun',
-            'bot_id',      // FK on grid_runs
-            'run_id',      // FK on grid_run_orders
-            'id',          // Local key on bot_configs
-            'id'           // Local key on grid_runs
-        )->where('grid_run_orders.status', 'placed');
     }
 
     /**
@@ -265,22 +229,10 @@ class BotConfig extends Model
      */
     public function getStatusAttribute(): string
     {
-        if (! $this->is_active) {
-            return 'متوقف';
-        }
-
-        // اگر اجرای جاری/اخیر داریم، وضعیت آن را منعکس کنیم
-        $lastRun = $this->gridRuns()->latest('started_at')->first();
-        if ($lastRun) {
-            return match ($lastRun->status) {
-                'running' => 'در حال اجرا',
-                'ok'      => 'فعال',
-                'failed'  => 'خطا در اجرا',
-                default   => 'فعال',
-            };
-        }
-
-        return 'فعال';
+        // System B (grid_runs) بازنشسته شد؛ پیش‌تر آخرین GridRun را نگاه می‌کردیم،
+        // اما grid:run هرگز bot_id را ست نمی‌کرد پس lastRun همیشه null بود و این
+        // اکسسور همیشه بین «متوقف» و «فعال» برمی‌گرداند. همان رفتار حفظ شده است.
+        return $this->is_active ? 'فعال' : 'متوقف';
     }
 
     /**
@@ -295,16 +247,6 @@ class BotConfig extends Model
             'متوقف'       => 'gray',
             default       => 'primary',
         };
-    }
-
-    /**
-     * تعداد سفارش‌های «Active» (با نگاه به جدول grid_run_orders).
-     */
-    public function getActiveOrdersCountAttribute(): int
-    {
-        return (int) $this->gridRunOrders()
-            ->where('status', 'Active')
-            ->count();
     }
 
     /**
@@ -416,8 +358,9 @@ class BotConfig extends Model
             'stopped_at' => now(),
         ])->save();
 
-        // اگر بخواهید سفارش‌های Active را نرم‌لغو کنید (بسته به منطق‌تان):
-        // $this->gridRunOrders()->where('status','Active')->update(['status'=>'Cancelled']);
+        // لغو نرم سفارش‌های باز در System A از طریق CheckTradesJob/AdjustGridJob
+        // انجام می‌شود؛ منطق قبلی به grid_run_orders (System B، بازنشسته) اشاره
+        // داشت و حذف شد.
 
         return true;
     }

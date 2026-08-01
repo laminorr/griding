@@ -640,7 +640,6 @@ class AdminPanelProvider extends PanelProvider
             ->pages([
                 Pages\Dashboard::class,
                 \App\Filament\Pages\ConnectionTest::class,
-                \App\Filament\Pages\GridCalculator::class,
                 \App\Filament\Pages\Notes::class,
             ])
             ->discoverWidgets(in: app_path('Filament/Widgets'), for: 'App\\Filament\\Widgets')
