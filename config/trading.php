@@ -194,6 +194,26 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | AdjustGridJob rebalance
+    |--------------------------------------------------------------------------
+    | Dedicated (deliberately NARROWER) symbol whitelist for AdjustGridJob's
+    | rebalance pass — it defaults to BTCIRT only, unlike exchange.allowed_symbols
+    | (BTCIRT,ETHIRT,USDTIRT). env() is read HERE, inside the config file, which
+    | is the correct place: under `php artisan config:cache` an env() call from
+    | inside the job would return null and collapse the whitelist. Same env var
+    | (TRADING_ALLOWED_SYMBOLS) and default the job used before, so behaviour is
+    | unchanged — only the read site moved.
+    */
+    'adjust_grid' => [
+        'allowed_symbols' => array_values(
+            array_filter(
+                array_map('trim', explode(',', (string) env('TRADING_ALLOWED_SYMBOLS', 'BTCIRT')))
+            )
+        ),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Feature flags & Logging
     |--------------------------------------------------------------------------
     */
