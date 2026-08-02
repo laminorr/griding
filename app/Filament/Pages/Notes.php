@@ -123,7 +123,7 @@ class Notes extends Page implements HasForms
                 ->label($this->isCreating ? 'ذخیره یادداشت' : 'یادداشت جدید')
                 ->icon($this->isCreating ? 'heroicon-o-check' : 'heroicon-o-plus')
                 ->color($this->isCreating ? 'success' : 'primary')
-                ->size('lg')
+                ->size('sm')
                 ->action($this->isCreating ? 'saveNote' : 'startCreating')
                 ->keyBindings(['command+n', 'ctrl+n']),
                 
@@ -137,7 +137,7 @@ class Notes extends Page implements HasForms
             Action::make('export')
                 ->label('صادرات')
                 ->icon('heroicon-o-arrow-down-tray')
-                ->color('info')
+                ->color('gray')
                 ->action('exportNotes'),
                 
             Action::make('clear_all')

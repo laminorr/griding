@@ -15,9 +15,9 @@ class BotMonitoring extends Page
 
     protected static string $view = 'filament.pages.bot-monitoring';
 
-    protected static ?string $navigationLabel = 'Bot Monitoring';
+    protected static ?string $navigationLabel = 'مانیتورینگ زنده';
 
-    protected static ?string $title = 'Grid Trading Bot Monitoring';
+    protected static ?string $title = 'مانیتورینگ زنده';
 
     protected static ?int $navigationSort = 2;
 
