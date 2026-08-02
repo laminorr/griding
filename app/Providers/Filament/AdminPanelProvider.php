@@ -59,6 +59,13 @@ class AdminPanelProvider extends PanelProvider
             ->databaseNotificationsPolling('30s')
             ->unsavedChangesAlerts()
             // ->viteTheme('resources/css/filament/admin/theme.css')
+            // Compact "admin / terminal" design system (Phase P4). Single source
+            // of truth for shared tokens + reusable classes; applies to every
+            // panel page. See resources/views/filament/theme/admin-terminal.blade.php
+            ->renderHook(
+                'panels::styles.after',
+                fn (): string => view('filament.theme.admin-terminal')->render()
+            )
             ->renderHook(
                 'panels::styles.after',
                 fn (): string => '
