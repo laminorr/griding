@@ -1,7 +1,13 @@
-<div class="rounded-xl bg-white shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10">
-    {{-- Header --}}
-    <div class="flex items-center justify-between px-4 py-3 border-b border-gray-950/5 dark:border-white/10">
-        <h3 class="text-sm font-semibold text-gray-950 dark:text-white">وضعیت WebSocket</h3>
+{{--
+    Phase P4 (part 1) demo tile: this widget's shell now uses the shared
+    compact "admin / terminal" design-system classes (.metric-card,
+    .metric-label, .metric-value, .panel-section) as a live proof that the
+    tokens load. The table below is left as-is; the full rollout is part 2.
+--}}
+<div class="metric-card" style="padding: 0; overflow: hidden;">
+    {{-- Header (panel-section head) --}}
+    <div class="panel-section__head">
+        <span class="metric-label" style="margin: 0;">وضعیت WebSocket</span>
         @if ($error === null && $health !== null)
             @php
                 $overallEmoji = match ($health['status']) {
@@ -10,12 +16,21 @@
                     'down'   => '🔴',
                     default  => '⚪',
                 };
+                $activeCount = collect($rows)->where('status', 'active')->count();
             @endphp
-            <span class="inline-flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
+            <span class="inline-flex items-center" style="gap: var(--at-gap-xs); color: var(--at-muted); font-size: var(--at-fs-label);">
                 {{ $overallEmoji }} {{ $health['label'] }}
             </span>
         @endif
     </div>
+
+    @if ($error === null && $health !== null)
+        {{-- Demo metric: active vs total monitored symbols --}}
+        <div style="padding: var(--at-gap-md); border-bottom: 1px solid var(--at-border);">
+            <span class="metric-label">نمادهای فعال</span>
+            <span class="metric-value {{ $activeCount > 0 ? 'pos' : '' }}">{{ $activeCount }} / {{ count($rows) }}</span>
+        </div>
+    @endif
 
     @if ($error !== null)
         {{-- Error fallback --}}
