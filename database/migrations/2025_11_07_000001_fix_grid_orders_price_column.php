@@ -7,6 +7,14 @@ return new class extends Migration
 {
     public function up(): void
     {
+        // Raw MySQL-only DDL (MODIFY COLUMN / ADD CONSTRAINT). sqlite — used by
+        // the fresh test schema (RefreshDatabase) — supports neither and would
+        // abort the replay, so no-op there. The create migration already made
+        // `price` a decimal(20,0); sqlite is dynamically typed regardless.
+        if (DB::connection()->getDriverName() !== 'mysql') {
+            return;
+        }
+
         // Ensure price column is DECIMAL(20,0) with no decimal places
         DB::statement('ALTER TABLE grid_orders MODIFY COLUMN price DECIMAL(20,0) NOT NULL');
 
@@ -20,6 +28,10 @@ return new class extends Migration
 
     public function down(): void
     {
+        if (DB::connection()->getDriverName() !== 'mysql') {
+            return;
+        }
+
         DB::statement('ALTER TABLE grid_orders DROP CONSTRAINT IF EXISTS chk_price_positive');
         // Don't revert column type - keep decimal(20,0)
     }
