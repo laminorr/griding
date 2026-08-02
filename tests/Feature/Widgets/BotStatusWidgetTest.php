@@ -76,15 +76,18 @@ final class BotStatusWidgetTest extends TestCase
 
         $stats = $this->statsByLabel();
 
-        // Bots tile: 1 active of 2 total (reads bot_configs, System A).
-        $this->assertStringContainsString('1 از 2', (string) $stats['وضعیت ربات‌ها']->getValue());
+        // Bots tile: 1 active of 2 total (reads bot_configs, System A). P4-final:
+        // the tiles now render Persian digits (۰-۹), a display-only transform —
+        // the underlying counts are unchanged, so the assertions just expect the
+        // Persian glyphs.
+        $this->assertStringContainsString('۱ از ۲', (string) $stats['وضعیت ربات‌ها']->getValue());
 
         // Capital tile: total = 70M, active = 40M — neither hardcoded to zero.
         $capitalValue = (string) $stats['سرمایه کل']->getValue();
-        $this->assertStringContainsString('70,000,000', $capitalValue);
-        $this->assertStringContainsString('40,000,000', (string) $stats['سرمایه کل']->getDescription());
+        $this->assertStringContainsString('۷۰,۰۰۰,۰۰۰', $capitalValue);
+        $this->assertStringContainsString('۴۰,۰۰۰,۰۰۰', (string) $stats['سرمایه کل']->getDescription());
 
         // Active-orders tile: only the active bot's 3 placed orders count.
-        $this->assertSame('3', (string) $stats['سفارشات فعال']->getValue());
+        $this->assertSame('۳', (string) $stats['سفارشات فعال']->getValue());
     }
 }

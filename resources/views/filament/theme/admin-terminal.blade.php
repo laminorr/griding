@@ -11,6 +11,48 @@
     correct in the panel's Persian right-to-left layout.
 --}}
 <style>
+    /* =====================================================================
+       Vazirmatn — the panel typeface (nicer / far more readable than the
+       system stack for Persian). Declared here in the theme partial so the
+       whole panel has one authoritative font source; the weights we actually
+       use are 400 / 500 / 700. Loaded from a CDN @font-face (jsDelivr, from the
+       rastikerdar/vazirmatn release) so nothing needs a host install or build
+       step. The panel itself is set to Vazirmatn via ->font('Vazirmatn') and a
+       global font-family rule in AdminPanelProvider, so Filament's own
+       components (sidebar, tables, forms, buttons) render in it too — these
+       @font-face rules just guarantee the glyphs are available. */
+    @font-face {
+        font-family: 'Vazirmatn';
+        font-style: normal;
+        font-weight: 400;
+        font-display: swap;
+        src: url('https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/fonts/webfonts/Vazirmatn-Regular.woff2') format('woff2');
+    }
+    @font-face {
+        font-family: 'Vazirmatn';
+        font-style: normal;
+        font-weight: 500;
+        font-display: swap;
+        src: url('https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/fonts/webfonts/Vazirmatn-Medium.woff2') format('woff2');
+    }
+    @font-face {
+        font-family: 'Vazirmatn';
+        font-style: normal;
+        font-weight: 700;
+        font-display: swap;
+        src: url('https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/fonts/webfonts/Vazirmatn-Bold.woff2') format('woff2');
+    }
+
+    /* Belt-and-suspenders: assert Vazirmatn on our own design-system classes
+       (metric tiles, cards, section titles) with the agreed fallback stack. The
+       .at-mono utility is re-asserted afterwards so numeric/JSON blocks keep a
+       monospaced face. */
+    .metric-card, .metric-label, .metric-value, .metric-sub,
+    .panel-section, .panel-section__title, .data-table,
+    .at-badge, .at-btn, .at-kv__k, .at-kv__v, .at-page-head__title {
+        font-family: 'Vazirmatn', system-ui, sans-serif;
+    }
+
     :root {
         /* ---- Background layers (cohesive dark NAVY terminal) ----
            The panel chrome (sidebar / page) is Filament's Slate dark scale, a
@@ -36,12 +78,16 @@
         --at-text: #E6EAF0;          /* near-white, not pure white */
         --at-text-dim: #AEB7C4;
 
-        /* ---- Typography scale (small & dense) ---- */
-        --at-fs-label: 10.5px;       /* tiny uppercase labels */
-        --at-fs-body: 12.5px;        /* base body / rows */
-        --at-fs-metric: 17px;        /* the numbers — larger, not huge */
-        --at-fs-title: 13px;         /* section titles */
-        --at-ls-label: 0.08em;       /* letter-spacing for uppercase labels */
+        /* ---- Typography scale (dense layout, READABLE text) ----
+           P4-final: the boxes/gaps stay tight (spacing tokens below are
+           unchanged), but the type was bumped back up from the earlier
+           "miniature" pass to a comfortable-but-compact scale — labels legible,
+           metric numbers prominent. Dense layout, readable fonts. */
+        --at-fs-label: 11.5px;       /* small uppercase labels — readable */
+        --at-fs-body: 13.5px;        /* base body / rows — comfortable */
+        --at-fs-metric: 20px;        /* the numbers — prominent, not huge */
+        --at-fs-title: 14px;         /* section titles */
+        --at-ls-label: 0.07em;       /* letter-spacing for uppercase labels */
 
         /* ---- Spacing scale (very tight — ~30-40% denser than before) ----
            Every card / section / row derives its padding + gaps from these, so
@@ -248,7 +294,7 @@
         margin-block-end: var(--at-gap-md);
     }
     .at-page-head__title {
-        font-size: 15px;
+        font-size: 16px;
         font-weight: 700;
         color: var(--at-text);
         margin: 0;
@@ -413,8 +459,8 @@
        touching their PHP. All scoped to Filament's own classes.
        ===================================================================== */
 
-    /* Page + widget headings: no more oversized hero titles */
-    .fi-header-heading { font-size: 15px !important; font-weight: 700 !important; }
+    /* Page + widget headings: compact but readable (not hero-sized) */
+    .fi-header-heading { font-size: 16px !important; font-weight: 700 !important; }
     .fi-header-subheading { font-size: var(--at-fs-label) !important; color: var(--at-muted) !important; }
     .fi-section-header-heading { font-size: var(--at-fs-title) !important; }
 

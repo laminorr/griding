@@ -25,11 +25,11 @@
                     </div>
                     <div class="metric-card is-row">
                         <span class="metric-label">زمان پاسخ</span>
-                        <span class="metric-value" style="direction: ltr;">{{ $responseTime ? $responseTime . 'ms' : '—' }}</span>
+                        <span class="metric-value" style="direction: ltr;">{{ $responseTime ? \Illuminate\Support\Str::faDigits($responseTime . 'ms') : '—' }}</span>
                     </div>
                     <div class="metric-card is-row">
                         <span class="metric-label">آخرین بررسی</span>
-                        <span class="metric-value">{{ $lastChecked ? \Carbon\Carbon::parse($lastChecked)->diffForHumans() : 'هنوز بررسی نشده' }}</span>
+                        <span class="metric-value">{{ $lastChecked ? \Illuminate\Support\Str::faDigits(\Carbon\Carbon::parse($lastChecked)->diffForHumans()) : 'هنوز بررسی نشده' }}</span>
                     </div>
                     <div class="metric-card is-row">
                         <span class="metric-label">حالت</span>
@@ -51,17 +51,17 @@
                 </div>
                 <div class="at-kv">
                     <span class="at-kv__k">قیمت بیت‌کوین</span>
-                    <span class="at-kv__v at-num {{ $btcPrice ? 'pos' : '' }}">{{ $btcPrice ?: 'نامشخص' }}</span>
+                    <span class="at-kv__v at-num {{ $btcPrice ? 'pos' : '' }}">{{ $btcPrice ? \Illuminate\Support\Str::faDigits($btcPrice) : 'نامشخص' }}</span>
                 </div>
 
                 @if($accountBalance)
                     <div class="at-kv">
                         <span class="at-kv__k">موجودی BTC</span>
-                        <span class="at-kv__v at-num">{{ $accountBalance['btc'] }}</span>
+                        <span class="at-kv__v at-num">@fa($accountBalance['btc'])</span>
                     </div>
                     <div class="at-kv">
                         <span class="at-kv__k">موجودی ریال (IRR)</span>
-                        <span class="at-kv__v at-num">{{ $accountBalance['irt'] }}</span>
+                        <span class="at-kv__v at-num">@fa($accountBalance['irt'])</span>
                     </div>
                 @endif
             </div>

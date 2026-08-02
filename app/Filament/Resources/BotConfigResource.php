@@ -32,6 +32,7 @@ use Filament\Notifications\Notification;
 use Filament\Support\Enums\FontWeight;
 use Filament\Support\Enums\ActionSize;
 use Filament\Support\Enums\Alignment;
+use Illuminate\Support\Str;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\HtmlString;
 
@@ -248,8 +249,9 @@ class BotConfigResource extends Resource
                         $sign = $state >= 0 ? '+' : '';
                         $color = $state >= 0 ? 'var(--at-pos)' : 'var(--at-neg)';
 
+                        $profit = Str::faDigits($sign . number_format($state, 0));
                         return new HtmlString("
-                            <div class='text-center' style='direction:ltr;font-weight:700;color:{$color};font-variant-numeric:tabular-nums;'>{$sign}" . number_format($state, 0) . " IRR</div>
+                            <div class='text-center' style='direction:ltr;font-weight:700;color:{$color};font-variant-numeric:tabular-nums;'>{$profit} IRR</div>
                         ");
                     })
                     ->sortable()
@@ -259,7 +261,7 @@ class BotConfigResource extends Resource
                 TextColumn::make('completed_trades_count')
                     ->label('معاملات')
                     ->formatStateUsing(function ($state) {
-                        $state = $state ?? 0;
+                        $state = Str::faDigits($state ?? 0);
                         return new HtmlString("
                             <div class='text-center' style='font-size:12.5px;'>
                                 <span style='font-weight:700;color:var(--at-text);'>{$state}</span>
@@ -282,8 +284,8 @@ class BotConfigResource extends Resource
                             'sell' => 'فروش',
                             default => 'دوطرفه',
                         };
-                        $levels  = (int) $record->grid_levels;
-                        $spacing = rtrim(rtrim((string) $record->grid_spacing, '0'), '.');
+                        $levels  = Str::faDigits((int) $record->grid_levels);
+                        $spacing = Str::faDigits(rtrim(rtrim((string) $record->grid_spacing, '0'), '.'));
 
                         return new HtmlString("
                             <div class='text-center' style='font-size:12.5px;color:var(--at-text-dim);'>
@@ -315,10 +317,12 @@ class BotConfigResource extends Resource
                             default      => 'var(--at-neg)',
                         };
 
+                        $stateFa      = Str::faDigits($state);
+                        $gridLevelsFa = Str::faDigits($record->grid_levels);
                         return new HtmlString("
                             <div class='text-center' style='font-size:12.5px;'>
-                                <span style='font-weight:700;color:{$color};'>{$state}</span>
-                                <span style='color:var(--at-muted);'> از {$record->grid_levels}</span>
+                                <span style='font-weight:700;color:{$color};'>{$stateFa}</span>
+                                <span style='color:var(--at-muted);'> از {$gridLevelsFa}</span>
                             </div>
                         ");
                     })
@@ -331,10 +335,12 @@ class BotConfigResource extends Resource
                         return ($record->total_capital * $record->active_capital_percent) / 100;
                     })
                     ->formatStateUsing(function ($state, $record) {
+                        $activeCapitalFa = Str::faDigits(number_format($state, 0));
+                        $percentFa       = Str::faDigits($record->active_capital_percent);
                         return new HtmlString("
                             <div class='text-center' style='font-size:12.5px;direction:ltr;'>
-                                <span style='font-weight:600;color:var(--at-pos);font-variant-numeric:tabular-nums;'>" . number_format($state, 0) . " IRR</span>
-                                <span style='color:var(--at-muted);'> · {$record->active_capital_percent}%</span>
+                                <span style='font-weight:600;color:var(--at-pos);font-variant-numeric:tabular-nums;'>{$activeCapitalFa} IRR</span>
+                                <span style='color:var(--at-muted);'> · {$percentFa}%</span>
                             </div>
                         ");
                     })
@@ -345,8 +351,9 @@ class BotConfigResource extends Resource
                 TextColumn::make('total_capital')
                     ->label('سرمایه کل')
                     ->formatStateUsing(function ($state) {
+                        $totalCapitalFa = Str::faDigits(number_format($state, 0));
                         return new HtmlString("
-                            <div class='text-center' style='direction:ltr;font-weight:600;color:var(--at-text);font-variant-numeric:tabular-nums;'>" . number_format($state, 0) . " IRR</div>
+                            <div class='text-center' style='direction:ltr;font-weight:600;color:var(--at-text);font-variant-numeric:tabular-nums;'>{$totalCapitalFa} IRR</div>
                         ");
                     })
                     ->sortable()
@@ -371,8 +378,9 @@ class BotConfigResource extends Resource
                             default      => 'var(--at-neg)',
                         };
 
+                        $lockedFa = Str::faDigits(number_format($locked, 0));
                         return new HtmlString("
-                            <div class='text-center' style='direction:ltr;font-weight:700;color:{$color};font-variant-numeric:tabular-nums;'>" . number_format($locked, 0) . " IRR</div>
+                            <div class='text-center' style='direction:ltr;font-weight:700;color:{$color};font-variant-numeric:tabular-nums;'>{$lockedFa} IRR</div>
                         ");
                     })
                     ->alignment(Alignment::Center),
@@ -397,9 +405,10 @@ class BotConfigResource extends Resource
                             default => 'var(--at-neg)'
                         };
 
+                        $winRateFa = Str::faDigits($state);
                         return new HtmlString("
                             <div class='text-center' style='font-size:12.5px;'>
-                                <span style='font-weight:700;color:{$color};'>{$state}%</span>
+                                <span style='font-weight:700;color:{$color};'>{$winRateFa}%</span>
                                 <span style='color:var(--at-muted);'> موفقیت</span>
                             </div>
                         ");

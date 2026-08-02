@@ -4,20 +4,25 @@ declare(strict_types=1);
 
 namespace Tests\Feature\Filament;
 
-use App\Filament\Pages\BotIntelDashboard;
+use App\Filament\Pages\BotMonitoring;
 use Database\Factories\BotConfigFactory;
 use Database\Factories\GridOrderFactory;
 use Tests\Concerns\BuildsGridSchema;
 use Tests\TestCase;
 
 /**
- * Phase P2 Fix 1 — BotIntelDashboard grouped by a non-existent `side` column.
+ * Phase P2 Fix 1 — the side-metrics grouped by a non-existent `side` column.
  *
  * grid_orders has no `side` column; the buy/sell dimension lives in `type`
  * (enum buy/sell — see the create_grid_orders migration and GridOrder). Every
  * metric that split orders by side (grid health, capital concentration, grid
  * drift) filtered on `where('side', ...)`, which matched nothing, so the buy
  * and sell buckets were always empty even with real orders.
+ *
+ * P4-final note: these metrics were relocated verbatim from the former
+ * BotIntelDashboard into BotMonitoring when the two status pages were merged
+ * into one «مانیتورینگ زنده». The assertions are unchanged — only the class
+ * under test moved with the code.
  *
  * This test builds a bot with real buy + sell placed grid_orders and asserts
  * the type-based metrics now bucket them correctly. Against the pre-fix
@@ -49,7 +54,7 @@ final class BotIntelDashboardSideMetricsTest extends TestCase
         GridOrderFactory::new()->buy()->placed()->create(['bot_config_id' => $bot->id]);
         GridOrderFactory::new()->sell()->placed()->create(['bot_config_id' => $bot->id]);
 
-        $page = new BotIntelDashboard();
+        $page = new BotMonitoring();
         $page->selectedBot = $bot->fresh();
 
         // Capital concentration must see 2 buys and 1 sell — proof the `type`

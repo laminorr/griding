@@ -1,14 +1,29 @@
 {{--
-    Bot Monitoring — Phase P4 (part 2): dense, live "trading-terminal" view.
+    Bot Monitoring — Phase P4-final: the merged «مانیتورینگ زنده» page.
 
-    ROLE: real-time / live. Emphasises what is happening right now across the
-    ACTIVE bots — open orders, in-flight cycles and the latest event stream —
-    using the shared compact design system (.panel-section, .metric-card,
-    .data-table, .at-*). The heavy glass-card / neon chrome is gone; density is
-    the point. Data comes untouched from BotMonitoring::getBotData().
+    ROLE: the single status page. The former «هوش ربات» (Bot Intelligence) page
+    was merged in here, so this page now carries BOTH:
+      1. the LIVE fleet view (Alpine, self-refreshing) — open orders, in-flight
+         cycles and the latest event stream across the active bots, and
+      2. the DEEP single-bot analytics (Livewire, bot-picker-driven) folded in
+         from Bot Intelligence — grid map, capital concentration, grid drift,
+         stability and completed pairs for one selected bot.
+    The duplicate sections the two pages shared (open-orders + event stream) are
+    kept ONCE, in the live view. Every data method is untouched — the analytics
+    methods moved over verbatim from BotIntelDashboard.
+
+    Numbers are shown with Persian digits (۰-۹): server-rendered values via the
+    @fa directive, client-rendered (Alpine) values via the faDigits() helper
+    defined below. Display-only — no metric or value is recomputed.
 --}}
 <x-filament-panels::page>
-    <div x-data="botMonitoring()" x-init="init()" class="at-stack">
+
+    {{-- =================================================================
+         LIVE FLEET VIEW (Alpine, self-refreshing). wire:ignore keeps its
+         Alpine state + DOM intact across the analytics picker's Livewire
+         round-trips below.
+         ================================================================= --}}
+    <div wire:ignore x-data="botMonitoring()" x-init="init()" class="at-stack" style="margin-block-end: var(--at-gap-lg);">
 
         {{-- Live header --}}
         <div class="at-page-head">
@@ -51,14 +66,14 @@
                                     <p class="panel-section__title" x-text="bot.name"></p>
                                     <p class="panel-section__sub">
                                         <span class="at-mono" x-text="bot.symbol"></span>
-                                        <span> · </span><span x-text="bot.grid_levels + ' سطح'"></span>
-                                        <span> · </span><span x-text="'فاصله ' + (bot.grid_spacing * 100).toFixed(1) + '%'"></span>
+                                        <span> · </span><span x-text="faDigits(bot.grid_levels) + ' سطح'"></span>
+                                        <span> · </span><span x-text="'فاصله ' + faDigits((bot.grid_spacing * 100).toFixed(1)) + '%'"></span>
                                     </p>
                                 </div>
                             </div>
                             <div class="at-row" style="flex-wrap: wrap; justify-content: flex-end;">
                                 <span class="at-badge pos"><span class="at-dot pos"></span>فعال</span>
-                                <span class="at-badge muted" x-text="'بررسی: ' + (bot.last_check_at || 'هرگز')"></span>
+                                <span class="at-badge muted" x-text="'بررسی: ' + faDigits(bot.last_check_at || 'هرگز')"></span>
                             </div>
                         </div>
 
@@ -71,14 +86,14 @@
                                 </div>
                                 <div class="metric-card">
                                     <span class="metric-label">سفارشات فعال</span>
-                                    <span class="metric-value" x-text="bot.active_orders.length"></span>
+                                    <span class="metric-value" x-text="faDigits(bot.active_orders.length)"></span>
                                     {{-- Active-vs-filled context: a filled level + its just-placed
                                          opposite is why "active" can read one below grid_levels. --}}
-                                    <span class="metric-sub" x-text="(bot.debug.total_filled || 0) + ' پرشده · ' + bot.grid_levels + ' سطح'"></span>
+                                    <span class="metric-sub" x-text="faDigits(bot.debug.total_filled || 0) + ' پرشده · ' + faDigits(bot.grid_levels) + ' سطح'"></span>
                                 </div>
                                 <div class="metric-card">
                                     <span class="metric-label">معاملات ۲۴ ساعت</span>
-                                    <span class="metric-value" x-text="bot.completed_trades_24h"></span>
+                                    <span class="metric-value" x-text="faDigits(bot.completed_trades_24h)"></span>
                                     <span class="metric-sub">تکمیل‌شده</span>
                                 </div>
                                 <div class="metric-card">
@@ -87,16 +102,16 @@
                                           style="direction: ltr; text-align: start;"
                                           x-text="(bot.profit_24h >= 0 ? '+' : '') + formatNum(bot.profit_24h)"></span>
                                     <span class="metric-sub" :class="bot.profit_change_24h >= 0 ? 'pos' : 'neg'"
-                                          x-text="(bot.profit_change_24h >= 0 ? '▲ ' : '▼ ') + Math.abs(bot.profit_change_24h) + '%'"></span>
+                                          x-text="(bot.profit_change_24h >= 0 ? '▲ ' : '▼ ') + faDigits(Math.abs(bot.profit_change_24h)) + '%'"></span>
                                 </div>
                                 <div class="metric-card">
                                     <span class="metric-label">چرخه‌های کامل</span>
-                                    <span class="metric-value" x-text="bot.total_cycles || 0"></span>
+                                    <span class="metric-value" x-text="faDigits(bot.total_cycles || 0)"></span>
                                     <span class="metric-sub">از خرید تا فروش</span>
                                 </div>
                                 <div class="metric-card">
                                     <span class="metric-label">پُر شده ۲۴ ساعت</span>
-                                    <span class="metric-value" x-text="bot.filled_24h || 0"></span>
+                                    <span class="metric-value" x-text="faDigits(bot.filled_24h || 0)"></span>
                                     <span class="metric-sub">سفارش اجرا شد</span>
                                 </div>
                             </div>
@@ -110,7 +125,7 @@
                         <div class="panel-section">
                             <div class="panel-section__head">
                                 <span class="panel-section__title">سفارش‌های باز</span>
-                                <span class="at-badge muted" x-text="bot.active_orders.length + ' سفارش'"></span>
+                                <span class="at-badge muted" x-text="faDigits(bot.active_orders.length) + ' سفارش'"></span>
                             </div>
                             <div class="at-scroll" style="max-height: 320px;">
                                 <table class="data-table">
@@ -130,7 +145,7 @@
                                                           x-text="order.type === 'buy' ? 'خرید' : 'فروش'"></span>
                                                 </td>
                                                 <td class="at-num" x-text="formatNum(order.price)"></td>
-                                                <td class="at-num at-t-dim" x-text="order.amount"></td>
+                                                <td class="at-num at-t-dim" x-text="faDigits(order.amount)"></td>
                                                 <td>
                                                     <span class="at-badge" :class="order.paired_order_id ? '' : 'muted'"
                                                           x-text="order.paired_order_id ? '🔗 جفت‌شده' : '⏳ در انتظار'"></span>
@@ -154,7 +169,7 @@
                                 <div class="at-stack-sm">
                                     <div class="metric-card is-row">
                                         <span class="metric-label">چرخه کامل‌شده</span>
-                                        <span class="metric-value" x-text="bot.total_cycles || 0"></span>
+                                        <span class="metric-value" x-text="faDigits(bot.total_cycles || 0)"></span>
                                     </div>
                                     <div class="metric-card is-row">
                                         <span class="metric-label">میانگین مدت</span>
@@ -162,7 +177,7 @@
                                     </div>
                                     <div class="metric-card is-row">
                                         <span class="metric-label">نرخ موفقیت</span>
-                                        <span class="metric-value pos" x-text="(bot.total_cycles > 0 ? '100' : '0') + '%'"></span>
+                                        <span class="metric-value pos" x-text="faDigits(bot.total_cycles > 0 ? '100' : '0') + '%'"></span>
                                     </div>
                                 </div>
 
@@ -212,12 +227,12 @@
                                     <span class="metric-label">میانگین پاسخ API</span>
                                     <span class="metric-value" :class="bot.activity_summary.avg_api_latency > 1000 ? 'at-t-warn' : 'pos'"
                                           style="direction: ltr;"
-                                          x-text="bot.activity_summary.avg_api_latency.toFixed(0) + 'ms'"></span>
+                                          x-text="faDigits(bot.activity_summary.avg_api_latency.toFixed(0)) + 'ms'"></span>
                                     <span class="metric-sub">نوبیتکس</span>
                                 </div>
                                 <div class="metric-card is-row">
                                     <span class="metric-label">چرخه‌ها ۲۴ ساعت</span>
-                                    <span class="metric-value" x-text="bot.activity_summary.cycles_count_24h"></span>
+                                    <span class="metric-value" x-text="faDigits(bot.activity_summary.cycles_count_24h)"></span>
                                     <span class="metric-sub">اجرای CheckTrades</span>
                                 </div>
                             </div>
@@ -227,16 +242,16 @@
                         <div class="at-row" style="flex-wrap: wrap; padding: var(--at-gap-sm) var(--at-gap-md); border-block-end: 1px solid var(--at-border);"
                              x-show="bot.activity_cycles && bot.activity_cycles.length > 0">
                             <button type="button" class="at-btn" :class="activeFilter === 'all' ? 'at-btn--accent' : ''" @click="activeFilter = 'all'">
-                                همه <span class="at-t-muted" x-text="'(' + bot.activity_cycles.length + ')'"></span>
+                                همه <span class="at-t-muted" x-text="'(' + faDigits(bot.activity_cycles.length) + ')'"></span>
                             </button>
                             <button type="button" class="at-btn" :class="activeFilter === 'errors' ? 'at-btn--accent' : ''" @click="activeFilter = 'errors'">
-                                خطاها <span class="at-t-muted" x-text="'(' + getErrorCyclesCount(bot.activity_cycles) + ')'"></span>
+                                خطاها <span class="at-t-muted" x-text="'(' + faDigits(getErrorCyclesCount(bot.activity_cycles)) + ')'"></span>
                             </button>
                             <button type="button" class="at-btn" :class="activeFilter === 'api' ? 'at-btn--accent' : ''" @click="activeFilter = 'api'">
-                                API <span class="at-t-muted" x-text="'(' + getApiCallsCount(bot.activity_cycles) + ')'"></span>
+                                API <span class="at-t-muted" x-text="'(' + faDigits(getApiCallsCount(bot.activity_cycles)) + ')'"></span>
                             </button>
                             <button type="button" class="at-btn" :class="activeFilter === 'cycles' ? 'at-btn--accent' : ''" @click="activeFilter = 'cycles'">
-                                چرخه‌ها <span class="at-t-muted" x-text="'(' + bot.activity_cycles.filter(c => c.status !== 'ungrouped').length + ')'"></span>
+                                چرخه‌ها <span class="at-t-muted" x-text="'(' + faDigits(bot.activity_cycles.filter(c => c.status !== 'ungrouped').length) + ')'"></span>
                             </button>
                         </div>
 
@@ -260,9 +275,9 @@
                                                 <div class="at-row at-t-muted" style="gap: var(--at-gap-xs); font-size: var(--at-fs-label); margin-block-start: 2px; flex-wrap: wrap;">
                                                     <span x-text="formatTimeAgo(cycle.started_at_iso)"></span>
                                                     <span x-show="cycle.duration_ms" class="at-mono" x-text="'· ' + formatCycleDuration(cycle.duration_ms)"></span>
-                                                    <span x-show="cycle.summary.api_calls > 0" x-text="'· ' + cycle.summary.api_calls + ' API'"></span>
-                                                    <span x-show="cycle.summary.orders_active > 0" x-text="'· ' + cycle.summary.orders_active + ' سفارش'"></span>
-                                                    <span x-show="cycle.summary.errors > 0" class="at-t-neg" x-text="'· ' + cycle.summary.errors + ' خطا'"></span>
+                                                    <span x-show="cycle.summary.api_calls > 0" x-text="'· ' + faDigits(cycle.summary.api_calls) + ' API'"></span>
+                                                    <span x-show="cycle.summary.orders_active > 0" x-text="'· ' + faDigits(cycle.summary.orders_active) + ' سفارش'"></span>
+                                                    <span x-show="cycle.summary.errors > 0" class="at-t-neg" x-text="'· ' + faDigits(cycle.summary.errors) + ' خطا'"></span>
                                                 </div>
                                             </div>
                                         </div>
@@ -274,7 +289,7 @@
                                             <div class="at-kv" style="align-items: baseline;">
                                                 <span class="at-badge muted" style="min-inline-size: 64px; justify-content: center;" x-text="eventTag(event.type)"></span>
                                                 <span style="flex: 1; text-align: start; margin-inline: var(--at-gap-sm); font-size: var(--at-fs-body); color: var(--at-text-dim);" x-text="event.message"></span>
-                                                <span x-show="event.type === 'API_CALL' && event.execution_time" class="at-t-warn at-mono" style="font-size: var(--at-fs-label);" x-text="(event.execution_time || 0) + 'ms'"></span>
+                                                <span x-show="event.type === 'API_CALL' && event.execution_time" class="at-t-warn at-mono" style="font-size: var(--at-fs-label);" x-text="faDigits(event.execution_time || 0) + 'ms'"></span>
                                                 <span class="at-mono at-t-muted" style="font-size: var(--at-fs-label);"
                                                       x-text="new Date(event.time_iso).toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })"></span>
                                             </div>
@@ -293,13 +308,13 @@
                         </div>
                         <div x-show="debugOpen" x-collapse class="panel-section__body">
                             <div class="metric-grid">
-                                <div class="metric-card is-row"><span class="metric-label">کل Orders</span><span class="metric-value" x-text="bot.debug.total_orders"></span></div>
-                                <div class="metric-card is-row"><span class="metric-label">active/placed</span><span class="metric-value" x-text="bot.debug.total_with_status_active"></span></div>
-                                <div class="metric-card is-row"><span class="metric-label">fill نشده</span><span class="metric-value" x-text="bot.debug.total_not_executed"></span></div>
-                                <div class="metric-card is-row"><span class="metric-label">pair نشده</span><span class="metric-value" x-text="bot.debug.total_not_paired"></span></div>
-                                <div class="metric-card is-row"><span class="metric-label">fill شده</span><span class="metric-value" x-text="bot.debug.total_filled"></span></div>
-                                <div class="metric-card is-row"><span class="metric-label">Completed Trades</span><span class="metric-value pos" x-text="bot.debug.completed_trades_total"></span></div>
-                                <div class="metric-card is-row"><span class="metric-label">Trades ۲۴ ساعت</span><span class="metric-value pos" x-text="bot.debug.completed_trades_24h_actual"></span></div>
+                                <div class="metric-card is-row"><span class="metric-label">کل Orders</span><span class="metric-value" x-text="faDigits(bot.debug.total_orders)"></span></div>
+                                <div class="metric-card is-row"><span class="metric-label">active/placed</span><span class="metric-value" x-text="faDigits(bot.debug.total_with_status_active)"></span></div>
+                                <div class="metric-card is-row"><span class="metric-label">fill نشده</span><span class="metric-value" x-text="faDigits(bot.debug.total_not_executed)"></span></div>
+                                <div class="metric-card is-row"><span class="metric-label">pair نشده</span><span class="metric-value" x-text="faDigits(bot.debug.total_not_paired)"></span></div>
+                                <div class="metric-card is-row"><span class="metric-label">fill شده</span><span class="metric-value" x-text="faDigits(bot.debug.total_filled)"></span></div>
+                                <div class="metric-card is-row"><span class="metric-label">Completed Trades</span><span class="metric-value pos" x-text="faDigits(bot.debug.completed_trades_total)"></span></div>
+                                <div class="metric-card is-row"><span class="metric-label">Trades ۲۴ ساعت</span><span class="metric-value pos" x-text="faDigits(bot.debug.completed_trades_24h_actual)"></span></div>
                                 <div class="metric-card is-row"><span class="metric-label">سود کل</span><span class="metric-value pos" style="direction: ltr;" x-text="formatNum(bot.debug.profit_total)"></span><span class="metric-sub">ریال</span></div>
                             </div>
                         </div>
@@ -310,8 +325,245 @@
         </div>
     </div>
 
+    {{-- =================================================================
+         DEEP SINGLE-BOT ANALYTICS (folded in from «هوش ربات»). Livewire /
+         bot-picker driven: grid map, capital concentration, grid drift,
+         stability and completed pairs for the selected bot. Open-orders and
+         the event stream are intentionally NOT repeated here — the live view
+         above owns them.
+         ================================================================= --}}
+    @php
+        $availableBots        = $this->getAvailableBots();
+        $gridMap              = $this->getGridMapData();
+        $completedPairs       = $this->getCompletedPairs();
+        $capitalConcentration = $this->getCapitalConcentration();
+        $gridDrift            = $this->getGridDrift();
+        $systemHealth         = $this->getSystemHealth();
+
+        // Filament semantic colour → terminal tone (accent / red / amber / muted).
+        $tone = fn (?string $c): string => [
+            'success' => 'pos', 'primary' => 'pos', 'info' => 'pos',
+            'danger'  => 'neg', 'warning' => 'warn',
+        ][$c] ?? 'muted';
+    @endphp
+
+    <div class="at-stack">
+        <div class="at-page-head">
+            <div>
+                <p class="at-page-head__title">تحلیل تک‌ربات</p>
+                <p class="at-page-head__sub">تمرکز سرمایه، انحراف، پایداری و نقشه گرید ربات انتخاب‌شده</p>
+            </div>
+            <div class="at-page-head__aside">
+                @if($availableBots->isNotEmpty())
+                    <select wire:model.live="selectedBotId" class="at-select">
+                        @foreach($availableBots as $bot)
+                            <option value="{{ $bot['id'] }}">{{ $bot['name'] }} ({{ $bot['symbol'] }})</option>
+                        @endforeach
+                    </select>
+                    @if($selectedBot)
+                        <span class="at-badge {{ $selectedBot->is_active ? 'pos' : 'muted' }}">
+                            <span class="at-dot {{ $selectedBot->is_active ? 'pos' : 'muted' }}"></span>
+                            {{ $selectedBot->is_active ? 'فعال' : 'متوقف' }}
+                        </span>
+                    @endif
+                @else
+                    <span class="at-t-muted">هیچ رباتی پیکربندی نشده</span>
+                @endif
+            </div>
+        </div>
+
+        @if($selectedBot)
+            {{-- Grid Map --}}
+            <div class="panel-section">
+                <div class="panel-section__head">
+                    <div>
+                        <span class="panel-section__title">نقشه گرید</span>
+                        <p class="panel-section__sub">توزیع سفارش‌های فعال در سطوح گرید</p>
+                    </div>
+                    @if($gridMap['has_data'] ?? false)
+                        <span class="at-badge muted">@fa($gridMap['total_levels']) سطح</span>
+                    @endif
+                </div>
+
+                @if($gridMap['has_data'] ?? false)
+                    <div class="panel-section__body" style="padding-block: var(--at-gap-sm);">
+                        <div class="at-row" style="justify-content: space-between; gap: var(--at-gap-md);">
+                            <span class="at-kv__k">بالا: <span class="at-num at-t-dim">@fa($gridMap['top_price']) IRT</span></span>
+                            <span class="at-kv__k">پایین: <span class="at-num at-t-dim">@fa($gridMap['bottom_price']) IRT</span></span>
+                        </div>
+                    </div>
+                    <div class="at-scroll" style="max-height: 320px;">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>سطح</th>
+                                    <th class="at-num">قیمت (IRT)</th>
+                                    <th class="at-num">مقدار</th>
+                                    <th>سمت</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach($gridMap['levels'] as $level)
+                                    <tr>
+                                        <td class="at-t-muted">L@fa($level['index'])</td>
+                                        <td class="at-num at-mono">@fa($level['price'])</td>
+                                        <td class="at-num at-t-dim">@fa($level['amount'])</td>
+                                        <td>
+                                            <span class="at-badge {{ $level['side'] === 'buy' ? 'pos' : 'neg' }}">
+                                                {{ $level['side'] === 'buy' ? 'خرید' : 'فروش' }}
+                                            </span>
+                                        </td>
+                                    </tr>
+                                @endforeach
+                            </tbody>
+                        </table>
+                    </div>
+                @else
+                    <div class="at-empty">
+                        <div class="at-empty__icon">▦</div>
+                        {{ $gridMap['message'] ?? 'داده‌ای موجود نیست' }}
+                    </div>
+                @endif
+            </div>
+
+            {{-- Completed Pairs --}}
+            <div class="panel-section">
+                <div class="panel-section__head">
+                    <div>
+                        <span class="panel-section__title">معاملات تکمیل‌شده</span>
+                        <p class="panel-section__sub">چرخه‌های تکمیل‌شده اخیر</p>
+                    </div>
+                </div>
+                @if($completedPairs->isNotEmpty())
+                    <table class="data-table">
+                        <thead>
+                            <tr><th>#</th><th class="at-num">خرید → فروش</th><th class="at-num">سود</th><th class="at-num">مدت</th></tr>
+                        </thead>
+                        <tbody>
+                            @foreach($completedPairs as $pair)
+                                <tr>
+                                    <td class="at-mono at-t-muted">{{ $pair['id'] }}</td>
+                                    <td class="at-num at-mono at-t-dim">@fa($pair['buy_price']) → @fa($pair['sell_price'])</td>
+                                    <td class="at-num {{ $pair['is_profitable'] ? 'pos' : 'neg' }}">@fa($pair['profit_formatted'])</td>
+                                    <td class="at-num at-t-muted">@fa($pair['duration'])</td>
+                                </tr>
+                            @endforeach
+                        </tbody>
+                    </table>
+                @else
+                    <div class="at-empty">هنوز معامله‌ای تکمیل نشده</div>
+                @endif
+            </div>
+
+            {{-- Risk & Drift: concentration | drift | stability --}}
+            <div class="at-cols-3">
+                {{-- Capital Concentration --}}
+                <div class="panel-section">
+                    <div class="panel-section__head">
+                        <div>
+                            <span class="panel-section__title">تمرکز سرمایه</span>
+                            <p class="panel-section__sub">توزیع بین انواع سفارش</p>
+                        </div>
+                    </div>
+                    <div class="panel-section__body at-stack-sm">
+                        {{-- Buy --}}
+                        <div>
+                            <div class="at-row" style="justify-content: space-between;">
+                                <span class="at-kv__k">سفارش‌های خرید</span>
+                                <span class="at-t-pos" style="font-size: var(--at-fs-label);">@fa($capitalConcentration['buy']['percent'])%</span>
+                            </div>
+                            <div class="at-bar" style="margin-block: 4px;"><div class="at-bar__fill" style="inline-size: {{ min(100, $capitalConcentration['buy']['percent']) }}%;"></div></div>
+                            <p class="at-kv__k">@fa($capitalConcentration['buy']['count']) سفارش · @fa($capitalConcentration['buy']['capital']) IRT</p>
+                        </div>
+                        {{-- Sell --}}
+                        <div>
+                            <div class="at-row" style="justify-content: space-between;">
+                                <span class="at-kv__k">سفارش‌های فروش</span>
+                                <span class="at-t-neg" style="font-size: var(--at-fs-label);">@fa($capitalConcentration['sell']['percent'])%</span>
+                            </div>
+                            <div class="at-bar" style="margin-block: 4px;"><div class="at-bar__fill neg" style="inline-size: {{ min(100, $capitalConcentration['sell']['percent']) }}%;"></div></div>
+                            <p class="at-kv__k">@fa($capitalConcentration['sell']['count']) سفارش · @fa($capitalConcentration['sell']['capital']) IRT</p>
+                        </div>
+                        {{-- Free --}}
+                        <div>
+                            <div class="at-row" style="justify-content: space-between;">
+                                <span class="at-kv__k">سرمایه آزاد</span>
+                                <span class="at-t-muted" style="font-size: var(--at-fs-label);">@fa($capitalConcentration['free']['percent'])%</span>
+                            </div>
+                            <div class="at-bar" style="margin-block: 4px;"><div class="at-bar__fill muted" style="inline-size: {{ min(100, $capitalConcentration['free']['percent']) }}%;"></div></div>
+                            <p class="at-kv__k">@fa($capitalConcentration['free']['capital']) IRT قابل استفاده</p>
+                        </div>
+                    </div>
+                </div>
+
+                {{-- Grid Drift --}}
+                <div class="panel-section">
+                    <div class="panel-section__head">
+                        <div>
+                            <span class="panel-section__title">انحراف گرید</span>
+                            <p class="panel-section__sub">شاخص ناحیه معاملاتی</p>
+                        </div>
+                    </div>
+                    <div class="panel-section__body">
+                        <div style="text-align: center;">
+                            <span class="metric-value {{ $tone($gridDrift['color'] ?? null) === 'pos' ? 'pos' : '' }} {{ $tone($gridDrift['color'] ?? null) === 'warn' ? 'at-t-warn' : '' }}"
+                                  style="font-size: 26px;">@fa(round($gridDrift['position']))%</span>
+                            <p style="font-size: var(--at-fs-body); color: var(--at-text); margin-block-start: var(--at-gap-xs);">{{ $gridDrift['status'] }}</p>
+                            <p class="at-kv__k">{{ $gridDrift['description'] }}</p>
+                        </div>
+                        <div style="margin-block-start: var(--at-gap-md);">
+                            <div class="at-row at-kv__k" style="justify-content: space-between;">
+                                <span>پایین</span><span>بالا</span>
+                            </div>
+                            <div class="at-bar" style="block-size: 8px; margin-block-start: 4px;">
+                                <div style="position: absolute; inset-block: 0; inset-inline-start: {{ min(100, max(0, $gridDrift['position'])) }}%; inline-size: 3px; background: var(--at-accent); border-radius: 2px; transform: translateX(-50%);"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                {{-- Stability --}}
+                <div class="panel-section">
+                    <div class="panel-section__head">
+                        <div>
+                            <span class="panel-section__title">پایداری</span>
+                            <p class="panel-section__sub">پایش خطا (۲۴ ساعت)</p>
+                        </div>
+                    </div>
+                    <div class="panel-section__body">
+                        <div style="text-align: center;">
+                            <span class="at-dot {{ $tone($systemHealth['stability']['color'] ?? null) }}" style="width: 12px; height: 12px; margin-block-end: var(--at-gap-sm);"></span>
+                            <p style="font-size: var(--at-fs-body); color: var(--at-text);">{{ $systemHealth['stability']['value'] }}</p>
+                            <p class="at-kv__k">@fa($systemHealth['stability']['errors_24h']) خطا در ۲۴ ساعت گذشته</p>
+                        </div>
+                        @if($systemHealth['stability']['errors_24h'] > 0)
+                            <p class="at-kv__k at-t-warn" style="margin-block-start: var(--at-gap-sm); text-align: center;">برای جزئیات، خط زمانی فعالیت را در بخش زنده بالا بررسی کنید</p>
+                        @endif
+                    </div>
+                </div>
+            </div>
+        @else
+            <div class="panel-section">
+                <div class="at-empty" style="padding: var(--at-gap-lg);">
+                    <div class="at-empty__icon">🤖</div>
+                    <p style="color: var(--at-text); font-size: var(--at-fs-body);">رباتی برای تحلیل انتخاب نشده است</p>
+                    <p class="at-kv__k">برای مشاهده تحلیل، یک ربات پیکربندی کنید</p>
+                </div>
+            </div>
+        @endif
+    </div>
+
     @push('scripts')
     <script>
+        // Persian-digit display helper for all client-rendered (Alpine) numbers.
+        // Display-only: rewrites the 0-9 glyphs to ۰-۹ and leaves everything else
+        // (separators, signs, units, Latin text) untouched.
+        window.faDigits = function (value) {
+            if (value === null || value === undefined) return '';
+            const map = ['۰','۱','۲','۳','۴','۵','۶','۷','۸','۹'];
+            return String(value).replace(/[0-9]/g, d => map[d]);
+        };
+
         function botMonitoring() {
             return {
                 bots: [],
@@ -326,6 +578,7 @@
                 },
 
                 tick() {
+                    // fa-IR locale already renders Persian digits.
                     this.clock = new Date().toLocaleString('fa-IR');
                 },
 
@@ -345,14 +598,14 @@
 
                 formatNum(v) {
                     if (v === null || v === undefined || isNaN(v)) return '—';
-                    return Math.round(v).toLocaleString('en-US');
+                    return faDigits(Math.round(v).toLocaleString('en-US'));
                 },
 
                 formatDuration(minutes) {
                     if (!minutes || minutes === 0) return '۰';
-                    if (minutes < 60) return Math.round(minutes) + ' دقیقه';
-                    if (minutes < 1440) return (minutes / 60).toFixed(1) + ' ساعت';
-                    return (minutes / 1440).toFixed(1) + ' روز';
+                    if (minutes < 60) return faDigits(Math.round(minutes)) + ' دقیقه';
+                    if (minutes < 1440) return faDigits((minutes / 60).toFixed(1)) + ' ساعت';
+                    return faDigits((minutes / 1440).toFixed(1)) + ' روز';
                 },
 
                 formatTimeAgo(dateString) {
@@ -361,9 +614,9 @@
                     const now = new Date();
                     const seconds = Math.floor((now - date) / 1000);
                     if (seconds < 60) return 'چند لحظه پیش';
-                    if (seconds < 3600) return Math.floor(seconds / 60) + ' دقیقه پیش';
-                    if (seconds < 86400) return Math.floor(seconds / 3600) + ' ساعت پیش';
-                    if (seconds < 604800) return Math.floor(seconds / 86400) + ' روز پیش';
+                    if (seconds < 3600) return faDigits(Math.floor(seconds / 60)) + ' دقیقه پیش';
+                    if (seconds < 86400) return faDigits(Math.floor(seconds / 3600)) + ' ساعت پیش';
+                    if (seconds < 604800) return faDigits(Math.floor(seconds / 86400)) + ' روز پیش';
                     return date.toLocaleDateString('fa-IR', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
                 }
             }
@@ -432,10 +685,10 @@
                 formatCycleDuration(durationMs) {
                     if (!durationMs || durationMs === 0) return '0s';
                     const seconds = durationMs / 1000;
-                    if (seconds < 1) return durationMs.toFixed(0) + 'ms';
-                    if (seconds < 60) return seconds.toFixed(1) + 's';
-                    if (seconds < 3600) return (seconds / 60).toFixed(1) + 'm';
-                    return (seconds / 3600).toFixed(1) + 'h';
+                    if (seconds < 1) return faDigits(durationMs.toFixed(0)) + 'ms';
+                    if (seconds < 60) return faDigits(seconds.toFixed(1)) + 's';
+                    if (seconds < 3600) return faDigits((seconds / 60).toFixed(1)) + 'm';
+                    return faDigits((seconds / 3600).toFixed(1)) + 'h';
                 },
 
                 formatTimeAgo(dateString) {
@@ -444,10 +697,10 @@
                     const now = new Date();
                     const seconds = Math.floor((now - date) / 1000);
                     if (seconds < 10) return 'چند لحظه پیش';
-                    if (seconds < 60) return seconds + ' ثانیه پیش';
-                    if (seconds < 3600) return Math.floor(seconds / 60) + ' دقیقه پیش';
-                    if (seconds < 86400) return Math.floor(seconds / 3600) + ' ساعت پیش';
-                    if (seconds < 604800) return Math.floor(seconds / 86400) + ' روز پیش';
+                    if (seconds < 60) return faDigits(seconds) + ' ثانیه پیش';
+                    if (seconds < 3600) return faDigits(Math.floor(seconds / 60)) + ' دقیقه پیش';
+                    if (seconds < 86400) return faDigits(Math.floor(seconds / 3600)) + ' ساعت پیش';
+                    if (seconds < 604800) return faDigits(Math.floor(seconds / 86400)) + ' روز پیش';
                     return date.toLocaleDateString('fa-IR', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
                 }
             }

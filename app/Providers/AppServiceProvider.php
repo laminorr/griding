@@ -12,7 +12,9 @@ use App\Contracts\RateLimiter;
 use App\Services\RateLimiting\CacheRateLimiter;
 use App\Models\GridOrder;
 use App\Observers\GridOrderObserver;
+use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -44,9 +46,40 @@ class AppServiceProvider extends ServiceProvider
         // values for decisions yet.
         GridOrder::observe(GridOrderObserver::class);
 
+        $this->registerPersianDigits();
+
         if ($this->app->runningInConsole()) {
             $this->validateCacheDriverForOnOneServer();
         }
+    }
+
+    /**
+     * Persian-digit display helper (P4-final).
+     *
+     * The panel is a Persian RTL UI, so human-facing numbers should read as
+     * ۰-۹ rather than 0-9. This is a DISPLAY-ONLY transform — it rewrites the
+     * ASCII digit glyphs of an already-formatted string and touches nothing
+     * else (thousands separators, signs, units and any Latin text pass
+     * through untouched), so no metric or calculation is affected.
+     *
+     *   Str::faDigits('۱۰۰,۰۰۰')  → used in Filament column formatters / widgets
+     *   @fa($value)               → used inside Blade views
+     *
+     * Machine-readable strings (API URLs, copyable IDs) are intentionally left
+     * Latin at the call sites, per the design intent.
+     */
+    private function registerPersianDigits(): void
+    {
+        Str::macro('faDigits', function ($value): string {
+            return strtr((string) $value, [
+                '0' => '۰', '1' => '۱', '2' => '۲', '3' => '۳', '4' => '۴',
+                '5' => '۵', '6' => '۶', '7' => '۷', '8' => '۸', '9' => '۹',
+            ]);
+        });
+
+        Blade::directive('fa', fn (string $expression): string =>
+            "<?php echo \\Illuminate\\Support\\Str::faDigits($expression); ?>"
+        );
     }
 
     /**
