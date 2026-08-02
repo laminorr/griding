@@ -12,12 +12,17 @@
 --}}
 <style>
     :root {
-        /* ---- Background layers (near-black terminal) ---- */
-        --at-bg: #0B0F14;            /* app background, near-black */
-        --at-surface: #121821;       /* cards, a touch lighter */
-        --at-surface-2: #1A222E;     /* nested / hover surface */
-        --at-border: rgba(148, 163, 184, 0.12);  /* thin, low-contrast divider */
-        --at-border-strong: rgba(148, 163, 184, 0.20);
+        /* ---- Background layers (cohesive dark NAVY terminal) ----
+           The panel chrome (sidebar / page) is Filament's Slate dark scale, a
+           blue-tinted navy. The surface tokens below sit on the SAME navy
+           ladder — a step lighter each rung — so cards no longer read as a
+           neutral-gray patch against the navy shell. Values chosen between the
+           deep-navy background and a neutral slate, biased blue. */
+        --at-bg: #0B1220;            /* darkest navy — matches the page shell */
+        --at-surface: #141D30;       /* cards — one navy step lighter, NOT gray */
+        --at-surface-2: #1E2A42;     /* nested / hover — a further navy step up */
+        --at-border: rgba(122, 142, 176, 0.16);  /* thin navy-gray hairline */
+        --at-border-strong: rgba(122, 142, 176, 0.26);
 
         /* ---- Accent (single soft-neon green) ---- */
         --at-accent: #34D399;        /* chosen green: emerald-400 / mint-neon */
@@ -38,11 +43,14 @@
         --at-fs-title: 13px;         /* section titles */
         --at-ls-label: 0.08em;       /* letter-spacing for uppercase labels */
 
-        /* ---- Spacing scale (tight, 4px base) ---- */
-        --at-gap-xs: 4px;
-        --at-gap-sm: 8px;
-        --at-gap-md: 12px;
-        --at-gap-lg: 16px;
+        /* ---- Spacing scale (very tight — ~30-40% denser than before) ----
+           Every card / section / row derives its padding + gaps from these, so
+           shrinking them here tightens the whole panel's vertical rhythm at
+           once. Denser is the point. */
+        --at-gap-xs: 3px;   /* was 4  */
+        --at-gap-sm: 5px;   /* was 8  */
+        --at-gap-md: 8px;   /* was 12 */
+        --at-gap-lg: 11px;  /* was 16 */
 
         /* ---- Radius (small) & shadow (minimal) ---- */
         --at-radius: 5px;
@@ -71,12 +79,12 @@
     .metric-label {
         display: block;
         font-size: var(--at-fs-label);
-        line-height: 1.4;
+        line-height: 1.25;
         font-weight: 600;
         text-transform: uppercase;
         letter-spacing: var(--at-ls-label);
         color: var(--at-muted);
-        margin-block-end: var(--at-gap-xs);
+        margin-block-end: 2px;
     }
 
     /* The number */
@@ -95,12 +103,40 @@
     .metric-sub {
         display: block;
         font-size: var(--at-fs-label);
-        line-height: 1.4;
+        line-height: 1.3;
         color: var(--at-text-dim);
-        margin-block-start: var(--at-gap-xs);
+        margin-block-start: 2px;
     }
     .metric-sub.pos { color: var(--at-pos); }
     .metric-sub.neg { color: var(--at-neg); }
+
+    /* ---- Single-line metric-card variant (label ⟷ value on ONE row) ----
+       For dense stat lines that must NOT stack: the label sits on the start
+       edge, the value (and any sub, as a muted inline suffix) is pushed to the
+       end edge — a terminal stat line like "میانگین زمان چرخه … 0s".
+       Used for the non-headline KV grids; the big headline tiles keep stacking. */
+    .metric-card.is-row {
+        display: flex;
+        align-items: baseline;
+        gap: var(--at-gap-xs);
+        padding: 5px var(--at-gap-sm);
+    }
+    .metric-card.is-row .metric-label {
+        margin-block-end: 0;
+        margin-inline-end: auto;   /* pushes label to start, rest to the end */
+        white-space: nowrap;
+    }
+    .metric-card.is-row .metric-value {
+        display: inline;
+        font-size: var(--at-fs-body);  /* stat-line size, not the big tile size */
+        line-height: 1.2;
+        text-align: end;
+    }
+    .metric-card.is-row .metric-sub {
+        display: inline;
+        margin-block-start: 0;
+        color: var(--at-muted);        /* sub reads as a muted suffix, not a new line */
+    }
 
     /* Section wrapper with a small header row + thin divider */
     .panel-section {
@@ -272,7 +308,7 @@
         text-decoration: none;
         transition: background .15s ease, border-color .15s ease;
     }
-    .at-btn:hover { background: #212b39; }
+    .at-btn:hover { background: #26344F; }
     .at-btn svg { width: 15px; height: 15px; flex: none; }
     .at-btn--accent {
         background: var(--at-accent-dim);
@@ -431,6 +467,29 @@
     }
     .fi-ta-cell { padding-block: var(--at-gap-xs) !important; }
     .fi-ta-text-item-label { font-size: var(--at-fs-body) !important; }
+    /* Row height: trim the vertical padding on the row wrapper too */
+    .fi-ta-row .fi-ta-cell { padding-block: var(--at-gap-xs) !important; }
     /* Small, unified action-button sizing across pages */
     .fi-ta-actions .fi-icon-btn { --size: 1.75rem; }
+
+    /* Header action buttons (Grid Bots list "ربات جدید", "شروع همه" …) —
+       shrink from Filament's default lg chrome to the dense scale so the list
+       header matches the cards + metric tiles. Colour semantics (success /
+       danger) are kept; only size + radius are retightened. */
+    .fi-header-actions .fi-btn,
+    .fi-ta-header-toolbar .fi-btn {
+        --tw-ring-offset-width: 0px !important;
+        font-size: var(--at-fs-body) !important;
+        font-weight: 600 !important;
+        padding-block: 5px !important;
+        padding-inline: 10px !important;
+        border-radius: var(--at-radius-sm) !important;
+        gap: var(--at-gap-xs) !important;
+    }
+    .fi-header-actions .fi-btn .fi-btn-icon,
+    .fi-ta-header-toolbar .fi-btn .fi-btn-icon { block-size: 1rem !important; inline-size: 1rem !important; }
+
+    /* Resource table cells: keep numeric columns LTR + tabular even in the RTL
+       table, matching the custom pages. */
+    .fi-ta-cell .at-num { direction: ltr; }
 </style>

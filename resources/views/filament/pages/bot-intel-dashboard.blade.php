@@ -287,12 +287,12 @@
                     <div class="metric-grid">
                         @foreach($systemHealth as $key => $health)
                             @if($key !== 'stability')
-                                <div class="metric-card">
+                                <div class="metric-card is-row">
                                     <span class="metric-label">
                                         <span class="at-dot {{ $tone($health['color'] ?? null) }}"></span>
                                         {{ $health['label'] }}
                                     </span>
-                                    <span class="at-kv__v" style="display: block; margin-block-start: 4px;">{{ $health['value'] }}</span>
+                                    <span class="metric-value" style="font-size: var(--at-fs-body);">{{ $health['value'] }}</span>
                                 </div>
                             @endif
                         @endforeach

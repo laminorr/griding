@@ -72,7 +72,9 @@
                                 <div class="metric-card">
                                     <span class="metric-label">سفارشات فعال</span>
                                     <span class="metric-value" x-text="bot.active_orders.length"></span>
-                                    <span class="metric-sub">در انتظار</span>
+                                    {{-- Active-vs-filled context: a filled level + its just-placed
+                                         opposite is why "active" can read one below grid_levels. --}}
+                                    <span class="metric-sub" x-text="(bot.debug.total_filled || 0) + ' پرشده · ' + bot.grid_levels + ' سطح'"></span>
                                 </div>
                                 <div class="metric-card">
                                     <span class="metric-label">معاملات ۲۴ ساعت</span>
@@ -149,22 +151,22 @@
                                 <span class="panel-section__title">وضعیت چرخه</span>
                             </div>
                             <div class="panel-section__body">
-                                <div class="metric-grid">
-                                    <div class="metric-card">
+                                <div class="at-stack-sm">
+                                    <div class="metric-card is-row">
                                         <span class="metric-label">چرخه کامل‌شده</span>
                                         <span class="metric-value" x-text="bot.total_cycles || 0"></span>
                                     </div>
-                                    <div class="metric-card">
+                                    <div class="metric-card is-row">
                                         <span class="metric-label">میانگین مدت</span>
-                                        <span class="metric-value" style="direction: ltr; text-align: start;" x-text="formatDuration(bot.avg_cycle_duration || 0)"></span>
+                                        <span class="metric-value" style="direction: ltr;" x-text="formatDuration(bot.avg_cycle_duration || 0)"></span>
                                     </div>
-                                    <div class="metric-card">
+                                    <div class="metric-card is-row">
                                         <span class="metric-label">نرخ موفقیت</span>
                                         <span class="metric-value pos" x-text="(bot.total_cycles > 0 ? '100' : '0') + '%'"></span>
                                     </div>
                                 </div>
 
-                                <div style="margin-block-start: var(--at-gap-md);">
+                                <div style="margin-block-start: var(--at-gap-sm);">
                                     <span class="metric-label">اهداف بعدی</span>
                                     <div style="margin-block-start: var(--at-gap-xs);">
                                         <template x-for="order in bot.active_orders.filter(o => !o.paired_order_id).slice(0, 4)" :key="'wait-' + order.id">
@@ -193,27 +195,27 @@
 
                         {{-- Summary metrics --}}
                         <div class="panel-section__body" style="border-block-end: 1px solid var(--at-border);">
-                            <div class="metric-grid">
-                                <div class="metric-card">
+                            <div class="at-stack-sm">
+                                <div class="metric-card is-row">
                                     <span class="metric-label">وضعیت آخرین چرخه</span>
                                     <span class="metric-value"
                                           :class="{ 'pos': ['success','in_progress'].includes(bot.activity_summary.last_cycle_status), 'neg': bot.activity_summary.last_cycle_status === 'error', 'at-t-warn': bot.activity_summary.last_cycle_status === 'warning' }"
                                           x-text="cycleLabel(bot.activity_summary.last_cycle_status)"></span>
                                     <span class="metric-sub" x-show="bot.activity_summary.last_cycle_time" x-text="formatTimeAgo(bot.activity_summary.last_cycle_time)"></span>
                                 </div>
-                                <div class="metric-card">
+                                <div class="metric-card is-row">
                                     <span class="metric-label">میانگین زمان چرخه</span>
-                                    <span class="metric-value" style="direction: ltr; text-align: start;" x-text="formatCycleDuration(bot.activity_summary.avg_cycle_duration)"></span>
+                                    <span class="metric-value" style="direction: ltr;" x-text="formatCycleDuration(bot.activity_summary.avg_cycle_duration)"></span>
                                     <span class="metric-sub">۲۴ ساعت گذشته</span>
                                 </div>
-                                <div class="metric-card">
+                                <div class="metric-card is-row">
                                     <span class="metric-label">میانگین پاسخ API</span>
                                     <span class="metric-value" :class="bot.activity_summary.avg_api_latency > 1000 ? 'at-t-warn' : 'pos'"
-                                          style="direction: ltr; text-align: start;"
+                                          style="direction: ltr;"
                                           x-text="bot.activity_summary.avg_api_latency.toFixed(0) + 'ms'"></span>
                                     <span class="metric-sub">نوبیتکس</span>
                                 </div>
-                                <div class="metric-card">
+                                <div class="metric-card is-row">
                                     <span class="metric-label">چرخه‌ها ۲۴ ساعت</span>
                                     <span class="metric-value" x-text="bot.activity_summary.cycles_count_24h"></span>
                                     <span class="metric-sub">اجرای CheckTrades</span>
@@ -291,14 +293,14 @@
                         </div>
                         <div x-show="debugOpen" x-collapse class="panel-section__body">
                             <div class="metric-grid">
-                                <div class="metric-card"><span class="metric-label">کل Orders</span><span class="metric-value" x-text="bot.debug.total_orders"></span></div>
-                                <div class="metric-card"><span class="metric-label">active/placed</span><span class="metric-value" x-text="bot.debug.total_with_status_active"></span></div>
-                                <div class="metric-card"><span class="metric-label">fill نشده</span><span class="metric-value" x-text="bot.debug.total_not_executed"></span></div>
-                                <div class="metric-card"><span class="metric-label">pair نشده</span><span class="metric-value" x-text="bot.debug.total_not_paired"></span></div>
-                                <div class="metric-card"><span class="metric-label">fill شده</span><span class="metric-value" x-text="bot.debug.total_filled"></span></div>
-                                <div class="metric-card"><span class="metric-label">Completed Trades</span><span class="metric-value pos" x-text="bot.debug.completed_trades_total"></span></div>
-                                <div class="metric-card"><span class="metric-label">Trades ۲۴ ساعت</span><span class="metric-value pos" x-text="bot.debug.completed_trades_24h_actual"></span></div>
-                                <div class="metric-card"><span class="metric-label">سود کل</span><span class="metric-value pos" style="direction: ltr; text-align: start;" x-text="formatNum(bot.debug.profit_total)"></span><span class="metric-sub">ریال</span></div>
+                                <div class="metric-card is-row"><span class="metric-label">کل Orders</span><span class="metric-value" x-text="bot.debug.total_orders"></span></div>
+                                <div class="metric-card is-row"><span class="metric-label">active/placed</span><span class="metric-value" x-text="bot.debug.total_with_status_active"></span></div>
+                                <div class="metric-card is-row"><span class="metric-label">fill نشده</span><span class="metric-value" x-text="bot.debug.total_not_executed"></span></div>
+                                <div class="metric-card is-row"><span class="metric-label">pair نشده</span><span class="metric-value" x-text="bot.debug.total_not_paired"></span></div>
+                                <div class="metric-card is-row"><span class="metric-label">fill شده</span><span class="metric-value" x-text="bot.debug.total_filled"></span></div>
+                                <div class="metric-card is-row"><span class="metric-label">Completed Trades</span><span class="metric-value pos" x-text="bot.debug.completed_trades_total"></span></div>
+                                <div class="metric-card is-row"><span class="metric-label">Trades ۲۴ ساعت</span><span class="metric-value pos" x-text="bot.debug.completed_trades_24h_actual"></span></div>
+                                <div class="metric-card is-row"><span class="metric-label">سود کل</span><span class="metric-value pos" style="direction: ltr;" x-text="formatNum(bot.debug.profit_total)"></span><span class="metric-sub">ریال</span></div>
                             </div>
                         </div>
                     </div>

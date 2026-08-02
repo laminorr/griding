@@ -19,21 +19,21 @@
             </div>
             <div class="panel-section__body">
                 <div class="metric-grid">
-                    <div class="metric-card">
+                    <div class="metric-card is-row">
                         <span class="metric-label">وضعیت</span>
                         <span class="metric-value {{ $tone === 'pos' ? 'pos' : ($tone === 'neg' ? 'neg' : '') }}">{{ $this->getConnectionStatusText() }}</span>
                     </div>
-                    <div class="metric-card">
+                    <div class="metric-card is-row">
                         <span class="metric-label">زمان پاسخ</span>
-                        <span class="metric-value" style="direction: ltr; text-align: start;">{{ $responseTime ? $responseTime . 'ms' : '—' }}</span>
+                        <span class="metric-value" style="direction: ltr;">{{ $responseTime ? $responseTime . 'ms' : '—' }}</span>
                     </div>
-                    <div class="metric-card">
+                    <div class="metric-card is-row">
                         <span class="metric-label">آخرین بررسی</span>
-                        <span class="metric-value" style="font-size: var(--at-fs-body);">{{ $lastChecked ? \Carbon\Carbon::parse($lastChecked)->diffForHumans() : 'هنوز بررسی نشده' }}</span>
+                        <span class="metric-value">{{ $lastChecked ? \Carbon\Carbon::parse($lastChecked)->diffForHumans() : 'هنوز بررسی نشده' }}</span>
                     </div>
-                    <div class="metric-card">
+                    <div class="metric-card is-row">
                         <span class="metric-label">حالت</span>
-                        <span class="metric-value" style="font-size: var(--at-fs-body);">{{ $simulationMode ? 'شبیه‌سازی' : 'مستقیم' }}</span>
+                        <span class="metric-value">{{ $simulationMode ? 'شبیه‌سازی' : 'مستقیم' }}</span>
                     </div>
                 </div>
             </div>

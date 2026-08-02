@@ -203,9 +203,7 @@ class BotConfigResource extends Resource
                     ->formatStateUsing(function ($record) {
                         // وضعیت در ستون «وضعیت» (نشان سلامت) نمایش داده می‌شود تا دوباره‌کاری نشود
                         return new HtmlString("
-                            <div class='text-center'>
-                                <div class='font-bold text-gray-900 dark:text-white'>{$record->name}</div>
-                            </div>
+                            <div class='text-center' style='font-weight:700;color:var(--at-text);'>{$record->name}</div>
                         ");
                     })
                     ->alignment(Alignment::Center),
@@ -214,13 +212,14 @@ class BotConfigResource extends Resource
                 TextColumn::make('is_active')
                     ->label('وضعیت')
                     ->formatStateUsing(function ($record) {
+                        // نشان وضعیت با هم‌رنگ‌سازی سیستم ترمینال (accent/red/muted)
                         if ($record->is_active) {
                             $label   = 'فعال';
-                            $classes = 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300';
+                            $fg = 'var(--at-accent)'; $bg = 'var(--at-accent-dim)'; $bd = 'var(--at-accent-line)';
                             $tooltip = '';
                         } elseif (is_string($record->stop_reason) && str_starts_with($record->stop_reason, 'kill_switch:')) {
                             $label   = 'توقف اضطراری';
-                            $classes = 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300';
+                            $fg = 'var(--at-neg)'; $bg = 'rgba(248,113,113,0.12)'; $bd = 'rgba(248,113,113,0.40)';
                             $reasonFa = match (substr($record->stop_reason, strlen('kill_switch:'))) {
                                 'stop_loss'    => 'حد ضرر',
                                 'max_drawdown' => 'حداکثر افت',
@@ -229,13 +228,13 @@ class BotConfigResource extends Resource
                             $tooltip = " title='{$reasonFa}'";
                         } else {
                             $label   = 'متوقف';
-                            $classes = 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300';
+                            $fg = 'var(--at-muted)'; $bg = 'var(--at-surface-2)'; $bd = 'var(--at-border)';
                             $tooltip = '';
                         }
 
                         return new HtmlString("
                             <div class='text-center'>
-                                <span class='inline-flex items-center rounded-full px-2 py-1 text-sm font-semibold {$classes}'{$tooltip}>{$label}</span>
+                                <span style='display:inline-flex;align-items:center;border-radius:999px;padding:2px 8px;font-size:10.5px;font-weight:600;color:{$fg};background:{$bg};border:1px solid {$bd};'{$tooltip}>{$label}</span>
                             </div>
                         ");
                     })
@@ -247,42 +246,49 @@ class BotConfigResource extends Resource
                     ->formatStateUsing(function ($state) {
                         $state = $state ?? 0;
                         $sign = $state >= 0 ? '+' : '';
-                        $color = $state >= 0 ? 'text-green-600' : 'text-red-600';
+                        $color = $state >= 0 ? 'var(--at-pos)' : 'var(--at-neg)';
 
                         return new HtmlString("
-                            <div class='text-center'>
-                                <div class='font-bold {$color}'>
-                                    {$sign}" . number_format($state, 0) . " IRR
-                                </div>
-                            </div>
+                            <div class='text-center' style='direction:ltr;font-weight:700;color:{$color};font-variant-numeric:tabular-nums;'>{$sign}" . number_format($state, 0) . " IRR</div>
                         ");
                     })
                     ->sortable()
                     ->alignment(Alignment::Center),
 
-                // معاملات
+                // معاملات — یک خط: عدد + برچسب فشرده
                 TextColumn::make('completed_trades_count')
                     ->label('معاملات')
                     ->formatStateUsing(function ($state) {
                         $state = $state ?? 0;
                         return new HtmlString("
-                            <div class='text-center'>
-                                <div class='font-semibold text-blue-600'>{$state}</div>
-                                <div class='text-sm text-gray-500'>معامله</div>
+                            <div class='text-center' style='font-size:12.5px;'>
+                                <span style='font-weight:700;color:var(--at-text);'>{$state}</span>
+                                <span style='color:var(--at-muted);'> معامله</span>
                             </div>
                         ");
                     })
                     ->sortable()
                     ->alignment(Alignment::Center),
 
-                // تنظیمات گرید
+                // تنظیمات گرید — یک خط فشرده: سطوح · فاصله · حالت
+                // getStateUsing تضمین می‌کند مقدار NULL نشود (grid_config ستون واقعی نیست
+                // و قبلاً ستون را خالی رها می‌کرد)
                 TextColumn::make('grid_config')
                     ->label('تنظیمات گرید')
+                    ->getStateUsing(fn ($record) => (int) $record->grid_levels)
                     ->formatStateUsing(function ($state, $record) {
+                        $modeFa = match ($record->mode) {
+                            'buy'  => 'خرید',
+                            'sell' => 'فروش',
+                            default => 'دوطرفه',
+                        };
+                        $levels  = (int) $record->grid_levels;
+                        $spacing = rtrim(rtrim((string) $record->grid_spacing, '0'), '.');
+
                         return new HtmlString("
-                            <div class='text-center'>
-                                <div class='font-semibold'>{$record->grid_levels} سطح</div>
-                                <div class='text-sm text-gray-500'>{$record->grid_spacing}% فاصله</div>
+                            <div class='text-center' style='font-size:12.5px;color:var(--at-text-dim);'>
+                                <span style='color:var(--at-text);font-weight:600;'>{$levels} سطح</span>
+                                <span style='color:var(--at-muted);'> · {$spacing}% · {$modeFa}</span>
                             </div>
                         ");
                     })
@@ -294,9 +300,9 @@ class BotConfigResource extends Resource
                     ->formatStateUsing(function ($state, $record) {
                         if ($state === null) {
                             return new HtmlString("
-                                <div class='text-center'>
-                                    <div class='font-bold text-gray-400'>—</div>
-                                    <div class='text-sm text-gray-500'>محاسبه‌نشده</div>
+                                <div class='text-center' style='font-size:12.5px;'>
+                                    <span style='font-weight:700;color:var(--at-muted);'>—</span>
+                                    <span style='color:var(--at-muted);'> محاسبه‌نشده</span>
                                 </div>
                             ");
                         }
@@ -304,15 +310,15 @@ class BotConfigResource extends Resource
                         $levels = max(1, (int) $record->grid_levels);
                         $ratio  = $state / $levels;
                         $color  = match (true) {
-                            $ratio < 0.5 => 'text-green-600',
-                            $ratio < 0.8 => 'text-yellow-600',
-                            default      => 'text-red-600',
+                            $ratio < 0.5 => 'var(--at-pos)',
+                            $ratio < 0.8 => 'var(--at-warn)',
+                            default      => 'var(--at-neg)',
                         };
 
                         return new HtmlString("
-                            <div class='text-center'>
-                                <div class='font-bold {$color}'>{$state}</div>
-                                <div class='text-sm text-gray-500'>{$state} از {$record->grid_levels}</div>
+                            <div class='text-center' style='font-size:12.5px;'>
+                                <span style='font-weight:700;color:{$color};'>{$state}</span>
+                                <span style='color:var(--at-muted);'> از {$record->grid_levels}</span>
                             </div>
                         ");
                     })
@@ -326,9 +332,9 @@ class BotConfigResource extends Resource
                     })
                     ->formatStateUsing(function ($state, $record) {
                         return new HtmlString("
-                            <div class='text-center'>
-                                <div class='font-semibold text-emerald-600'>" . number_format($state, 0) . " IRR</div>
-                                <div class='text-sm text-gray-500'>{$record->active_capital_percent}% فعال</div>
+                            <div class='text-center' style='font-size:12.5px;direction:ltr;'>
+                                <span style='font-weight:600;color:var(--at-pos);font-variant-numeric:tabular-nums;'>" . number_format($state, 0) . " IRR</span>
+                                <span style='color:var(--at-muted);'> · {$record->active_capital_percent}%</span>
                             </div>
                         ");
                     })
@@ -340,9 +346,7 @@ class BotConfigResource extends Resource
                     ->label('سرمایه کل')
                     ->formatStateUsing(function ($state) {
                         return new HtmlString("
-                            <div class='text-center'>
-                                <div class='font-semibold text-blue-600'>" . number_format($state, 0) . " IRR</div>
-                            </div>
+                            <div class='text-center' style='direction:ltr;font-weight:600;color:var(--at-text);font-variant-numeric:tabular-nums;'>" . number_format($state, 0) . " IRR</div>
                         ");
                     })
                     ->sortable()
@@ -354,9 +358,7 @@ class BotConfigResource extends Resource
                     ->formatStateUsing(function ($state, $record) {
                         if ($state === null) {
                             return new HtmlString("
-                                <div class='text-center'>
-                                    <div class='font-bold text-gray-400'>—</div>
-                                </div>
+                                <div class='text-center' style='font-weight:700;color:var(--at-muted);'>—</div>
                             ");
                         }
 
@@ -364,15 +366,13 @@ class BotConfigResource extends Resource
                         $total  = max(1, (float) $record->total_capital);
                         $ratio  = $locked / $total;
                         $color  = match (true) {
-                            $ratio < 0.5 => 'text-green-600',
-                            $ratio < 0.8 => 'text-yellow-600',
-                            default      => 'text-red-600',
+                            $ratio < 0.5 => 'var(--at-pos)',
+                            $ratio < 0.8 => 'var(--at-warn)',
+                            default      => 'var(--at-neg)',
                         };
 
                         return new HtmlString("
-                            <div class='text-center'>
-                                <div class='font-bold {$color}'>" . number_format($locked, 0) . " IRR</div>
-                            </div>
+                            <div class='text-center' style='direction:ltr;font-weight:700;color:{$color};font-variant-numeric:tabular-nums;'>" . number_format($locked, 0) . " IRR</div>
                         ");
                     })
                     ->alignment(Alignment::Center),
@@ -392,15 +392,15 @@ class BotConfigResource extends Resource
                     })
                     ->formatStateUsing(function ($state) {
                         $color = match(true) {
-                            $state >= 70 => 'text-green-600',
-                            $state >= 50 => 'text-yellow-600',
-                            default => 'text-red-600'
+                            $state >= 70 => 'var(--at-pos)',
+                            $state >= 50 => 'var(--at-warn)',
+                            default => 'var(--at-neg)'
                         };
 
                         return new HtmlString("
-                            <div class='text-center'>
-                                <div class='font-bold {$color}'>{$state}%</div>
-                                <div class='text-sm text-gray-500'>موفقیت</div>
+                            <div class='text-center' style='font-size:12.5px;'>
+                                <span style='font-weight:700;color:{$color};'>{$state}%</span>
+                                <span style='color:var(--at-muted);'> موفقیت</span>
                             </div>
                         ");
                     })
