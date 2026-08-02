@@ -17,6 +17,14 @@ return new class extends Migration
      */
     public function up(): void
     {
+        // Raw MySQL ENUM DDL. sqlite (the fresh test schema, RefreshDatabase)
+        // has no ENUM type and would abort the replay; it stores `status` as a
+        // plain string, so the wider value set is already writable there. No-op
+        // off MySQL.
+        if (DB::connection()->getDriverName() !== 'mysql') {
+            return;
+        }
+
         DB::statement(
             "ALTER TABLE grid_orders MODIFY COLUMN status " .
             "ENUM('pending', 'placed', 'filled', 'cancelled', 'failed', 'partially_filled', 'submission_unknown') NOT NULL"
@@ -25,6 +33,10 @@ return new class extends Migration
 
     public function down(): void
     {
+        if (DB::connection()->getDriverName() !== 'mysql') {
+            return;
+        }
+
         DB::statement(
             "ALTER TABLE grid_orders MODIFY COLUMN status " .
             "ENUM('pending', 'placed', 'filled', 'cancelled', 'failed', 'partially_filled') NOT NULL"
