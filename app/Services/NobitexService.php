@@ -1155,17 +1155,25 @@ class NobitexService implements ExchangeClient
     /**
      * Health check endpoint - tests API connection and authentication
      * Returns status compatible with both admin panel displays
+     *
+     * Probes POST /users/wallets/list — the same authenticated endpoint that
+     * getBalances() relies on. This genuinely reflects connectivity + auth:
+     * a well-formed response with status=ok means the credentials work and the
+     * API is reachable. The previous GET /users/profile probe false-alarmed
+     * because that endpoint returns HTTP 400 {"code":"UnexpectedError"} on this
+     * account even while wallet reads succeed perfectly.
      */
     public function healthCheck(): array
     {
         $startTime = microtime(true);
+        $endpoint  = $this->baseUrl . '/users/wallets/list';
 
         try {
-            // Use GET /users/profile as it's simpler and requires auth (perfect for connection test)
-            $data = $this->request('GET', '/users/profile');
+            // Same call getBalances() uses — authenticated wallet read.
+            $data = $this->request('POST', '/users/wallets/list');
 
             $responseTime = microtime(true) - $startTime;
-            $isOk = ($data['status'] ?? null) === 'ok';
+            $isOk = is_array($data) && ($data['status'] ?? null) === 'ok';
 
             return [
                 'ok'               => $isOk,
@@ -1174,7 +1182,7 @@ class NobitexService implements ExchangeClient
                 'response_time'    => $responseTime,
                 'response_time_ms' => round($responseTime * 1000, 2),
                 'mode'             => config('trading.grid.simulation', false) ? 'simulation' : 'live',
-                'endpoint'         => $this->baseUrl . '/users/profile',
+                'endpoint'         => $endpoint,
             ];
         } catch (\Throwable $e) {
             $responseTime = microtime(true) - $startTime;
@@ -1187,7 +1195,7 @@ class NobitexService implements ExchangeClient
                 'response_time'    => $responseTime,
                 'response_time_ms' => round($responseTime * 1000, 2),
                 'mode'             => config('trading.grid.simulation', false) ? 'simulation' : 'live',
-                'endpoint'         => $this->baseUrl . '/users/profile',
+                'endpoint'         => $endpoint,
             ];
         }
     }

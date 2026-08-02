@@ -16,9 +16,9 @@ class BotIntelDashboard extends Page
 
     protected static string $view = 'filament.pages.bot-intel-dashboard';
 
-    protected static ?string $navigationLabel = 'Bot Intelligence';
+    protected static ?string $navigationLabel = 'هوش ربات';
 
-    protected static ?string $title = 'Bot Intelligence';
+    protected static ?string $title = 'هوش ربات';
 
     protected static ?int $navigationSort = 3;
 
@@ -52,7 +52,7 @@ class BotIntelDashboard extends Page
                 'name' => $bot->name,
                 'symbol' => $bot->symbol,
                 'is_active' => $bot->is_active,
-                'status' => $bot->is_active ? 'Active' : 'Paused',
+                'status' => $bot->is_active ? 'فعال' : 'متوقف',
             ]);
     }
 
@@ -70,7 +70,7 @@ class BotIntelDashboard extends Page
         // Status & last check
         $lastCheckRelative = $bot->last_run_at
             ? $bot->last_run_at->diffForHumans()
-            : 'Never';
+            : 'هرگز';
 
         // Capital in use
         $activeOrders = $bot->gridOrders()
@@ -103,44 +103,44 @@ class BotIntelDashboard extends Page
 
         return [
             'status' => [
-                'label' => 'Status',
-                'value' => $bot->is_active ? 'Active' : 'Paused',
-                'caption' => 'Last check: ' . $lastCheckRelative,
+                'label' => 'وضعیت',
+                'value' => $bot->is_active ? 'فعال' : 'متوقف',
+                'caption' => 'آخرین بررسی: ' . $lastCheckRelative,
                 'color' => $bot->is_active ? 'success' : 'gray',
                 'icon' => $bot->is_active ? 'heroicon-o-check-circle' : 'heroicon-o-pause-circle',
             ],
             'capital' => [
-                'label' => 'Capital in Use',
+                'label' => 'سرمایه در گردش',
                 'value' => number_format($capitalInUse / 1000000000, 2) . 'M IRT',
-                'caption' => $capitalPercent . '% of total',
+                'caption' => $capitalPercent . '٪ از کل',
                 'color' => 'primary',
                 'icon' => 'heroicon-o-banknotes',
             ],
             'grid_health' => [
-                'label' => 'Grid Health',
+                'label' => 'سلامت گرید',
                 'value' => $gridHealth['status'],
                 'caption' => $gridHealth['description'],
                 'color' => $gridHealth['color'],
                 'icon' => 'heroicon-o-chart-bar-square',
             ],
             'cycles' => [
-                'label' => 'Cycles Completed',
+                'label' => 'چرخه‌های تکمیل‌شده',
                 'value' => number_format($completedCycles),
-                'caption' => 'All-time',
+                'caption' => 'از ابتدا',
                 'color' => 'info',
                 'icon' => 'heroicon-o-arrow-path',
             ],
             'win_rate' => [
-                'label' => 'Win Rate',
+                'label' => 'نرخ موفقیت',
                 'value' => $winRate . '%',
-                'caption' => $successfulTrades . ' profitable',
+                'caption' => $successfulTrades . ' سودده',
                 'color' => $winRate >= 70 ? 'success' : ($winRate >= 50 ? 'warning' : 'danger'),
                 'icon' => 'heroicon-o-trophy',
             ],
             'avg_duration' => [
-                'label' => 'Avg Cycle Duration',
+                'label' => 'میانگین مدت چرخه',
                 'value' => $avgCycleDuration,
-                'caption' => 'Buy to sell',
+                'caption' => 'از خرید تا فروش',
                 'color' => 'secondary',
                 'icon' => 'heroicon-o-clock',
             ],
@@ -154,8 +154,8 @@ class BotIntelDashboard extends Page
     {
         if ($activeOrders->isEmpty()) {
             return [
-                'status' => 'Balanced',
-                'description' => 'No active orders',
+                'status' => 'متعادل',
+                'description' => 'بدون سفارش فعال',
                 'color' => 'gray',
             ];
         }
@@ -166,8 +166,8 @@ class BotIntelDashboard extends Page
 
         if ($total === 0) {
             return [
-                'status' => 'Balanced',
-                'description' => 'No orders',
+                'status' => 'متعادل',
+                'description' => 'بدون سفارش',
                 'color' => 'gray',
             ];
         }
@@ -176,21 +176,21 @@ class BotIntelDashboard extends Page
 
         if ($buyPercent > 70) {
             return [
-                'status' => 'Bottom-Heavy',
-                'description' => 'Most orders below price',
+                'status' => 'تمرکز پایین',
+                'description' => 'بیشتر سفارش‌ها زیر قیمت',
                 'color' => 'info',
             ];
         } elseif ($buyPercent < 30) {
             return [
-                'status' => 'Top-Heavy',
-                'description' => 'Most orders above price',
+                'status' => 'تمرکز بالا',
+                'description' => 'بیشتر سفارش‌ها بالای قیمت',
                 'color' => 'warning',
             ];
         }
 
         return [
-            'status' => 'Balanced',
-            'description' => 'Good distribution',
+            'status' => 'متعادل',
+            'description' => 'توزیع مناسب',
             'color' => 'success',
         ];
     }
@@ -205,7 +205,7 @@ class BotIntelDashboard extends Page
             ->get();
 
         if ($trades->isEmpty()) {
-            return 'N/A';
+            return 'ندارد';
         }
 
         $avgSeconds = $trades->avg('execution_time_seconds');
@@ -238,7 +238,7 @@ class BotIntelDashboard extends Page
             return [
                 'levels' => [],
                 'has_data' => false,
-                'message' => 'No active orders to display grid levels',
+                'message' => 'سفارش فعالی برای نمایش سطوح گرید وجود ندارد',
             ];
         }
 
@@ -260,8 +260,8 @@ class BotIntelDashboard extends Page
         return [
             'levels' => $levels,
             'has_data' => true,
-            'top_price' => $levels[0]['price'] ?? 'N/A',
-            'bottom_price' => $levels[count($levels) - 1]['price'] ?? 'N/A',
+            'top_price' => $levels[0]['price'] ?? 'ندارد',
+            'bottom_price' => $levels[count($levels) - 1]['price'] ?? 'ندارد',
             'total_levels' => count($levels),
         ];
     }
@@ -282,7 +282,11 @@ class BotIntelDashboard extends Page
             ->get()
             ->map(fn($order) => [
                 'id' => $order->id,
-                'type' => ucfirst($order->type ?? 'unknown'),
+                'type' => match ($order->type) {
+                    'buy' => 'خرید',
+                    'sell' => 'فروش',
+                    default => 'نامشخص',
+                },
                 'side' => $order->type,
                 'price' => number_format($order->price, 0),
                 'amount' => number_format($order->amount, 8),
@@ -310,7 +314,7 @@ class BotIntelDashboard extends Page
                 'sell_price' => number_format($trade->sell_price, 0),
                 'profit' => number_format($trade->profit, 0),
                 'profit_formatted' => ($trade->profit >= 0 ? '+' : '') . number_format($trade->profit, 0) . ' IRT',
-                'duration' => $trade->execution_time_formatted ?? 'N/A',
+                'duration' => $trade->execution_time_formatted ?? 'ندارد',
                 'completed_at' => $trade->created_at->diffForHumans(),
                 'is_profitable' => $trade->profit > 0,
             ]);
@@ -366,7 +370,7 @@ class BotIntelDashboard extends Page
     public function getGridDrift(): array
     {
         if (!$this->selectedBot) {
-            return ['status' => 'N/A', 'description' => 'No bot selected', 'position' => 50];
+            return ['status' => 'ندارد', 'description' => 'رباتی انتخاب نشده', 'position' => 50];
         }
 
         $bot = $this->selectedBot;
@@ -376,8 +380,8 @@ class BotIntelDashboard extends Page
 
         if ($activeOrders->isEmpty()) {
             return [
-                'status' => 'No Data',
-                'description' => 'No active orders to measure drift',
+                'status' => 'بدون داده',
+                'description' => 'سفارش فعالی برای سنجش انحراف وجود ندارد',
                 'position' => 50,
                 'color' => 'gray',
             ];
@@ -389,25 +393,25 @@ class BotIntelDashboard extends Page
         $buyPercent = ($buyOrders / $totalOrders) * 100;
 
         if ($buyPercent > 75) {
-            $status = 'Lower 25% of grid';
+            $status = 'یک‌چهارم پایینی گرید';
             $color = 'info';
         } elseif ($buyPercent > 60) {
-            $status = 'Lower-middle zone';
+            $status = 'ناحیه میانی-پایین';
             $color = 'primary';
         } elseif ($buyPercent >= 40) {
-            $status = 'Centered in grid';
+            $status = 'مرکز گرید';
             $color = 'success';
         } elseif ($buyPercent >= 25) {
-            $status = 'Upper-middle zone';
+            $status = 'ناحیه میانی-بالا';
             $color = 'primary';
         } else {
-            $status = 'Upper 25% of grid';
+            $status = 'یک‌چهارم بالایی گرید';
             $color = 'warning';
         }
 
         return [
             'status' => $status,
-            'description' => "Trading zone indicator",
+            'description' => 'شاخص ناحیه معاملاتی',
             'position' => round(100 - $buyPercent, 1),
             'color' => $color,
         ];
@@ -452,20 +456,20 @@ class BotIntelDashboard extends Page
 
         return [
             'check_trades' => [
-                'label' => 'Last Check Run',
-                'value' => $lastCheckTrades ? $lastCheckTrades->created_at->diffForHumans() : 'Never',
+                'label' => 'آخرین بررسی',
+                'value' => $lastCheckTrades ? $lastCheckTrades->created_at->diffForHumans() : 'هرگز',
                 'status' => $lastCheckTrades && $lastCheckTrades->created_at->gt(now()->subMinutes(10)) ? 'healthy' : 'stale',
                 'color' => $lastCheckTrades && $lastCheckTrades->created_at->gt(now()->subMinutes(10)) ? 'success' : 'warning',
             ],
             'api_connectivity' => [
-                'label' => 'Nobitex API',
-                'value' => $lastApiCall ? $lastApiCall->created_at->diffForHumans() : 'No calls',
+                'label' => 'API نوبیتکس',
+                'value' => $lastApiCall ? $lastApiCall->created_at->diffForHumans() : 'بدون فراخوانی',
                 'status' => $lastApiCall && $lastApiCall->created_at->gt(now()->subMinutes(5)) ? 'healthy' : 'stale',
                 'color' => $lastApiCall && $lastApiCall->created_at->gt(now()->subMinutes(5)) ? 'success' : 'warning',
             ],
             'stability' => [
-                'label' => 'Stability',
-                'value' => $errorsLast24h === 0 ? 'Stable' : 'Attention',
+                'label' => 'پایداری',
+                'value' => $errorsLast24h === 0 ? 'پایدار' : 'نیازمند بررسی',
                 'status' => $errorsLast24h === 0 ? 'healthy' : 'degraded',
                 'color' => $errorsLast24h === 0 ? 'success' : 'danger',
                 'errors_24h' => $errorsLast24h,
@@ -534,12 +538,12 @@ class BotIntelDashboard extends Page
     private function getEmptyMetrics(): array
     {
         return [
-            'status' => ['label' => 'Status', 'value' => 'N/A', 'caption' => 'No bot selected', 'color' => 'gray', 'icon' => 'heroicon-o-pause-circle'],
-            'capital' => ['label' => 'Capital in Use', 'value' => '0', 'caption' => 'N/A', 'color' => 'gray', 'icon' => 'heroicon-o-banknotes'],
-            'grid_health' => ['label' => 'Grid Health', 'value' => 'N/A', 'caption' => 'N/A', 'color' => 'gray', 'icon' => 'heroicon-o-chart-bar-square'],
-            'cycles' => ['label' => 'Cycles Completed', 'value' => '0', 'caption' => 'N/A', 'color' => 'gray', 'icon' => 'heroicon-o-arrow-path'],
-            'win_rate' => ['label' => 'Win Rate', 'value' => '0%', 'caption' => 'N/A', 'color' => 'gray', 'icon' => 'heroicon-o-trophy'],
-            'avg_duration' => ['label' => 'Avg Cycle Duration', 'value' => 'N/A', 'caption' => 'N/A', 'color' => 'gray', 'icon' => 'heroicon-o-clock'],
+            'status' => ['label' => 'وضعیت', 'value' => 'ندارد', 'caption' => 'رباتی انتخاب نشده', 'color' => 'gray', 'icon' => 'heroicon-o-pause-circle'],
+            'capital' => ['label' => 'سرمایه در گردش', 'value' => '0', 'caption' => 'ندارد', 'color' => 'gray', 'icon' => 'heroicon-o-banknotes'],
+            'grid_health' => ['label' => 'سلامت گرید', 'value' => 'ندارد', 'caption' => 'ندارد', 'color' => 'gray', 'icon' => 'heroicon-o-chart-bar-square'],
+            'cycles' => ['label' => 'چرخه‌های تکمیل‌شده', 'value' => '0', 'caption' => 'ندارد', 'color' => 'gray', 'icon' => 'heroicon-o-arrow-path'],
+            'win_rate' => ['label' => 'نرخ موفقیت', 'value' => '0%', 'caption' => 'ندارد', 'color' => 'gray', 'icon' => 'heroicon-o-trophy'],
+            'avg_duration' => ['label' => 'میانگین مدت چرخه', 'value' => 'ندارد', 'caption' => 'ندارد', 'color' => 'gray', 'icon' => 'heroicon-o-clock'],
         ];
     }
 
@@ -555,9 +559,9 @@ class BotIntelDashboard extends Page
     private function getEmptySystemHealth(): array
     {
         return [
-            'check_trades' => ['label' => 'Last Check Run', 'value' => 'N/A', 'status' => 'unknown', 'color' => 'gray'],
-            'api_connectivity' => ['label' => 'Nobitex API', 'value' => 'N/A', 'status' => 'unknown', 'color' => 'gray'],
-            'stability' => ['label' => 'Stability', 'value' => 'N/A', 'status' => 'unknown', 'color' => 'gray', 'errors_24h' => 0],
+            'check_trades' => ['label' => 'آخرین بررسی', 'value' => 'ندارد', 'status' => 'unknown', 'color' => 'gray'],
+            'api_connectivity' => ['label' => 'API نوبیتکس', 'value' => 'ندارد', 'status' => 'unknown', 'color' => 'gray'],
+            'stability' => ['label' => 'پایداری', 'value' => 'ندارد', 'status' => 'unknown', 'color' => 'gray', 'errors_24h' => 0],
         ];
     }
 }

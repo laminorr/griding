@@ -95,10 +95,10 @@
                     {{-- Left: Title & Subtitle --}}
                     <div>
                         <h1 class="text-2xl font-semibold text-gray-900 dark:text-white">
-                            Bot Intelligence
+                            هوش ربات
                         </h1>
                         <p class="mt-0.5 text-sm text-gray-500 dark:text-gray-400">
-                            Real-time insight into your grid bot's health and behavior
+                            نمای لحظه‌ای از سلامت و رفتار ربات گرید شما
                         </p>
                     </div>
 
@@ -119,11 +119,11 @@
                             @if($selectedBot)
                                 <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium
                                     {{ $selectedBot->is_active ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300' }}">
-                                    {{ $selectedBot->is_active ? 'Active' : 'Paused' }}
+                                    {{ $selectedBot->is_active ? 'فعال' : 'متوقف' }}
                                 </span>
                             @endif
                         @else
-                            <p class="text-sm text-gray-500">No bots configured</p>
+                            <p class="text-sm text-gray-500">هیچ رباتی پیکربندی نشده</p>
                         @endif
                     </div>
                 </div>
@@ -160,8 +160,8 @@
             {{-- C. GRID MAP - Floating Card --}}
             <div class="section-card intel-card bg-white dark:bg-gray-800 rounded-2xl shadow-sm">
                 <div class="mb-4">
-                    <h2 class="text-sm font-semibold text-gray-800 dark:text-white">Grid Map</h2>
-                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Active order distribution across grid levels</p>
+                    <h2 class="text-sm font-semibold text-gray-800 dark:text-white">نقشه گرید</h2>
+                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">توزیع سفارش‌های فعال در سطوح گرید</p>
                 </div>
 
                 @if($gridMap['has_data'] ?? false)
@@ -169,15 +169,15 @@
                         {{-- Grid summary --}}
                         <div class="flex items-center justify-between text-xs text-gray-600 dark:text-gray-400 pb-3 border-b border-gray-200 dark:border-gray-700">
                             <div>
-                                <span class="font-medium">Top:</span>
+                                <span class="font-medium">بالا:</span>
                                 <span class="ml-1">{{ $gridMap['top_price'] }} IRT</span>
                             </div>
                             <div>
-                                <span class="font-medium">Levels:</span>
+                                <span class="font-medium">سطوح:</span>
                                 <span class="ml-1">{{ $gridMap['total_levels'] }}</span>
                             </div>
                             <div>
-                                <span class="font-medium">Bottom:</span>
+                                <span class="font-medium">پایین:</span>
                                 <span class="ml-1">{{ $gridMap['bottom_price'] }} IRT</span>
                             </div>
                         </div>
@@ -202,7 +202,7 @@
                                     </div>
                                     <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium
                                         {{ $level['side'] === 'buy' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-200' : 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-200' }}">
-                                        {{ strtoupper($level['side']) }}
+                                        {{ $level['side'] === 'buy' ? 'خرید' : 'فروش' }}
                                     </span>
                                 </div>
                             @endforeach
@@ -214,7 +214,7 @@
                             icon="heroicon-o-chart-bar-square"
                             class="intel-icon intel-icon-lg w-12 h-12 mx-auto text-gray-400"
                         />
-                        <p class="mt-2 text-sm text-gray-500">{{ $gridMap['message'] ?? 'No data available' }}</p>
+                        <p class="mt-2 text-sm text-gray-500">{{ $gridMap['message'] ?? 'داده‌ای موجود نیست' }}</p>
                     </div>
                 @endif
             </div>
@@ -224,8 +224,8 @@
                 {{-- Open Orders --}}
                 <div class="section-card intel-card bg-white dark:bg-gray-800 rounded-2xl shadow-sm">
                     <div class="mb-4">
-                        <h2 class="text-sm font-semibold text-gray-800 dark:text-white">Open Orders</h2>
-                        <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Recent active orders</p>
+                        <h2 class="text-sm font-semibold text-gray-800 dark:text-white">سفارش‌های باز</h2>
+                        <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">سفارش‌های فعال اخیر</p>
                     </div>
 
                     @if($openOrders->isNotEmpty())
@@ -248,7 +248,7 @@
                         </div>
                     @else
                         <div class="text-center py-8">
-                            <p class="text-sm text-gray-500">No open orders</p>
+                            <p class="text-sm text-gray-500">سفارش بازی وجود ندارد</p>
                         </div>
                     @endif
                 </div>
@@ -256,8 +256,8 @@
                 {{-- Completed Pairs --}}
                 <div class="section-card intel-card bg-white dark:bg-gray-800 rounded-2xl shadow-sm">
                     <div class="mb-4">
-                        <h2 class="text-sm font-semibold text-gray-800 dark:text-white">Completed Trades</h2>
-                        <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Recent completed cycles</p>
+                        <h2 class="text-sm font-semibold text-gray-800 dark:text-white">معاملات تکمیل‌شده</h2>
+                        <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">چرخه‌های تکمیل‌شده اخیر</p>
                     </div>
 
                     @if($completedPairs->isNotEmpty())
@@ -284,7 +284,7 @@
                         </div>
                     @else
                         <div class="text-center py-8">
-                            <p class="text-sm text-gray-500">No completed trades yet</p>
+                            <p class="text-sm text-gray-500">هنوز معامله‌ای تکمیل نشده</p>
                         </div>
                     @endif
                 </div>
@@ -295,45 +295,45 @@
                 {{-- Capital Concentration --}}
                 <div class="section-card intel-card bg-white dark:bg-gray-800 rounded-2xl shadow-sm">
                     <div class="mb-4">
-                        <h3 class="text-sm font-semibold text-gray-800 dark:text-white">Capital Concentration</h3>
-                        <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Distribution across order types</p>
+                        <h3 class="text-sm font-semibold text-gray-800 dark:text-white">تمرکز سرمایه</h3>
+                        <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">توزیع بین انواع سفارش</p>
                     </div>
 
                     <div class="space-y-4">
                         {{-- Buy Orders --}}
                         <div>
                             <div class="flex items-center justify-between mb-1.5">
-                                <span class="text-xs font-medium text-gray-700 dark:text-gray-300">Buy Orders</span>
+                                <span class="text-xs font-medium text-gray-700 dark:text-gray-300">سفارش‌های خرید</span>
                                 <span class="text-xs font-semibold text-blue-600 dark:text-blue-400">{{ $capitalConcentration['buy']['percent'] }}%</span>
                             </div>
                             <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2 mb-1">
                                 <div class="bg-blue-500 h-2 rounded-full transition-all" style="width: {{ $capitalConcentration['buy']['percent'] }}%"></div>
                             </div>
-                            <p class="text-xs text-gray-500 dark:text-gray-400">{{ $capitalConcentration['buy']['count'] }} orders • {{ $capitalConcentration['buy']['capital'] }} IRT</p>
+                            <p class="text-xs text-gray-500 dark:text-gray-400">{{ $capitalConcentration['buy']['count'] }} سفارش • {{ $capitalConcentration['buy']['capital'] }} IRT</p>
                         </div>
 
                         {{-- Sell Orders --}}
                         <div>
                             <div class="flex items-center justify-between mb-1.5">
-                                <span class="text-xs font-medium text-gray-700 dark:text-gray-300">Sell Orders</span>
+                                <span class="text-xs font-medium text-gray-700 dark:text-gray-300">سفارش‌های فروش</span>
                                 <span class="text-xs font-semibold text-amber-600 dark:text-amber-400">{{ $capitalConcentration['sell']['percent'] }}%</span>
                             </div>
                             <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2 mb-1">
                                 <div class="bg-amber-500 h-2 rounded-full transition-all" style="width: {{ $capitalConcentration['sell']['percent'] }}%"></div>
                             </div>
-                            <p class="text-xs text-gray-500 dark:text-gray-400">{{ $capitalConcentration['sell']['count'] }} orders • {{ $capitalConcentration['sell']['capital'] }} IRT</p>
+                            <p class="text-xs text-gray-500 dark:text-gray-400">{{ $capitalConcentration['sell']['count'] }} سفارش • {{ $capitalConcentration['sell']['capital'] }} IRT</p>
                         </div>
 
                         {{-- Free Capital --}}
                         <div>
                             <div class="flex items-center justify-between mb-1.5">
-                                <span class="text-xs font-medium text-gray-700 dark:text-gray-300">Free Capital</span>
+                                <span class="text-xs font-medium text-gray-700 dark:text-gray-300">سرمایه آزاد</span>
                                 <span class="text-xs font-semibold text-gray-600 dark:text-gray-400">{{ $capitalConcentration['free']['percent'] }}%</span>
                             </div>
                             <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2 mb-1">
                                 <div class="bg-gray-400 h-2 rounded-full transition-all" style="width: {{ $capitalConcentration['free']['percent'] }}%"></div>
                             </div>
-                            <p class="text-xs text-gray-500 dark:text-gray-400">{{ $capitalConcentration['free']['capital'] }} IRT available</p>
+                            <p class="text-xs text-gray-500 dark:text-gray-400">{{ $capitalConcentration['free']['capital'] }} IRT قابل استفاده</p>
                         </div>
                     </div>
                 </div>
@@ -341,8 +341,8 @@
                 {{-- Grid Drift --}}
                 <div class="section-card intel-card bg-white dark:bg-gray-800 rounded-2xl shadow-sm">
                     <div class="mb-4">
-                        <h3 class="text-sm font-semibold text-gray-800 dark:text-white">Grid Drift</h3>
-                        <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Trading zone indicator</p>
+                        <h3 class="text-sm font-semibold text-gray-800 dark:text-white">انحراف گرید</h3>
+                        <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">شاخص ناحیه معاملاتی</p>
                     </div>
 
                     <div class="text-center py-3">
@@ -358,8 +358,8 @@
                     <div class="mt-4">
                         {{-- Labels Above Bar --}}
                         <div class="flex justify-between mb-1.5 text-xs text-gray-500 dark:text-gray-400">
-                            <span>Bottom</span>
-                            <span>Top</span>
+                            <span>پایین</span>
+                            <span>بالا</span>
                         </div>
                         {{-- Bar (no text inside) --}}
                         <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-3 relative overflow-hidden">
@@ -372,8 +372,8 @@
                 {{-- Stability Snapshot --}}
                 <div class="section-card intel-card bg-white dark:bg-gray-800 rounded-2xl shadow-sm">
                     <div class="mb-4">
-                        <h3 class="text-sm font-semibold text-gray-800 dark:text-white">Stability</h3>
-                        <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Error monitoring (24h)</p>
+                        <h3 class="text-sm font-semibold text-gray-800 dark:text-white">پایداری</h3>
+                        <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">پایش خطا (۲۴ ساعت)</p>
                     </div>
 
                     <div class="text-center py-3">
@@ -385,13 +385,13 @@
                         </div>
                         <p class="text-sm font-medium text-gray-900 dark:text-white">{{ $systemHealth['stability']['value'] }}</p>
                         <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                            {{ $systemHealth['stability']['errors_24h'] }} {{ $systemHealth['stability']['errors_24h'] === 1 ? 'error' : 'errors' }} in last 24h
+                            {{ $systemHealth['stability']['errors_24h'] }} خطا در ۲۴ ساعت گذشته
                         </p>
                     </div>
 
                     @if($systemHealth['stability']['errors_24h'] > 0)
                         <div class="mt-3 p-2.5 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
-                            <p class="text-xs text-amber-800 dark:text-amber-300">Review activity logs for details</p>
+                            <p class="text-xs text-amber-800 dark:text-amber-300">برای جزئیات، گزارش فعالیت‌ها را بررسی کنید</p>
                         </div>
                     @endif
                 </div>
@@ -400,8 +400,8 @@
             {{-- F. SYSTEM HEALTH - Floating Card --}}
             <div class="section-card intel-card bg-white dark:bg-gray-800 rounded-2xl shadow-sm">
                 <div class="mb-4">
-                    <h2 class="text-sm font-semibold text-gray-800 dark:text-white">System Health</h2>
-                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Infrastructure and connectivity status</p>
+                    <h2 class="text-sm font-semibold text-gray-800 dark:text-white">سلامت سیستم</h2>
+                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">وضعیت زیرساخت و اتصال</p>
                 </div>
 
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -426,8 +426,8 @@
             {{-- G. ACTIVITY TIMELINE - Floating Card --}}
             <div class="section-card intel-card bg-white dark:bg-gray-800 rounded-2xl shadow-sm">
                 <div class="mb-4">
-                    <h2 class="text-sm font-semibold text-gray-800 dark:text-white">Activity Timeline</h2>
-                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Recent bot activity and events</p>
+                    <h2 class="text-sm font-semibold text-gray-800 dark:text-white">خط زمانی فعالیت</h2>
+                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">فعالیت‌ها و رویدادهای اخیر ربات</p>
                 </div>
 
                 @if($activityLogs->isNotEmpty())
@@ -469,8 +469,8 @@
                                                 @click="open = !open"
                                                 class="text-xs text-primary-600 dark:text-primary-400 hover:underline"
                                             >
-                                                <span x-show="!open">View API Details</span>
-                                                <span x-show="open" style="display: none;">Hide API Details</span>
+                                                <span x-show="!open">نمایش جزئیات API</span>
+                                                <span x-show="open" style="display: none;">پنهان کردن جزئیات API</span>
                                             </button>
 
                                             {{-- API Details (Collapsible) --}}
@@ -483,13 +483,13 @@
                                                 <div class="api-details-content">
                                                     @if($log['api_request'])
                                                         <div class="mb-3">
-                                                            <p class="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1">Request:</p>
+                                                            <p class="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1">درخواست:</p>
                                                             <pre class="text-xs text-gray-600 dark:text-gray-400 overflow-x-auto">{{ json_encode($log['api_request'], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) }}</pre>
                                                         </div>
                                                     @endif
                                                     @if($log['api_response'])
                                                         <div>
-                                                            <p class="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1">Response:</p>
+                                                            <p class="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1">پاسخ:</p>
                                                             <pre class="text-xs text-gray-600 dark:text-gray-400 overflow-x-auto">{{ json_encode($log['api_response'], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) }}</pre>
                                                         </div>
                                                     @endif
@@ -507,7 +507,7 @@
                             icon="heroicon-o-clock"
                             class="intel-icon intel-icon-lg mx-auto text-gray-400"
                         />
-                        <p class="mt-2 text-sm text-gray-500">No activity logs yet</p>
+                        <p class="mt-2 text-sm text-gray-500">هنوز گزارشی از فعالیت وجود ندارد</p>
                     </div>
                 @endif
             </div>
@@ -520,8 +520,8 @@
                         icon="heroicon-o-cpu-chip"
                         class="intel-icon intel-icon-xl mx-auto text-gray-400"
                     />
-                    <p class="mt-4 text-lg font-medium text-gray-900 dark:text-white">No Bot Selected</p>
-                    <p class="mt-1 text-sm text-gray-500">Please create a bot configuration to view the dashboard</p>
+                    <p class="mt-4 text-lg font-medium text-gray-900 dark:text-white">رباتی انتخاب نشده</p>
+                    <p class="mt-1 text-sm text-gray-500">برای مشاهده داشبورد، یک ربات پیکربندی کنید</p>
                 </div>
             </div>
         @endif

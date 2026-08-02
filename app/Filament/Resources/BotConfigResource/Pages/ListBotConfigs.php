@@ -310,14 +310,27 @@ $responseTime = round($healthCheck['response_time_ms'] ?? 0, 2);
         $this->checkActiveBotsHealth();
     }
     
+    /**
+     * تعداد ربات‌های فعالی که بیش از ۳۰ دقیقه بررسی نشده‌اند.
+     *
+     * ملاک درست last_check_at است (هر دقیقه توسط CheckTradesJob نوشته می‌شود)
+     * نه updated_at که فقط با ویرایش رکورد ربات تغییر می‌کند و باعث هشدار کاذب
+     * می‌شد. ربات‌هایی که هنوز هیچ بررسی‌ای نداشته‌اند (last_check_at NULL)
+     * تازه‌ساخته تلقی می‌شوند و هرگز هشدار کاذب ایجاد نمی‌کنند.
+     */
+    public function getStaleActiveBotsCount(): int
+    {
+        return BotConfig::where('is_active', true)
+            ->whereNotNull('last_check_at')
+            ->where('last_check_at', '<', now()->subMinutes(30))
+            ->count();
+    }
+
     private function checkActiveBotsHealth(): void
     {
         try {
-            // بررسی ربات‌های فعال که مدت زیادی آپدیت نشده‌اند
-            $staleBotsCount = BotConfig::where('is_active', true)
-                ->where('updated_at', '<', now()->subMinutes(30))
-                ->count();
-            
+            $staleBotsCount = $this->getStaleActiveBotsCount();
+
             if ($staleBotsCount > 0) {
                 Notification::make()
                     ->title('⚠️ هشدار سیستم')
