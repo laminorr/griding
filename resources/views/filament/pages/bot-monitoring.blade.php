@@ -19,11 +19,48 @@
 <x-filament-panels::page>
 
     {{-- =================================================================
+         TOP BOT SELECTOR (P4-compact). One prominent, compact control at the
+         top of the page — the single source of truth for which bot the whole
+         page shows. Clicking a pill sets $selectedBotId on the Livewire
+         component, which (a) re-renders the deep analytics block below and
+         (b) is picked up by the live view's Alpine ($wire.$watch) so it
+         focuses the SAME bot. Active bots are listed; the selected one is
+         highlighted.
+         ================================================================= --}}
+    @php
+        $pickerAll    = $this->getAvailableBots();
+        $pickerActive = $pickerAll->where('is_active', true)->values();
+        $pickerBots   = $pickerActive->isNotEmpty() ? $pickerActive : $pickerAll;
+    @endphp
+    @if($pickerBots->isNotEmpty())
+        <div class="at-botpicker" style="margin-block-end: var(--at-gap-lg);">
+            <div class="at-botpicker__label">
+                <span class="at-dot pos"></span>
+                <span>ربات فعال</span>
+            </div>
+            <div class="at-botpicker__options">
+                @foreach($pickerBots as $b)
+                    <button type="button"
+                            wire:key="botpill-{{ $b['id'] }}"
+                            wire:click="selectBot({{ $b['id'] }})"
+                            class="at-botpill {{ $selectedBotId == $b['id'] ? 'is-active' : '' }}">
+                        <span class="at-dot {{ $b['is_active'] ? 'pos' : 'muted' }}"></span>
+                        <span class="at-botpill__name">{{ $b['name'] }}</span>
+                        <span class="at-botpill__sym at-mono">{{ $b['symbol'] }}</span>
+                    </button>
+                @endforeach
+            </div>
+        </div>
+    @endif
+
+    {{-- =================================================================
          LIVE FLEET VIEW (Alpine, self-refreshing). wire:ignore keeps its
          Alpine state + DOM intact across the analytics picker's Livewire
-         round-trips below.
+         round-trips below. The @js(...) seed + $wire.$watch below keep the
+         Alpine `selectedBotId` in lock-step with the top selector so the live
+         view focuses the same bot the analytics block shows.
          ================================================================= --}}
-    <div wire:ignore x-data="botMonitoring()" x-init="init()" class="at-stack" style="margin-block-end: var(--at-gap-lg);">
+    <div wire:ignore x-data="botMonitoring(@js($selectedBotId))" x-init="init()" class="at-stack" style="margin-block-end: var(--at-gap-lg);">
 
         {{-- Live header --}}
         <div class="at-page-head">
@@ -54,7 +91,7 @@
 
         {{-- Bots --}}
         <div x-show="!loading">
-            <template x-for="bot in bots" :key="bot.id">
+            <template x-for="bot in visibleBots" :key="bot.id">
                 <div class="at-stack" style="margin-block-end: var(--at-gap-lg);">
 
                     {{-- Bot header + snapshot metrics --}}
@@ -88,8 +125,10 @@
                                     <span class="metric-label"><span class="metric-ico">📊</span>سفارشات فعال</span>
                                     <span class="metric-value" x-text="faDigits(bot.active_orders.length)"></span>
                                     {{-- Active-vs-filled context: a filled level + its just-placed
-                                         opposite is why "active" can read one below grid_levels. --}}
-                                    <span class="metric-sub" x-text="'از ' + faDigits(bot.grid_levels) + ' سطح · ' + faDigits(bot.debug.total_filled || 0) + ' پرشده'"></span>
+                                         opposite is why "active" can read one below grid_levels.
+                                         Uses currently_filled (levels held right now), NOT
+                                         total_filled (cumulative all-time fills across both legs). --}}
+                                    <span class="metric-sub" x-text="'از ' + faDigits(bot.grid_levels) + ' سطح · ' + faDigits(bot.debug.currently_filled || 0) + ' پرشده'"></span>
                                 </div>
                                 <div class="metric-card">
                                     <span class="metric-label"><span class="metric-ico">🔄</span>معاملات ۲۴ ساعت</span>
@@ -345,7 +384,8 @@
                                 <div class="metric-card is-row"><span class="metric-label">active/placed</span><span class="metric-value" x-text="faDigits(bot.debug.total_with_status_active)"></span></div>
                                 <div class="metric-card is-row"><span class="metric-label">fill نشده</span><span class="metric-value" x-text="faDigits(bot.debug.total_not_executed)"></span></div>
                                 <div class="metric-card is-row"><span class="metric-label">pair نشده</span><span class="metric-value" x-text="faDigits(bot.debug.total_not_paired)"></span></div>
-                                <div class="metric-card is-row"><span class="metric-label">fill شده</span><span class="metric-value" x-text="faDigits(bot.debug.total_filled)"></span></div>
+                                <div class="metric-card is-row"><span class="metric-label">fill شده (کل)</span><span class="metric-value" x-text="faDigits(bot.debug.total_filled)"></span></div>
+                                <div class="metric-card is-row"><span class="metric-label">پرشده فعلی</span><span class="metric-value" x-text="faDigits(bot.debug.currently_filled)"></span></div>
                                 <div class="metric-card is-row"><span class="metric-label">Completed Trades</span><span class="metric-value pos" x-text="faDigits(bot.debug.completed_trades_total)"></span></div>
                                 <div class="metric-card is-row"><span class="metric-label">Trades ۲۴ ساعت</span><span class="metric-value pos" x-text="faDigits(bot.debug.completed_trades_24h_actual)"></span></div>
                                 <div class="metric-card is-row"><span class="metric-label">سود کل</span><span class="metric-value pos" style="direction: ltr;" x-text="formatNum(bot.debug.profit_total)"></span><span class="metric-sub">ریال</span></div>
@@ -366,7 +406,6 @@
          above owns them.
          ================================================================= --}}
     @php
-        $availableBots        = $this->getAvailableBots();
         $gridMap              = $this->getGridMapData();
         $completedPairs       = $this->getCompletedPairs();
         $capitalConcentration = $this->getCapitalConcentration();
@@ -386,19 +425,16 @@
                 <p class="at-page-head__title">تحلیل سیکل‌ها</p>
                 <p class="at-page-head__sub">تمرکز سرمایه، امتیاز موقعیت، پایداری و نقشه گرید ربات انتخاب‌شده</p>
             </div>
+            {{-- Read-only mirror of the top-of-page selector (the single bot
+                 selector now lives in the page header). Shows which bot this
+                 analytics block is for; switch bots from the top pills. --}}
             <div class="at-page-head__aside">
-                @if($availableBots->isNotEmpty())
-                    <select wire:model.live="selectedBotId" class="at-select">
-                        @foreach($availableBots as $bot)
-                            <option value="{{ $bot['id'] }}">{{ $bot['name'] }} ({{ $bot['symbol'] }})</option>
-                        @endforeach
-                    </select>
-                    @if($selectedBot)
-                        <span class="at-badge {{ $selectedBot->is_active ? 'pos' : 'muted' }}">
-                            <span class="at-dot {{ $selectedBot->is_active ? 'pos' : 'muted' }}"></span>
-                            {{ $selectedBot->is_active ? 'فعال' : 'متوقف' }}
-                        </span>
-                    @endif
+                @if($selectedBot)
+                    <span class="at-badge muted at-mono">{{ $selectedBot->symbol }}</span>
+                    <span class="at-badge {{ $selectedBot->is_active ? 'pos' : 'muted' }}">
+                        <span class="at-dot {{ $selectedBot->is_active ? 'pos' : 'muted' }}"></span>
+                        {{ $selectedBot->name }} · {{ $selectedBot->is_active ? 'فعال' : 'متوقف' }}
+                    </span>
                 @else
                     <span class="at-t-muted">هیچ رباتی پیکربندی نشده</span>
                 @endif
@@ -438,7 +474,7 @@
                             <tbody>
                                 @foreach($gridMap['levels'] as $level)
                                     <tr>
-                                        <td class="at-t-muted">L@fa($level['index'])</td>
+                                        <td class="at-t-muted">L{{ \Illuminate\Support\Str::faDigits($level['index']) }}</td>
                                         <td class="at-num at-mono">@fa($level['price'])</td>
                                         <td class="at-num at-t-dim">@fa($level['amount'])</td>
                                         <td>
@@ -599,17 +635,40 @@
             return String(value).replace(/[0-9]/g, d => map[d]);
         };
 
-        function botMonitoring() {
+        function botMonitoring(initialBotId = null) {
             return {
                 bots: [],
                 loading: true,
                 clock: '',
+                // Which bot the whole page is focused on. Seeded from the
+                // Livewire $selectedBotId at render and kept in sync with the
+                // top selector via $wire.$watch below — one source of truth.
+                selectedBotId: initialBotId,
 
                 init() {
                     this.tick();
                     this.fetchData();
                     setInterval(() => this.tick(), 1000);
                     setInterval(() => this.fetchData(), 30000);
+
+                    // Follow the top selector: when Livewire's selectedBotId
+                    // changes (a pill click), refocus the live view on it too.
+                    if (this.$wire) {
+                        this.$wire.$watch('selectedBotId', (value) => {
+                            this.selectedBotId = value;
+                        });
+                    }
+                },
+
+                // The bot(s) the live view renders: just the selected one when
+                // it is present in the active fleet, otherwise the whole fleet
+                // (covers "nothing selected yet" and any stale selection).
+                get visibleBots() {
+                    if (this.selectedBotId === null || this.selectedBotId === undefined) {
+                        return this.bots;
+                    }
+                    const match = this.bots.filter(b => String(b.id) === String(this.selectedBotId));
+                    return match.length ? match : this.bots;
                 },
 
                 tick() {

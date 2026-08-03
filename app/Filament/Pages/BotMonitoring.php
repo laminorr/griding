@@ -46,6 +46,19 @@ class BotMonitoring extends Page
         $this->selectedBot = BotConfig::find($value);
     }
 
+    /**
+     * Single source of truth for the page's selected bot.
+     *
+     * Driven by the prominent top-of-page selector (P4-compact): one click
+     * updates BOTH the live fleet view (Alpine focuses this bot via a
+     * $wire.$watch on selectedBotId) AND the deep analytics block below.
+     */
+    public function selectBot(int $botId): void
+    {
+        $this->selectedBotId = $botId;
+        $this->selectedBot = BotConfig::find($botId);
+    }
+
     public function getBotData()
     {
         $bots = BotConfig::where('is_active', true)->get();
@@ -157,6 +170,26 @@ class BotMonitoring extends Page
                 ];
             }
 
+            // Currently-held grid levels: filled orders whose round-trip is
+            // still open (the continuation leg hasn't filled, or none exists
+            // yet). This is the "how many levels are filled right NOW" count
+            // shown in the «سفارشات فعال» subline. It is deliberately different
+            // from debug.total_filled below, which counts EVERY fill ever
+            // booked — both legs of every completed cycle — and therefore only
+            // ever grows (that cumulative number is why the subline read "۱۰"
+            // when a single level was actually held).
+            $filledLegs = $bot->gridOrders()
+                ->where('status', 'filled')
+                ->get(['id', 'paired_order_id']);
+            $filledIds = $filledLegs->pluck('id')->all();
+            $currentlyFilled = $filledLegs->filter(function ($o) use ($filledIds) {
+                // Open position = no continuation yet, or its partner leg
+                // (the paired order) has not itself filled. A closed cycle has
+                // both legs filled, so both are excluded here.
+                return $o->paired_order_id === null
+                    || ! in_array($o->paired_order_id, $filledIds, true);
+            })->count();
+
             // Debug data
             $debugData = [
                 'total_orders' => $bot->gridOrders()->count(),
@@ -164,6 +197,7 @@ class BotMonitoring extends Page
                 'total_not_executed' => $bot->gridOrders()->whereNull('filled_at')->count(),
                 'total_not_paired' => $bot->gridOrders()->whereNull('paired_order_id')->count(),
                 'total_filled' => $bot->gridOrders()->where('status', 'filled')->count(),
+                'currently_filled' => $currentlyFilled,
                 'completed_trades_total' => $bot->completedTrades()->count(),
                 'completed_trades_24h_actual' => $bot->completedTrades()->where('created_at', '>=', now()->subHours(24))->count(),
                 'profit_total' => $bot->completedTrades()->sum('profit'),

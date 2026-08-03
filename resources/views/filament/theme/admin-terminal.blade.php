@@ -592,4 +592,83 @@
     /* Resource table cells: keep numeric columns LTR + tabular even in the RTL
        table, matching the custom pages. */
     .fi-ta-cell .at-num { direction: ltr; }
+
+    /* =====================================================================
+       Sidebar full-height. The nav sidebar was ending at its content height,
+       leaving a differently-shaded strip below it down to the bottom of the
+       viewport. Stretch the sidebar (and its inner nav) to the full viewport
+       height so its navy background fills all the way down regardless of how
+       few nav items there are — consistent in the collapsed + expanded states.
+       ===================================================================== */
+    .fi-sidebar,
+    .fi-sidebar-nav {
+        min-block-size: 100vh;
+        min-block-size: 100dvh;
+    }
+
+    /* =====================================================================
+       Top-of-page bot selector (P4-compact). One prominent-but-compact
+       control: a segmented pill row of the active bots with the selected one
+       highlighted in the terminal green. Wraps gracefully when there are many
+       bots. RTL-first (logical properties); navy/green terminal palette.
+       ===================================================================== */
+    .at-botpicker {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: var(--at-gap-sm) var(--at-gap-md);
+        padding: var(--at-gap-sm) var(--at-gap-md);
+        background: var(--at-surface);
+        border: 1px solid var(--at-border);
+        border-radius: var(--at-radius);
+    }
+    .at-botpicker__label {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--at-gap-xs);
+        font-size: var(--at-fs-label);
+        font-weight: 600;
+        letter-spacing: var(--at-ls-label);
+        text-transform: uppercase;
+        color: var(--at-muted);
+        white-space: nowrap;
+    }
+    .at-botpicker__options {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: var(--at-gap-xs);
+        flex: 1;
+        min-inline-size: 0;
+    }
+    .at-botpill {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--at-gap-xs);
+        padding: 6px 12px;
+        font-family: 'Vazirmatn', system-ui, sans-serif;
+        font-size: var(--at-fs-body);
+        font-weight: 500;
+        color: var(--at-text-dim);
+        background: var(--at-surface-2);
+        border: 1px solid var(--at-border-strong);
+        border-radius: 999px;
+        cursor: pointer;
+        line-height: 1.2;
+        transition: background .15s ease, border-color .15s ease, color .15s ease;
+    }
+    .at-botpill:hover { background: #1e3350; color: var(--at-text); }
+    .at-botpill.is-active {
+        color: var(--at-accent);
+        background: var(--at-accent-dim);
+        border-color: var(--at-accent-line);
+        font-weight: 700;
+    }
+    .at-botpill__name { white-space: nowrap; }
+    .at-botpill__sym {
+        font-size: var(--at-fs-label);
+        color: var(--at-muted);
+        direction: ltr;
+    }
+    .at-botpill.is-active .at-botpill__sym { color: var(--at-accent); opacity: 0.85; }
 </style>
