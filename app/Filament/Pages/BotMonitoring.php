@@ -192,6 +192,11 @@ class BotMonitoring extends Page
                 'profit_24h' => $profit24h,
                 'profit_change_24h' => round($profitChange, 2),
                 'last_check_at' => $bot->last_check_at,
+                // Presentation-only: newest trade time, derived from the
+                // $completedTrades collection already loaded above (ordered asc,
+                // so last() is the most recent). No extra query — feeds the
+                // "زمان از آخرین معامله" stat card in the live view.
+                'last_trade_at' => optional($completedTrades->last())->created_at?->toIso8601String(),
 
                 // Chart data
                 'daily_profits' => $dailyProfits,

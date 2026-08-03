@@ -80,24 +80,24 @@
                         <div class="panel-section__body">
                             <div class="metric-grid">
                                 <div class="metric-card">
-                                    <span class="metric-label">سرمایه کل</span>
+                                    <span class="metric-label"><span class="metric-ico">💰</span>سرمایه کل</span>
                                     <span class="metric-value" style="direction: ltr; text-align: start;" x-text="formatNum(bot.capital)"></span>
                                     <span class="metric-sub">ریال</span>
                                 </div>
                                 <div class="metric-card">
-                                    <span class="metric-label">سفارشات فعال</span>
+                                    <span class="metric-label"><span class="metric-ico">📊</span>سفارشات فعال</span>
                                     <span class="metric-value" x-text="faDigits(bot.active_orders.length)"></span>
                                     {{-- Active-vs-filled context: a filled level + its just-placed
                                          opposite is why "active" can read one below grid_levels. --}}
-                                    <span class="metric-sub" x-text="faDigits(bot.debug.total_filled || 0) + ' پرشده · ' + faDigits(bot.grid_levels) + ' سطح'"></span>
+                                    <span class="metric-sub" x-text="'از ' + faDigits(bot.grid_levels) + ' سطح · ' + faDigits(bot.debug.total_filled || 0) + ' پرشده'"></span>
                                 </div>
                                 <div class="metric-card">
-                                    <span class="metric-label">معاملات ۲۴ ساعت</span>
+                                    <span class="metric-label"><span class="metric-ico">🔄</span>معاملات ۲۴ ساعت</span>
                                     <span class="metric-value" x-text="faDigits(bot.completed_trades_24h)"></span>
                                     <span class="metric-sub">تکمیل‌شده</span>
                                 </div>
                                 <div class="metric-card">
-                                    <span class="metric-label">سود ۲۴ ساعت</span>
+                                    <span class="metric-label"><span class="metric-ico">📈</span>سود ۲۴ ساعت</span>
                                     <span class="metric-value" :class="bot.profit_24h >= 0 ? 'pos' : 'neg'"
                                           style="direction: ltr; text-align: start;"
                                           x-text="(bot.profit_24h >= 0 ? '+' : '') + formatNum(bot.profit_24h)"></span>
@@ -105,14 +105,15 @@
                                           x-text="(bot.profit_change_24h >= 0 ? '▲ ' : '▼ ') + faDigits(Math.abs(bot.profit_change_24h)) + '%'"></span>
                                 </div>
                                 <div class="metric-card">
-                                    <span class="metric-label">چرخه‌های کامل</span>
+                                    <span class="metric-label"><span class="metric-ico">✅</span>چرخه‌های کامل</span>
                                     <span class="metric-value" x-text="faDigits(bot.total_cycles || 0)"></span>
                                     <span class="metric-sub">از خرید تا فروش</span>
                                 </div>
                                 <div class="metric-card">
-                                    <span class="metric-label">پُر شده ۲۴ ساعت</span>
-                                    <span class="metric-value" x-text="faDigits(bot.filled_24h || 0)"></span>
-                                    <span class="metric-sub">سفارش اجرا شد</span>
+                                    <span class="metric-label"><span class="metric-ico">⏱️</span>زمان از آخرین معامله</span>
+                                    <span class="metric-value" style="font-size: var(--at-fs-title);"
+                                          x-text="bot.last_trade_at ? formatTimeAgo(bot.last_trade_at) : 'بدون معامله'"></span>
+                                    <span class="metric-sub" x-text="faDigits(bot.filled_24h || 0) + ' پُرشده ۲۴ ساعت'"></span>
                                 </div>
                             </div>
                         </div>
@@ -160,24 +161,56 @@
                             </div>
                         </div>
 
-                        {{-- Cycle summary + what the bot is waiting for --}}
+                        {{-- Cycle status: donut (active از سطوح) + dense KV list --}}
                         <div class="panel-section">
                             <div class="panel-section__head">
                                 <span class="panel-section__title">وضعیت چرخه</span>
+                                <span class="at-badge pos"><span class="at-dot pos"></span>فعال</span>
                             </div>
                             <div class="panel-section__body">
-                                <div class="at-stack-sm">
+                                <div class="at-row" style="align-items: center; gap: var(--at-gap-md);">
+                                    {{-- Donut: active orders out of grid levels --}}
+                                    <div class="at-donut"
+                                         :style="`--pct:${Math.min(100, Math.round((bot.active_orders.length / (bot.grid_levels || 1)) * 100))}`">
+                                        <div class="at-donut__hole">
+                                            <span class="at-donut__num" x-text="faDigits(bot.active_orders.length)"></span>
+                                            <span class="at-donut__den" x-text="'از ' + faDigits(bot.grid_levels)"></span>
+                                        </div>
+                                    </div>
+                                    {{-- Dense single-line KV list --}}
+                                    <div class="at-stack-sm" style="flex: 1; min-inline-size: 0;">
+                                        <div class="metric-card is-row">
+                                            <span class="metric-label">چرخه‌های کامل</span>
+                                            <span class="metric-value" x-text="faDigits(bot.total_cycles || 0)"></span>
+                                        </div>
+                                        <div class="metric-card is-row">
+                                            <span class="metric-label">میانگین مدت چرخه</span>
+                                            <span class="metric-value" style="direction: ltr;" x-text="formatDuration(bot.avg_cycle_duration || 0)"></span>
+                                        </div>
+                                        <div class="metric-card is-row">
+                                            <span class="metric-label">سفارشات فعال</span>
+                                            <span class="metric-value" x-text="faDigits(bot.active_orders.length)"></span>
+                                        </div>
+                                        <div class="metric-card is-row">
+                                            <span class="metric-label">نرخ موفقیت</span>
+                                            <span class="metric-value pos" x-text="faDigits(bot.total_cycles > 0 ? '100' : '0') + '%'"></span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="at-stack-sm" style="margin-block-start: var(--at-gap-sm);">
                                     <div class="metric-card is-row">
-                                        <span class="metric-label">چرخه کامل‌شده</span>
-                                        <span class="metric-value" x-text="faDigits(bot.total_cycles || 0)"></span>
+                                        <span class="metric-label">معاملات ۲۴ ساعت</span>
+                                        <span class="metric-value" x-text="faDigits(bot.completed_trades_24h)"></span>
                                     </div>
                                     <div class="metric-card is-row">
-                                        <span class="metric-label">میانگین مدت</span>
-                                        <span class="metric-value" style="direction: ltr;" x-text="formatDuration(bot.avg_cycle_duration || 0)"></span>
+                                        <span class="metric-label">سود ۲۴ ساعت</span>
+                                        <span class="metric-value" :class="bot.profit_24h >= 0 ? 'pos' : 'neg'" style="direction: ltr;"
+                                              x-text="(bot.profit_24h >= 0 ? '+' : '') + formatNum(bot.profit_24h) + ' ریال'"></span>
                                     </div>
                                     <div class="metric-card is-row">
-                                        <span class="metric-label">نرخ موفقیت</span>
-                                        <span class="metric-value pos" x-text="faDigits(bot.total_cycles > 0 ? '100' : '0') + '%'"></span>
+                                        <span class="metric-label">سود کل</span>
+                                        <span class="metric-value pos" style="direction: ltr;" x-text="formatNum(bot.debug.profit_total) + ' ریال'"></span>
                                     </div>
                                 </div>
 
@@ -350,8 +383,8 @@
     <div class="at-stack">
         <div class="at-page-head">
             <div>
-                <p class="at-page-head__title">تحلیل تک‌ربات</p>
-                <p class="at-page-head__sub">تمرکز سرمایه، انحراف، پایداری و نقشه گرید ربات انتخاب‌شده</p>
+                <p class="at-page-head__title">تحلیل سیکل‌ها</p>
+                <p class="at-page-head__sub">تمرکز سرمایه، امتیاز موقعیت، پایداری و نقشه گرید ربات انتخاب‌شده</p>
             </div>
             <div class="at-page-head__aside">
                 @if($availableBots->isNotEmpty())
@@ -496,27 +529,29 @@
                     </div>
                 </div>
 
-                {{-- Grid Drift --}}
+                {{-- Grid position score — big % + quality bar (mockup «امتیاز کل») --}}
                 <div class="panel-section">
                     <div class="panel-section__head">
                         <div>
-                            <span class="panel-section__title">انحراف گرید</span>
-                            <p class="panel-section__sub">شاخص ناحیه معاملاتی</p>
+                            <span class="panel-section__title">امتیاز موقعیت</span>
+                            <p class="panel-section__sub">شاخص ناحیه معاملاتی گرید</p>
                         </div>
                     </div>
                     <div class="panel-section__body">
                         <div style="text-align: center;">
                             <span class="metric-value {{ $tone($gridDrift['color'] ?? null) === 'pos' ? 'pos' : '' }} {{ $tone($gridDrift['color'] ?? null) === 'warn' ? 'at-t-warn' : '' }}"
-                                  style="font-size: 26px;">@fa(round($gridDrift['position']))%</span>
+                                  style="font-size: 34px; line-height: 1;">@fa(round($gridDrift['position']))%</span>
                             <p style="font-size: var(--at-fs-body); color: var(--at-text); margin-block-start: var(--at-gap-xs);">{{ $gridDrift['status'] }}</p>
                             <p class="at-kv__k">{{ $gridDrift['description'] }}</p>
                         </div>
+                        {{-- Quality bar: filled to the position %, with pole/high edges labelled --}}
                         <div style="margin-block-start: var(--at-gap-md);">
-                            <div class="at-row at-kv__k" style="justify-content: space-between;">
-                                <span>پایین</span><span>بالا</span>
+                            <div class="at-bar" style="block-size: 8px;">
+                                <div class="at-bar__fill {{ $tone($gridDrift['color'] ?? null) === 'warn' ? 'warn' : '' }}"
+                                     style="inline-size: {{ min(100, max(0, $gridDrift['position'])) }}%;"></div>
                             </div>
-                            <div class="at-bar" style="block-size: 8px; margin-block-start: 4px;">
-                                <div style="position: absolute; inset-block: 0; inset-inline-start: {{ min(100, max(0, $gridDrift['position'])) }}%; inline-size: 3px; background: var(--at-accent); border-radius: 2px; transform: translateX(-50%);"></div>
+                            <div class="at-row at-kv__k" style="justify-content: space-between; margin-block-start: 4px;">
+                                <span>پایین</span><span>بالا</span>
                             </div>
                         </div>
                     </div>

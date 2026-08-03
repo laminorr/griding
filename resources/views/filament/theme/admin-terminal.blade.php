@@ -55,28 +55,29 @@
 
     :root {
         /* ---- Background layers (cohesive dark NAVY terminal) ----
-           The panel chrome (sidebar / page) is Filament's Slate dark scale, a
-           blue-tinted navy. The surface tokens below sit on the SAME navy
-           ladder — a step lighter each rung — so cards no longer read as a
-           neutral-gray patch against the navy shell. Values chosen between the
-           deep-navy background and a neutral slate, biased blue. */
-        --at-bg: #0B1220;            /* darkest navy — matches the page shell */
-        --at-surface: #141D30;       /* cards — one navy step lighter, NOT gray */
-        --at-surface-2: #1E2A42;     /* nested / hover — a further navy step up */
-        --at-border: rgba(122, 142, 176, 0.16);  /* thin navy-gray hairline */
-        --at-border-strong: rgba(122, 142, 176, 0.26);
+           P4-compact: reconciled to the approved «مانیتورینگ زنده» redesign
+           mockup. The mockup's --bg / --panel / --text / --muted / --green /
+           --red are adopted here as the panel-wide source of truth, so the
+           whole panel (dashboard, widgets, resources, custom pages) shifts to
+           the deeper navy + brighter mint together — not just one page. The
+           surface ladder still steps one rung lighter each level. */
+        --at-bg: #06101f;            /* mockup --bg — deepest navy page shell */
+        --at-surface: #0d1a2d;       /* mockup --panel — cards / sections */
+        --at-surface-2: #16273d;     /* nested / hover — a navy step up from panel */
+        --at-border: rgba(143, 160, 184, 0.16);  /* thin navy-gray hairline */
+        --at-border-strong: rgba(143, 160, 184, 0.26);
 
-        /* ---- Accent (single soft-neon green) ---- */
-        --at-accent: #34D399;        /* chosen green: emerald-400 / mint-neon */
-        --at-accent-dim: rgba(52, 211, 153, 0.14);
-        --at-accent-line: rgba(52, 211, 153, 0.55);
+        /* ---- Accent (single soft-neon green — mockup --green) ---- */
+        --at-accent: #23d18b;        /* mockup --green: mint-neon */
+        --at-accent-dim: rgba(35, 209, 139, 0.14);
+        --at-accent-line: rgba(35, 209, 139, 0.55);
 
         /* ---- Semantic ---- */
         --at-pos: var(--at-accent);  /* positive == accent green */
-        --at-neg: #F87171;           /* negative == soft red */
-        --at-muted: #7C8899;         /* label / secondary gray */
-        --at-text: #E6EAF0;          /* near-white, not pure white */
-        --at-text-dim: #AEB7C4;
+        --at-neg: #ff5d68;           /* mockup --red — soft coral red */
+        --at-muted: #8fa0b8;         /* mockup --muted — label / secondary */
+        --at-text: #eef4ff;          /* mockup --text — near-white, cool */
+        --at-text-dim: #b9c6da;
 
         /* ---- Typography scale (dense layout, READABLE text) ----
            P4-final: the boxes/gaps stay tight (spacing tokens below are
@@ -98,9 +99,12 @@
         --at-gap-md: 8px;   /* was 12 */
         --at-gap-lg: 11px;  /* was 16 */
 
-        /* ---- Radius (small) & shadow (minimal) ---- */
-        --at-radius: 5px;
-        --at-radius-sm: 4px;
+        /* ---- Radius & shadow ----
+           P4-compact: the mockup uses a softer --radius:14px on its panels /
+           cards. Adopted here for panel-section + metric tiles; a smaller
+           radius-sm keeps buttons / selects / inputs from over-rounding. */
+        --at-radius: 14px;
+        --at-radius-sm: 10px;
         --at-shadow: none;
     }
 
@@ -354,20 +358,20 @@
         text-decoration: none;
         transition: background .15s ease, border-color .15s ease;
     }
-    .at-btn:hover { background: #26344F; }
+    .at-btn:hover { background: #1e3350; }
     .at-btn svg { width: 15px; height: 15px; flex: none; }
     .at-btn--accent {
         background: var(--at-accent-dim);
         border-color: var(--at-accent-line);
         color: var(--at-accent);
     }
-    .at-btn--accent:hover { background: rgba(52, 211, 153, 0.22); }
+    .at-btn--accent:hover { background: rgba(35, 209, 139, 0.22); }
     .at-btn--danger {
         color: var(--at-neg);
-        border-color: rgba(248, 113, 113, 0.40);
-        background: rgba(248, 113, 113, 0.10);
+        border-color: rgba(255, 93, 104, 0.40);
+        background: rgba(255, 93, 104, 0.10);
     }
-    .at-btn--danger:hover { background: rgba(248, 113, 113, 0.18); }
+    .at-btn--danger:hover { background: rgba(255, 93, 104, 0.18); }
 
     /* ---- Pills / badges ---- */
     .at-badge {
@@ -385,13 +389,13 @@
         white-space: nowrap;
     }
     .at-badge.pos  { color: var(--at-accent); background: var(--at-accent-dim); border-color: var(--at-accent-line); }
-    .at-badge.neg  { color: var(--at-neg);    background: rgba(248, 113, 113, 0.12); border-color: rgba(248, 113, 113, 0.40); }
+    .at-badge.neg  { color: var(--at-neg);    background: rgba(255, 93, 104, 0.12); border-color: rgba(255, 93, 104, 0.40); }
     .at-badge.warn { color: var(--at-warn);   background: var(--at-warn-dim); border-color: rgba(217, 164, 65, 0.35); }
     .at-badge.muted{ color: var(--at-muted); }
 
     /* ---- Status dot ---- */
     .at-dot { width: 7px; height: 7px; border-radius: 999px; background: var(--at-muted); flex: none; display: inline-block; }
-    .at-dot.pos  { background: var(--at-accent); box-shadow: 0 0 6px rgba(52, 211, 153, 0.5); }
+    .at-dot.pos  { background: var(--at-accent); box-shadow: 0 0 6px rgba(35, 209, 139, 0.5); }
     .at-dot.neg  { background: var(--at-neg); }
     .at-dot.warn { background: var(--at-warn); }
 
@@ -413,6 +417,56 @@
     .at-bar__fill.neg   { background: var(--at-neg); }
     .at-bar__fill.warn  { background: var(--at-warn); }
     .at-bar__fill.muted { background: var(--at-muted); }
+
+    /* ---- Tiny leading glyph on a metric-card label (mockup: small icon per
+       card). Muted, inline, never competes with the value. ---- */
+    .metric-ico {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        inline-size: 15px;
+        font-size: 12px;
+        line-height: 1;
+        opacity: 0.72;
+        margin-inline-end: 4px;
+        filter: grayscale(0.15);
+    }
+
+    /* ---- Cycle donut (conic ring + centred N/den) used by «وضعیت چرخه».
+       --pct is set inline (0-100). The hole re-shows the panel surface so the
+       ring reads as a progress arc. ---- */
+    .at-donut {
+        --pct: 0;
+        inline-size: 92px;
+        block-size: 92px;
+        border-radius: 50%;
+        flex: none;
+        background: conic-gradient(var(--at-accent) calc(var(--pct) * 1%), var(--at-surface-2) 0);
+        display: grid;
+        place-items: center;
+    }
+    .at-donut__hole {
+        inline-size: 66px;
+        block-size: 66px;
+        border-radius: 50%;
+        background: var(--at-surface);
+        display: grid;
+        place-items: center;
+        text-align: center;
+        line-height: 1.1;
+    }
+    .at-donut__num {
+        display: block;
+        font-size: 20px;
+        font-weight: 700;
+        color: var(--at-text);
+        font-variant-numeric: tabular-nums;
+    }
+    .at-donut__den {
+        display: block;
+        font-size: var(--at-fs-label);
+        color: var(--at-muted);
+    }
 
     /* ---- Compact native select (bot picker etc.) ---- */
     .at-select {
