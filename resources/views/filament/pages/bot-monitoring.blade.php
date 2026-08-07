@@ -19,13 +19,14 @@
 <x-filament-panels::page>
 
     {{-- =================================================================
-         TOP BOT SELECTOR (P4-compact). One prominent, compact control at the
-         top of the page — the single source of truth for which bot the whole
-         page shows. Clicking a pill sets $selectedBotId on the Livewire
-         component, which (a) re-renders the deep analytics block below and
-         (b) is picked up by the live view's Alpine ($wire.$watch) so it
-         focuses the SAME bot. Active bots are listed; the selected one is
-         highlighted.
+         TOP BOT SELECTOR (v3 mockup .bot-selector-wrap). One prominent «انتخاب
+         ربات» dropdown at the top of the page — the single source of truth for
+         which bot the whole page shows. Changing it sets $selectedBotId on the
+         Livewire component (wire:model.live → updatedSelectedBotId), which
+         (a) re-renders the deep analytics block below for that bot and (b) is
+         picked up by the live view's Alpine ($wire.$watch) so it focuses the
+         SAME bot. The «فعال» status affordance mirrors the selected bot's real
+         active state. Options are the real active-bots list.
          ================================================================= --}}
     @php
         $pickerAll    = $this->getAvailableBots();
@@ -33,22 +34,19 @@
         $pickerBots   = $pickerActive->isNotEmpty() ? $pickerActive : $pickerAll;
     @endphp
     @if($pickerBots->isNotEmpty())
-        <div class="at-botpicker" style="margin-block-end: var(--at-gap-lg);">
-            <div class="at-botpicker__label">
-                <span class="at-dot pos"></span>
-                <span>ربات فعال</span>
-            </div>
-            <div class="at-botpicker__options">
-                @foreach($pickerBots as $b)
-                    <button type="button"
-                            wire:key="botpill-{{ $b['id'] }}"
-                            wire:click="selectBot({{ $b['id'] }})"
-                            class="at-botpill {{ $selectedBotId == $b['id'] ? 'is-active' : '' }}">
-                        <span class="at-dot {{ $b['is_active'] ? 'pos' : 'muted' }}"></span>
-                        <span class="at-botpill__name">{{ $b['name'] }}</span>
-                        <span class="at-botpill__sym at-mono">{{ $b['symbol'] }}</span>
-                    </button>
-                @endforeach
+        <div class="at-botselect-wrap">
+            <label class="at-botselect-label" for="botSelector">انتخاب ربات</label>
+            <div class="at-botselect">
+                <select id="botSelector" wire:model.live="selectedBotId" aria-label="انتخاب ربات">
+                    @foreach($pickerBots as $b)
+                        <option value="{{ $b['id'] }}">{{ $b['name'] }} — {{ $b['symbol'] }}</option>
+                    @endforeach
+                </select>
+                @if($selectedBot)
+                    <span class="at-botselect-status {{ $selectedBot->is_active ? '' : 'is-off' }}">
+                        {{ $selectedBot->is_active ? 'فعال' : 'متوقف' }}
+                    </span>
+                @endif
             </div>
         </div>
     @endif
@@ -115,44 +113,113 @@
                         </div>
 
                         <div class="panel-section__body">
-                            <div class="metric-grid">
-                                <div class="metric-card">
-                                    <span class="metric-label"><span class="metric-ico">💰</span>سرمایه کل</span>
+                            <div class="metric-grid kpis">
+                                {{-- سرمایه کل --}}
+                                <div class="metric-card kpi wallet">
+                                    <div class="metric-head">
+                                        <span class="metric-label">سرمایه کل</span>
+                                        <span class="metric-icon">
+                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                                <path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H18a2 2 0 0 1 2 2v2H8a2 2 0 0 0 0 4h12v4a2 2 0 0 1-2 2H6.5A2.5 2.5 0 0 1 4 16.5v-9Z"/>
+                                                <path d="M18 9h3v4h-3a2 2 0 1 1 0-4Z"/>
+                                            </svg>
+                                        </span>
+                                    </div>
                                     <span class="metric-value" style="direction: ltr; text-align: start;" x-text="formatNum(bot.capital)"></span>
-                                    <span class="metric-sub">ریال</span>
+                                    <div class="metric-foot">
+                                        <span class="metric-sub">ریال</span>
+                                        <span class="metric-chip">کل بودجه ربات</span>
+                                    </div>
                                 </div>
-                                <div class="metric-card">
-                                    <span class="metric-label"><span class="metric-ico">📊</span>سفارشات فعال</span>
+                                {{-- سفارشات فعال --}}
+                                <div class="metric-card kpi orders">
+                                    <div class="metric-head">
+                                        <span class="metric-label">سفارشات فعال</span>
+                                        <span class="metric-icon">
+                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                                <path d="M8 6h12"/><path d="M8 12h12"/><path d="M8 18h12"/>
+                                                <circle cx="4" cy="6" r="1.4"/><circle cx="4" cy="12" r="1.4"/><circle cx="4" cy="18" r="1.4"/>
+                                            </svg>
+                                        </span>
+                                    </div>
                                     <span class="metric-value" x-text="faDigits(bot.active_orders.length)"></span>
                                     {{-- Active-vs-filled context: a filled level + its just-placed
                                          opposite is why "active" can read one below grid_levels.
                                          Uses currently_filled (levels held right now), NOT
                                          total_filled (cumulative all-time fills across both legs). --}}
-                                    <span class="metric-sub" x-text="'از ' + faDigits(bot.grid_levels) + ' سطح · ' + faDigits(bot.debug.currently_filled || 0) + ' پرشده'"></span>
+                                    <div class="metric-foot">
+                                        <span class="metric-sub" x-text="'از ' + faDigits(bot.grid_levels) + ' سطح · ' + faDigits(bot.debug.currently_filled || 0) + ' پرشده'"></span>
+                                        <span class="metric-chip">وضعیت فعلی</span>
+                                    </div>
                                 </div>
-                                <div class="metric-card">
-                                    <span class="metric-label"><span class="metric-ico">🔄</span>معاملات ۲۴ ساعت</span>
+                                {{-- معاملات ۲۴ ساعت --}}
+                                <div class="metric-card kpi trades">
+                                    <div class="metric-head">
+                                        <span class="metric-label">معاملات ۲۴ ساعت</span>
+                                        <span class="metric-icon">
+                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                                <path d="M5 17V7"/><path d="M12 17V4"/><path d="M19 17v-8"/><path d="M3 20h18"/>
+                                            </svg>
+                                        </span>
+                                    </div>
                                     <span class="metric-value" x-text="faDigits(bot.completed_trades_24h)"></span>
-                                    <span class="metric-sub">تکمیل‌شده</span>
+                                    <div class="metric-foot">
+                                        <span class="metric-sub">تکمیل‌شده</span>
+                                        <span class="metric-chip">عملکرد روزانه</span>
+                                    </div>
                                 </div>
-                                <div class="metric-card">
-                                    <span class="metric-label"><span class="metric-ico">📈</span>سود ۲۴ ساعت</span>
+                                {{-- سود ۲۴ ساعت --}}
+                                <div class="metric-card kpi profit">
+                                    <div class="metric-head">
+                                        <span class="metric-label">سود ۲۴ ساعت</span>
+                                        <span class="metric-icon">
+                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                                <path d="M4 16l5-5 4 4 7-8"/><path d="M14 7h6v6"/>
+                                            </svg>
+                                        </span>
+                                    </div>
                                     <span class="metric-value" :class="bot.profit_24h >= 0 ? 'pos' : 'neg'"
                                           style="direction: ltr; text-align: start;"
                                           x-text="(bot.profit_24h >= 0 ? '+' : '') + formatNum(bot.profit_24h)"></span>
-                                    <span class="metric-sub" :class="bot.profit_change_24h >= 0 ? 'pos' : 'neg'"
-                                          x-text="(bot.profit_change_24h >= 0 ? '▲ ' : '▼ ') + faDigits(Math.abs(bot.profit_change_24h)) + '%'"></span>
+                                    <div class="metric-foot">
+                                        <span class="metric-sub" :class="bot.profit_change_24h >= 0 ? 'pos' : 'neg'"
+                                              x-text="(bot.profit_change_24h >= 0 ? '▲ ' : '▼ ') + faDigits(Math.abs(bot.profit_change_24h)) + '%'"></span>
+                                        <span class="metric-chip">سود روز جاری</span>
+                                    </div>
                                 </div>
-                                <div class="metric-card">
-                                    <span class="metric-label"><span class="metric-ico">✅</span>چرخه‌های کامل</span>
+                                {{-- چرخه‌های کامل --}}
+                                <div class="metric-card kpi cycles">
+                                    <div class="metric-head">
+                                        <span class="metric-label">چرخه‌های کامل</span>
+                                        <span class="metric-icon">
+                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                                <path d="M21 12a8.5 8.5 0 0 1-14.5 6l-2.5-2.5"/><path d="M3 12A8.5 8.5 0 0 1 17.5 6L20 8.5"/>
+                                                <path d="M20 4v4.5h-4.5"/><path d="M4 20v-4.5h4.5"/>
+                                            </svg>
+                                        </span>
+                                    </div>
                                     <span class="metric-value" x-text="faDigits(bot.total_cycles || 0)"></span>
-                                    <span class="metric-sub">از خرید تا فروش</span>
+                                    <div class="metric-foot">
+                                        <span class="metric-sub">از خرید تا فروش</span>
+                                        <span class="metric-chip">سیکل‌های موفق</span>
+                                    </div>
                                 </div>
-                                <div class="metric-card">
-                                    <span class="metric-label"><span class="metric-ico">⏱️</span>زمان از آخرین معامله</span>
+                                {{-- زمان از آخرین معامله --}}
+                                <div class="metric-card kpi time">
+                                    <div class="metric-head">
+                                        <span class="metric-label">زمان از آخرین معامله</span>
+                                        <span class="metric-icon">
+                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                                <circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3.5 2"/>
+                                            </svg>
+                                        </span>
+                                    </div>
                                     <span class="metric-value" style="font-size: var(--at-fs-title);"
                                           x-text="bot.last_trade_at ? formatTimeAgo(bot.last_trade_at) : 'بدون معامله'"></span>
-                                    <span class="metric-sub" x-text="faDigits(bot.filled_24h || 0) + ' پُرشده ۲۴ ساعت'"></span>
+                                    <div class="metric-foot">
+                                        <span class="metric-sub" x-text="faDigits(bot.filled_24h || 0) + ' پُرشده ۲۴ ساعت'"></span>
+                                        <span class="metric-chip">آخرین فعالیت</span>
+                                    </div>
                                 </div>
                             </div>
                         </div>

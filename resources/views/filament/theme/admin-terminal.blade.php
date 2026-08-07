@@ -55,28 +55,39 @@
 
     :root {
         /* ---- Background layers (cohesive dark NAVY terminal) ----
-           P4-compact: reconciled to the approved «مانیتورینگ زنده» redesign
-           mockup. The mockup's --bg / --panel / --text / --muted / --green /
-           --red are adopted here as the panel-wide source of truth, so the
-           whole panel (dashboard, widgets, resources, custom pages) shifts to
-           the deeper navy + brighter mint together — not just one page. The
-           surface ladder still steps one rung lighter each level. */
-        --at-bg: #06101f;            /* mockup --bg — deepest navy page shell */
-        --at-surface: #0d1a2d;       /* mockup --panel — cards / sections */
-        --at-surface-2: #16273d;     /* nested / hover — a navy step up from panel */
-        --at-border: rgba(143, 160, 184, 0.16);  /* thin navy-gray hairline */
-        --at-border-strong: rgba(143, 160, 184, 0.26);
+           P4-compact / v3: reconciled to the approved «مانیتورینگ زنده» v3
+           redesign mockup. The mockup's --bg / --panel / --line / --text /
+           --muted / --green / --red / --blue / --yellow / --purple are adopted
+           here VERBATIM as the panel-wide source of truth, so the whole panel
+           (dashboard, widgets, resources, custom pages) shifts together — not
+           just one page. The surface ladder still steps one rung lighter each
+           level. */
+        --at-bg: #07101d;            /* mockup --bg — deepest navy page shell */
+        --at-surface: #101a2a;       /* mockup --panel — cards / sections */
+        --at-surface-2: #16243a;     /* mockup panel/chip step-up — nested / hover */
+        --at-border: #233349;        /* mockup --line — solid navy hairline */
+        --at-border-strong: #2a3b54; /* mockup select/border-strong */
 
         /* ---- Accent (single soft-neon green — mockup --green) ---- */
-        --at-accent: #23d18b;        /* mockup --green: mint-neon */
-        --at-accent-dim: rgba(35, 209, 139, 0.14);
-        --at-accent-line: rgba(35, 209, 139, 0.55);
+        --at-accent: #21d48b;        /* mockup --green: mint-neon */
+        --at-accent-dim: rgba(33, 212, 139, 0.14);
+        --at-accent-line: rgba(33, 212, 139, 0.55);
+
+        /* ---- Section accent tints (mockup --blue / --purple / --yellow).
+           Kept subtle: used for per-section headers/icons only. Green stays the
+           primary accent everywhere. ---- */
+        --at-blue: #55bdff;
+        --at-blue-dim: rgba(85, 189, 255, 0.16);
+        --at-purple: #9a7dff;
+        --at-purple-dim: rgba(154, 125, 255, 0.16);
+        --at-yellow: #f0bf5b;
+        --at-yellow-dim: rgba(240, 191, 91, 0.14);
 
         /* ---- Semantic ---- */
         --at-pos: var(--at-accent);  /* positive == accent green */
-        --at-neg: #ff5d68;           /* mockup --red — soft coral red */
-        --at-muted: #8fa0b8;         /* mockup --muted — label / secondary */
-        --at-text: #eef4ff;          /* mockup --text — near-white, cool */
+        --at-neg: #ff5b6a;           /* mockup --red — soft coral red */
+        --at-muted: #8d9cb0;         /* mockup --muted — label / secondary */
+        --at-text: #edf4ff;          /* mockup --text — near-white, cool */
         --at-text-dim: #b9c6da;
 
         /* ---- Typography scale (dense layout, READABLE text) ----
@@ -100,12 +111,20 @@
         --at-gap-lg: 11px;  /* was 16 */
 
         /* ---- Radius & shadow ----
-           P4-compact: the mockup uses a softer --radius:14px on its panels /
-           cards. Adopted here for panel-section + metric tiles; a smaller
-           radius-sm keeps buttons / selects / inputs from over-rounding. */
-        --at-radius: 14px;
-        --at-radius-sm: 10px;
+           P4-compact / v3: the mockup uses --radius:16px on its panels / cards
+           and shadow:none. Adopted here for panel-section + metric tiles; a
+           smaller radius-sm keeps buttons / selects / inputs from over-rounding. */
+        --at-radius: 16px;
+        --at-radius-sm: 11px;
         --at-shadow: none;
+
+        /* ---- Sidebar width (mockup --sidebar:244px, collapsed 72px) ----
+           Filament v3 reads these CSS variables for the desktop sidebar's
+           expanded + icon-collapsed widths, so setting them here narrows the
+           nav panel-wide to the mockup's compact 244px (72px collapsed) without
+           touching any panel PHP. Full-height rule lives further below. */
+        --sidebar-width: 244px;
+        --collapsed-sidebar-width: 72px;
     }
 
     /* =====================================================================
@@ -187,6 +206,97 @@
         margin-block-start: 0;
         color: var(--at-muted);        /* sub reads as a muted suffix, not a new line */
     }
+
+    /* ---- Ultra-flat KPI tile (v3 mockup) --------------------------------
+       The prominent top-row stat cards. Additive modifier on .metric-card: a
+       thin coloured top-bar (--accent), an icon chip in the head, a big value,
+       and a foot line pairing a muted sub with a rounded context chip — exactly
+       the mockup's delicate KPI look. Per-card accent set via .metric-card.kpi
+       modifiers below; green stays the default. --------------------------- */
+    .metric-card.kpi {
+        --accent: var(--at-accent);
+        --accent-soft: var(--at-accent-dim);
+        position: relative;
+        min-block-size: 92px;
+        padding: 11px 12px 10px;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+    }
+    .metric-card.kpi::before {
+        content: "";
+        position: absolute;
+        inset-block-start: 0;
+        inset-inline: 0;
+        block-size: 2px;
+        background: var(--accent);
+        opacity: 0.9;
+    }
+    .metric-card.kpi::after {
+        content: "";
+        position: absolute;
+        inline-size: 72px;
+        block-size: 72px;
+        inset-inline-start: -20px;
+        inset-block-end: -20px;
+        border-radius: 50%;
+        background: radial-gradient(circle, var(--accent-soft) 0%, transparent 68%);
+        opacity: 0.5;
+        pointer-events: none;
+    }
+    .metric-card.kpi .metric-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: var(--at-gap-sm);
+        margin-block-end: var(--at-gap-sm);
+    }
+    .metric-card.kpi .metric-label {
+        margin-block-end: 0;
+        text-transform: none;         /* mockup labels are sentence-case */
+        letter-spacing: normal;
+        color: #a8b6ca;
+    }
+    .metric-icon {
+        inline-size: 28px;
+        block-size: 28px;
+        border-radius: 9px;
+        display: grid;
+        place-items: center;
+        flex: 0 0 auto;
+        background: rgba(255, 255, 255, 0.02);
+        border: 1px solid rgba(255, 255, 255, 0.07);
+        color: var(--accent, var(--at-accent));
+    }
+    .metric-icon svg { inline-size: 15px; block-size: 15px; }
+    .metric-card.kpi .metric-value { font-size: 17px; font-weight: 800; letter-spacing: -0.2px; }
+    .metric-card.kpi .metric-foot {
+        display: flex;
+        justify-content: space-between;
+        align-items: end;
+        gap: var(--at-gap-sm);
+        margin-block-start: auto;
+        padding-block-start: 3px;
+    }
+    .metric-card.kpi .metric-sub { margin-block-start: 0; }
+    .metric-chip {
+        padding: 2px 6px;
+        border-radius: 999px;
+        font-size: 9px;
+        font-weight: 600;
+        background: var(--at-surface-2);
+        color: var(--at-text-dim);
+        border: 1px solid var(--at-border-strong);
+        white-space: nowrap;
+    }
+    /* Per-card accents (mockup): wallet/profit=green, orders/time=blue,
+       trades=purple, cycles=yellow. */
+    .metric-card.kpi.wallet { --accent: var(--at-accent); --accent-soft: var(--at-accent-dim); }
+    .metric-card.kpi.orders { --accent: var(--at-blue);   --accent-soft: var(--at-blue-dim); }
+    .metric-card.kpi.trades { --accent: var(--at-purple); --accent-soft: var(--at-purple-dim); }
+    .metric-card.kpi.profit { --accent: var(--at-accent); --accent-soft: var(--at-accent-dim); }
+    .metric-card.kpi.cycles { --accent: var(--at-yellow); --accent-soft: var(--at-yellow-dim); }
+    .metric-card.kpi.time   { --accent: var(--at-blue);   --accent-soft: var(--at-blue-dim); }
 
     /* Section wrapper with a small header row + thin divider */
     .panel-section {
@@ -279,6 +389,11 @@
         grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
         gap: var(--at-gap-sm);
     }
+    /* KPI row (v3 mockup .kpis): 3 across → 2 → 1, matching the mockup's
+       breakpoints so the six ultra-flat stat tiles sit in two tidy rows. */
+    .metric-grid.kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--at-gap-md); }
+    @media (max-width: 1100px) { .metric-grid.kpis { grid-template-columns: repeat(2, 1fr); } }
+    @media (max-width: 680px)  { .metric-grid.kpis { grid-template-columns: 1fr; } }
     .at-cols-2 { display: grid; grid-template-columns: 1fr; gap: var(--at-gap-md); }
     .at-cols-3 { display: grid; grid-template-columns: 1fr; gap: var(--at-gap-md); }
     @media (min-width: 768px) {
@@ -671,4 +786,84 @@
         direction: ltr;
     }
     .at-botpill.is-active .at-botpill__sym { color: var(--at-accent); opacity: 0.85; }
+
+    /* =====================================================================
+       Top-of-page bot SELECTOR — dropdown form (v3 mockup .bot-selector-wrap).
+       A single prominent «انتخاب ربات» <select> that drives the whole page,
+       with a green «فعال» status affordance floated to the inline-end. One
+       source of truth: changing it re-renders both the live view and the deep
+       analytics for the chosen bot. RTL-first (logical properties).
+       ===================================================================== */
+    .at-botselect-wrap { margin-block-end: var(--at-gap-lg); }
+    .at-botselect-label {
+        display: block;
+        margin: 0 2px 6px;
+        color: var(--at-muted);
+        font-size: var(--at-fs-label);
+        font-weight: 600;
+    }
+    .at-botselect {
+        position: relative;
+        inline-size: 100%;
+        max-inline-size: 360px;
+    }
+    .at-botselect select {
+        inline-size: 100%;
+        block-size: 42px;
+        appearance: none;
+        -webkit-appearance: none;
+        border: 1px solid var(--at-border-strong);
+        border-radius: var(--at-radius-sm);
+        background: var(--at-surface);
+        color: var(--at-text);
+        padding-inline: 42px 76px;   /* start: chevron gutter · end: status pill */
+        outline: none;
+        cursor: pointer;
+        font-family: 'Vazirmatn', Tahoma, sans-serif;
+        font-size: var(--at-fs-body);
+        font-weight: 700;
+        line-height: 42px;
+        transition: border-color .15s ease, background .15s ease;
+    }
+    .at-botselect select:hover { border-color: #38516f; background: var(--at-surface-2); }
+    .at-botselect select:focus { border-color: var(--at-accent-line); }
+    .at-botselect select option { background: var(--at-surface); color: var(--at-text); }
+    /* Chevron on the inline-start edge (physically right in the RTL panel) */
+    .at-botselect::after {
+        content: "";
+        position: absolute;
+        inset-block-start: 50%;
+        inset-inline-start: 16px;
+        inline-size: 7px;
+        block-size: 7px;
+        border-inline-end: 1.5px solid var(--at-muted);
+        border-block-end: 1.5px solid var(--at-muted);
+        transform: translateY(-65%) rotate(45deg);
+        pointer-events: none;
+    }
+    .at-botselect-status {
+        position: absolute;
+        inset-block-start: 50%;
+        inset-inline-end: 14px;
+        transform: translateY(-50%);
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        block-size: 20px;
+        color: var(--at-accent);
+        font-size: 10px;
+        line-height: 1;
+        pointer-events: none;
+    }
+    .at-botselect-status::before {
+        content: "";
+        inline-size: 7px;
+        block-size: 7px;
+        flex: 0 0 7px;
+        border-radius: 50%;
+        background: var(--at-accent);
+        box-shadow: 0 0 6px rgba(33, 212, 139, 0.5);
+    }
+    .at-botselect-status.is-off { color: var(--at-muted); }
+    .at-botselect-status.is-off::before { background: var(--at-muted); box-shadow: none; }
 </style>

@@ -73,9 +73,12 @@ class AdminPanelProvider extends PanelProvider
                 <style>
                     :root {
                         --font-family: Vazirmatn, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-                        --sidebar-bg: linear-gradient(145deg, #0f172a 0%, #1e293b 50%, #334155 100%);
-                        --sidebar-border: rgba(148, 163, 184, 0.1);
-                        --sidebar-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+                        /* Flat navy sidebar (v3 mockup #101b2d) — aligned to the
+                           deeper navy design tokens; no gradient/shadow so the
+                           nav reads as one calm surface with the page. */
+                        --sidebar-bg: #101b2d;
+                        --sidebar-border: rgba(35, 51, 73, 0.9);
+                        --sidebar-shadow: none;
                         --sidebar-item-hover: rgba(16, 185, 129, 0.1);
                         --sidebar-item-active: rgba(16, 185, 129, 0.15);
                     }
@@ -296,11 +299,11 @@ class AdminPanelProvider extends PanelProvider
                         background: rgba(16, 185, 129, 0.5);
                     }
                     
-                    /* Dark mode enhancements */
+                    /* Dark mode enhancements (flat navy, matches the tokens) */
                     .dark .fi-sidebar {
-                        --sidebar-bg: linear-gradient(145deg, #020617 0%, #0f172a 50%, #1e293b 100%);
-                        --sidebar-border: rgba(148, 163, 184, 0.05);
-                        --sidebar-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.4);
+                        --sidebar-bg: #0d1727;
+                        --sidebar-border: rgba(35, 51, 73, 0.7);
+                        --sidebar-shadow: none;
                     }
                     
                     /* ========== MAIN CONTENT ADJUSTMENTS ========== */
