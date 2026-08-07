@@ -48,9 +48,9 @@ class BotConfigResource extends Resource
     
     protected static ?string $pluralModelLabel = 'ربات‌های گرید';
     
-    protected static ?string $navigationGroup = 'معاملات';
-    
-    protected static ?int $navigationSort = 1;
+    // Flat sidebar: no navigationGroup so this renders directly in the flat
+    // list. navigationSort places it after the tools/pages.
+    protected static ?int $navigationSort = 5;
 
     public static function form(Form $form): Form
     {
@@ -574,17 +574,6 @@ class BotConfigResource extends Resource
             'create' => Pages\CreateBotConfig::route('/create'),
             'edit' => Pages\EditBotConfig::route('/{record}/edit'),
         ];
-    }
-    
-    public static function getNavigationBadge(): ?string
-    {
-        $active = static::getModel()::where('is_active', true)->count();
-        return $active > 0 ? (string) $active : null;
-    }
-    
-    public static function getNavigationBadgeColor(): ?string
-    {
-        return 'success';
     }
     
     public static function getGloballySearchableAttributes(): array

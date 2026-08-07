@@ -43,12 +43,10 @@ class AdminPanelProvider extends PanelProvider
                 'danger' => Color::Rose,
             ])
             ->font('Vazirmatn')
-            ->navigationGroups([
-                'ربات‌ها' => 1,
-                'معاملات' => 2,
-                'گزارش‌ها' => 3,
-                'تنظیمات' => 4,
-            ])
+            // Flat sidebar: no navigation GROUP headings. Resources/pages no
+            // longer assign a navigationGroup, so every item renders directly in
+            // one flat list ordered by navigationSort. (No ->navigationGroups()
+            // registration on purpose.)
             ->sidebarCollapsibleOnDesktop()
             ->sidebarFullyCollapsibleOnDesktop()
             ->topNavigation(false)
@@ -92,13 +90,28 @@ class AdminPanelProvider extends PanelProvider
                     }
                     
                     /* ========== SIDEBAR STYLING ========== */
+                    /* Full-height fixed sidebar. Filament v3 already makes
+                       .fi-sidebar position:fixed / height:100dvh; the previous
+                       design forced position:relative here, which dropped the
+                       sidebar back into normal flow — so on any page taller than
+                       the viewport it scrolled away and revealed the differently
+                       shaded page shell below the last nav item. We keep it
+                       FIXED and pinned to the full viewport height so the navy
+                       background fills top-to-bottom at all times, in both the
+                       expanded and collapsed states, regardless of content
+                       length or scroll position. A fixed element is still the
+                       containing block for its ::before overlay, so that keeps
+                       working without position:relative. */
                     .fi-sidebar {
                         background: var(--sidebar-bg) !important;
                         border-right: 1px solid var(--sidebar-border) !important;
                         box-shadow: var(--sidebar-shadow) !important;
                         backdrop-filter: blur(20px) !important;
                         -webkit-backdrop-filter: blur(20px) !important;
-                        position: relative !important;
+                        position: fixed !important;
+                        inset-block: 0 !important;      /* top:0 + bottom:0 */
+                        block-size: 100vh !important;
+                        block-size: 100dvh !important;
                         z-index: 50 !important;
                     }
                     
@@ -240,45 +253,28 @@ class AdminPanelProvider extends PanelProvider
                         filter: drop-shadow(0 0 6px rgba(16, 185, 129, 0.4));
                     }
                     
-                    /* Navigation badges */
-                    .fi-sidebar-nav-item-badge {
-                        background: linear-gradient(135deg, #10b981, #059669) !important;
-                        color: white !important;
-                        font-size: 0.75rem !important;
-                        padding: 0.25rem 0.5rem !important;
-                        border-radius: 8px !important;
-                        font-weight: 600 !important;
-                        box-shadow: 0 2px 4px rgba(16, 185, 129, 0.3) !important;
-                        animation: pulse 2s infinite !important;
+                    /* Navigation badges — HIDDEN. The sidebar is a flat list of
+                       nav items with NO numeric count badges (e.g. the active-bot
+                       "2"). getNavigationBadge() is nulled in PHP so nothing
+                       renders; this display:none is belt-and-suspenders so no
+                       stray badge/count chip can ever appear. */
+                    .fi-sidebar-nav-item-badge,
+                    .fi-sidebar-nav-item .fi-badge,
+                    .fi-sidebar-group-collapse-button {
+                        display: none !important;
                     }
-                    
-                    @keyframes pulse {
-                        0%, 100% { transform: scale(1); }
-                        50% { transform: scale(1.05); }
+
+                    /* Navigation GROUP headings — HIDDEN. Resources/pages no
+                       longer assign a navigationGroup, so Filament renders the
+                       items ungrouped. This display:none defensively removes any
+                       group label/heading chrome so the list stays perfectly flat
+                       even if a group ever slips back in. */
+                    .fi-sidebar-nav-group-label,
+                    .fi-sidebar-group > .fi-sidebar-group-button,
+                    .fi-sidebar-nav-group > .fi-sidebar-nav-group-label {
+                        display: none !important;
                     }
-                    
-                    /* Navigation groups */
-                    .fi-sidebar-nav-group-label {
-                        color: rgba(255, 255, 255, 0.6) !important;
-                        font-size: 0.75rem !important;
-                        font-weight: 700 !important;
-                        text-transform: uppercase !important;
-                        letter-spacing: 0.05em !important;
-                        margin: 1.5rem 0 0.75rem 1rem !important;
-                        position: relative !important;
-                    }
-                    
-                    .fi-sidebar-nav-group-label::after {
-                        content: "";
-                        position: absolute;
-                        bottom: -4px;
-                        left: 0;
-                        width: 24px;
-                        height: 2px;
-                        background: linear-gradient(90deg, #10b981, transparent);
-                        border-radius: 1px;
-                    }
-                    
+
                     /* Scrollbar for sidebar */
                     .fi-sidebar::-webkit-scrollbar {
                         width: 6px;

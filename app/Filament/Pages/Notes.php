@@ -27,9 +27,8 @@ class Notes extends Page implements HasForms
     
     protected static ?string $title = 'گفتمان و یادداشت‌ها';
     
-    protected static ?string $navigationGroup = 'ابزارها';
-    
-    protected static ?int $navigationSort = 3;
+    // Flat sidebar: no navigationGroup. Renders directly in the flat list.
+    protected static ?int $navigationSort = 4;
     
     protected static string $view = 'filament.pages.notes';
     

@@ -18,9 +18,8 @@ class ConnectionTest extends Page
     
     protected static ?string $title = 'آزمایش اتصال API نوبیتکس';
     
-    protected static ?string $navigationGroup = 'ابزارها';
-    
-    protected static ?int $navigationSort = 1;
+    // Flat sidebar: no navigationGroup. Renders directly in the flat list.
+    protected static ?int $navigationSort = 3;
     
     protected static string $view = 'filament.pages.connection-test';
     

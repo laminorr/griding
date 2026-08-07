@@ -709,16 +709,22 @@
     .fi-ta-cell .at-num { direction: ltr; }
 
     /* =====================================================================
-       Sidebar full-height. The nav sidebar was ending at its content height,
-       leaving a differently-shaded strip below it down to the bottom of the
-       viewport. Stretch the sidebar (and its inner nav) to the full viewport
-       height so its navy background fills all the way down regardless of how
-       few nav items there are — consistent in the collapsed + expanded states.
-       ===================================================================== */
-    .fi-sidebar,
+       Sidebar full-height. Root cause of the old empty strip: an earlier
+       override forced .fi-sidebar to position:relative, dropping it into normal
+       flow — so it was only one viewport tall and, on pages taller than the
+       viewport, scrolled away and exposed the page shell below the last nav
+       item. The authoritative fix now lives in AdminPanelProvider (keep
+       .fi-sidebar position:fixed + block-size:100dvh so its navy fills the full
+       viewport top-to-bottom at all times, expanded or collapsed). Here we just
+       make the inner nav stretch to fill the fixed sidebar so its own surface
+       never stops short of the bottom edge. */
+    .fi-sidebar {
+        block-size: 100vh;
+        block-size: 100dvh;
+    }
     .fi-sidebar-nav {
-        min-block-size: 100vh;
-        min-block-size: 100dvh;
+        min-block-size: 100%;
+        flex: 1 1 auto;
     }
 
     /* =====================================================================
