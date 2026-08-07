@@ -95,7 +95,21 @@ class AdminPanelProvider extends PanelProvider
                         box-shadow: var(--sidebar-shadow) !important;
                         backdrop-filter: blur(20px) !important;
                         -webkit-backdrop-filter: blur(20px) !important;
-                        position: relative !important;
+                        /* Fixed, full-height column. Pin to the inline-START edge,
+                           which resolves to the RIGHT under RTL, because Filaments
+                           own (untouched) main-content offset uses margin-inline-start;
+                           pinning the sidebar to the same logical side keeps page
+                           content clear of the sidebar instead of hidden beneath it.
+                           Width tracks the --sidebar-width var (falling back to 244px)
+                           so it always equals that main offset, and so the collapsed
+                           state, which Filament drives via its own transform/visibility
+                           on this same element, keeps working. */
+                        position: fixed !important;
+                        inset-block: 0 !important;                              /* top:0; bottom:0 → full height */
+                        inset-inline-start: 0 !important;                       /* RTL → right edge */
+                        block-size: 100vh !important;                           /* fallback for older browsers */
+                        block-size: 100dvh !important;                          /* dynamic viewport height */
+                        inline-size: var(--sidebar-width, 244px) !important;    /* matches Filament main offset */
                         z-index: 50 !important;
                     }
                     
