@@ -50,8 +50,41 @@
         }
         .calc-input { direction: ltr; text-align: start; font-variant-numeric: tabular-nums; }
         .calc-input:focus, .calc-select:focus { border-color: var(--at-accent-line); }
-        .calc-select { appearance: none; -webkit-appearance: none; cursor: pointer; }
+
+        /* Native <select> reset: strip EVERY built-in indicator — the browser's
+           own arrow AND any Filament / @tailwindcss/forms background chevron — so
+           the ONLY arrow is the single CSS chevron drawn by .calc-select-wrap::after
+           below. Without this the panel's select styling stacked a second (and a
+           third) arrow on top of ours and the option text ran under them. Scoped to
+           .calc-select so no other panel select is touched. */
+        .calc-select {
+            appearance: none !important;
+            -webkit-appearance: none !important;
+            background-image: none !important;
+            /* Start-side gutter (physically the right edge in this RTL panel)
+               reserves room for the chevron so the option text is never clipped. */
+            padding-inline: 40px 12px;
+            text-align: start;
+            cursor: pointer;
+        }
+        .calc-select::-ms-expand { display: none; } /* legacy Edge/IE arrow */
         .calc-select option { background: var(--at-surface); color: var(--at-text); }
+
+        /* Single RTL chevron — same pattern + tokens as the panel's .at-botselect
+           (chevron on the inline-start edge = physically right in the RTL panel). */
+        .calc-select-wrap { position: relative; inline-size: 100%; }
+        .calc-select-wrap::after {
+            content: "";
+            position: absolute;
+            inset-block-start: 50%;
+            inset-inline-start: 16px;
+            inline-size: 7px;
+            block-size: 7px;
+            border-inline-end: 1.5px solid var(--at-muted);
+            border-block-end: 1.5px solid var(--at-muted);
+            transform: translateY(-65%) rotate(45deg);
+            pointer-events: none;
+        }
         .calc-field__hint { font-size: 10.5px; color: var(--at-muted); }
         .calc-price-row { display: flex; gap: var(--at-gap-sm); align-items: stretch; }
         .calc-price-row .calc-input { flex: 1; min-inline-size: 0; }
@@ -86,11 +119,13 @@
 
                     <div class="calc-field">
                         <label>حالت معاملاتی</label>
-                        <select class="calc-select" wire:model="mode">
-                            <option value="both">دوطرفه (خرید + فروش)</option>
-                            <option value="buy">فقط خرید</option>
-                            <option value="sell">فقط فروش</option>
-                        </select>
+                        <div class="calc-select-wrap">
+                            <select class="calc-select" wire:model="mode">
+                                <option value="both">دوطرفه (خرید + فروش)</option>
+                                <option value="buy">فقط خرید</option>
+                                <option value="sell">فقط فروش</option>
+                            </select>
+                        </div>
                     </div>
 
                     <div class="calc-field">
@@ -100,11 +135,13 @@
 
                     <div class="calc-field">
                         <label>تعداد سطوح</label>
-                        <select class="calc-select" wire:model="gridLevels">
-                            @foreach ([4, 6, 8, 10, 12, 16, 20] as $lv)
-                                <option value="{{ $lv }}">{{ $fa($lv) }} سطح</option>
-                            @endforeach
-                        </select>
+                        <div class="calc-select-wrap">
+                            <select class="calc-select" wire:model="gridLevels">
+                                @foreach ([4, 6, 8, 10, 12, 16, 20] as $lv)
+                                    <option value="{{ $lv }}">{{ $fa($lv) }} سطح</option>
+                                @endforeach
+                            </select>
+                        </div>
                     </div>
 
                     <div class="calc-field">
@@ -175,9 +212,20 @@
                             <span class="metric-label">اندازه تیک</span>
                             <span class="metric-value" style="direction:ltr;">{{ $fmt($plan['tick']) }}</span>
                         </div>
+                        {{-- «تعداد سطوح» is the TOTAL number of levels, matching the
+                             engine's own meaning of `levels` (the live init path passes
+                             bot_configs.grid_levels as the total, split per-side inside
+                             GridPlanner) and matching the input above and the rows in
+                             the levels table below. It reads count($items) — the levels
+                             actually planned — so the selected count, the planned count,
+                             and this summary always show the SAME number (any tick
+                             collapse is surfaced separately by the badge below). --}}
                         <div class="metric-card is-row">
-                            <span class="metric-label">سطوح هر سمت</span>
-                            <span class="metric-value">{{ $fa($plan['per_side']) }}</span>
+                            <span class="metric-label">تعداد سطوح</span>
+                            <span class="metric-value">{{ $fa(count($items)) }}</span>
+                            @if (($plan['mode'] ?? 'both') === 'both')
+                                <span class="metric-sub">{{ $fa($plan['per_side']) }} در هر سمت</span>
+                            @endif
                         </div>
                         <div class="metric-card is-row">
                             <span class="metric-label">بودجه فعال</span>
