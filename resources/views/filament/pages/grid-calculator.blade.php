@@ -94,6 +94,159 @@
             color: var(--at-muted);
             line-height: 1.6;
         }
+
+        /* ============================================================
+           Grid schematic (escalator) — P5 visual re-render of the SAME
+           plan items the table above renders. Built entirely on the shared
+           --at-* tokens (no new style system, no viteTheme). Every number
+           traces to a plan/risk variable; the only arithmetic here is the
+           display-only %-distance label = (price − mid) ÷ mid × 100, done in
+           the Blade below on values already present. RTL-first via logical
+           properties. ============================================================ */
+
+        /* Compact summary strip above the diagram (all values already shown). */
+        .sch-summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: var(--at-gap-sm);
+        }
+        .sch-sum-item {
+            border: 1px solid var(--at-border);
+            border-radius: var(--at-radius-sm);
+            background: var(--at-surface-2);
+            padding: 7px 10px;
+        }
+        .sch-sum-item > label {
+            display: block;
+            font-size: var(--at-fs-label);
+            color: var(--at-muted);
+            margin-block-end: 3px;
+        }
+        .sch-sum-item strong {
+            display: inline-block;
+            font-size: var(--at-fs-body);
+            font-weight: 700;
+            color: var(--at-text);
+            direction: ltr;
+            font-variant-numeric: tabular-nums;
+        }
+        .sch-sum-item small {
+            display: block;               /* own line — keeps «۴» and «۲ در هر سمت» from merging */
+            margin-block-start: 2px;
+            color: var(--at-muted);
+            font-size: var(--at-fs-label);
+        }
+
+        /* Escalator canvas: sells on top (red) → center (blue) → buys (green). */
+        .sch-diagram {
+            border: 1px solid var(--at-border);
+            border-radius: var(--at-radius);
+            background: var(--at-bg);
+            padding: var(--at-gap-md) var(--at-gap-lg);
+            overflow: hidden;              /* never let a track/marker clip the page */
+        }
+        .sch-levels { display: flex; flex-direction: column; }
+
+        .sch-level {
+            display: grid;
+            grid-template-columns: 84px 1fr 172px 74px;
+            gap: var(--at-gap-md);
+            align-items: center;
+            min-block-size: 56px;
+        }
+        .sch-name { font-size: var(--at-fs-body); font-weight: 700; white-space: nowrap; }
+        .sch-name.sell   { color: var(--at-neg); }
+        .sch-name.buy    { color: var(--at-accent); }
+        .sch-name.center { color: var(--at-blue); }
+
+        /* Per-side colour drives the line + marker via a single custom prop. */
+        .sch-level.sell   { --c: var(--at-neg); }
+        .sch-level.buy    { --c: var(--at-accent); }
+        .sch-level.center { --c: var(--at-blue); }
+
+        .sch-track { position: relative; block-size: 22px; display: flex; align-items: center; }
+        .sch-line {
+            inline-size: 100%;
+            block-size: 2px;
+            border-radius: 2px;
+            background: var(--c);
+            opacity: 0.5;
+        }
+        .sch-marker {
+            position: absolute;
+            inset-inline-start: 14%;
+            inline-size: 13px;
+            block-size: 13px;
+            border-radius: 50%;
+            background: var(--at-bg);
+            border: 3px solid var(--c);
+        }
+
+        .sch-price { text-align: end; direction: ltr; min-inline-size: 0; }
+        .sch-price b {
+            display: block;
+            font-size: var(--at-fs-body);
+            font-weight: 700;
+            color: var(--at-text);
+            font-variant-numeric: tabular-nums;
+        }
+        .sch-price span {
+            display: block;
+            margin-block-start: 2px;
+            font-size: 10px;
+            color: var(--at-muted);
+            font-variant-numeric: tabular-nums;
+        }
+
+        .sch-pct {
+            text-align: end;
+            direction: ltr;
+            font-size: var(--at-fs-body);
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+        }
+        .sch-pct.sell   { color: var(--at-neg); }
+        .sch-pct.buy    { color: var(--at-accent); }
+        .sch-pct.center { color: var(--at-blue); }
+
+        /* «۱.۵٪ فاصله» chip between consecutive levels. */
+        .sch-gap {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: var(--at-gap-sm);
+            min-block-size: 24px;
+        }
+        .sch-gap-line {
+            inline-size: 44px;
+            max-inline-size: 12vw;
+            border-block-start: 1px dashed var(--at-border-strong);
+        }
+        .sch-gap-chip {
+            padding: 2px 8px;
+            border: 1px solid var(--at-border);
+            border-radius: 999px;
+            background: var(--at-surface);
+            color: var(--at-muted);
+            font-size: 10px;
+            white-space: nowrap;
+        }
+
+        .sch-legend {
+            display: flex;
+            gap: var(--at-gap-lg);
+            flex-wrap: wrap;
+            color: var(--at-muted);
+            font-size: var(--at-fs-label);
+        }
+        .sch-legend span { display: inline-flex; align-items: center; gap: 5px; }
+        .sch-legend i { inline-size: 8px; block-size: 8px; border-radius: 50%; display: inline-block; }
+
+        @media (max-width: 640px) {
+            .sch-level { grid-template-columns: 58px 1fr 118px 54px; gap: var(--at-gap-sm); }
+            .sch-name { font-size: var(--at-fs-label); }
+            .sch-price b { font-size: var(--at-fs-label); }
+        }
     </style>
 
     <div class="at-stack">
@@ -310,6 +463,147 @@
                 </div>
             </div>
 
+            {{-- 1b) Grid schematic (escalator) — a VISUAL re-render of the exact
+                 same $items the table above loops over. Nothing new is computed:
+                 price / quantity / notional are read straight off each plan item,
+                 the center price is $plan['mid'], and the only arithmetic is the
+                 display-only per-level %-distance = (price − mid) ÷ mid × 100
+                 (tick-alignment is why the outer levels read e.g. +۳.۰۲٪ / −۲.۹۸٪
+                 rather than exactly ±۳٪). Order top→bottom is price-descending:
+                 highest sell → … → center → … → lowest buy, matching the mockup.
+                 The mockup's invented «کنترل ریسک» card (market-risk score / stop
+                 loss / recommendation copy not produced in that form) is omitted;
+                 fee and risk keep their own honest sections below. --}}
+            @if (count($items) > 0)
+                @php
+                    $schSells = array_values(array_filter($items, fn ($it) => ($it['side'] ?? '') === 'sell'));
+                    $schBuys  = array_values(array_filter($items, fn ($it) => ($it['side'] ?? '') === 'buy'));
+                    // Display order: sells high→low (top), then center, then buys high→low.
+                    usort($schSells, fn ($a, $b) => ($b['price'] ?? 0) <=> ($a['price'] ?? 0));
+                    usort($schBuys,  fn ($a, $b) => ($b['price'] ?? 0) <=> ($a['price'] ?? 0));
+
+                    $schCenter = (int) ($plan['mid'] ?? 0);
+                    $schBase   = strtoupper(str_replace('IRT', '', (string) ($plan['symbol'] ?? '')));
+                    $schStep   = $fa($trim($plan['step_pct'] ?? $gridSpacing));
+                    $schMode   = match ($plan['mode'] ?? 'both') {
+                        'both'  => 'دوطرفه (خرید + فروش)',
+                        'buy'   => 'فقط خرید',
+                        'sell'  => 'فقط فروش',
+                        default => (string) ($plan['mode'] ?? ''),
+                    };
+
+                    // Ordered rows with per-side level numbers counted from the
+                    // center outward (level ۱ = nearest the center), exactly like
+                    // the mockup («فروش ۲» outer, «فروش ۱» inner, …).
+                    $schRows  = [];
+                    $nSells   = count($schSells);
+                    foreach ($schSells as $i => $it) {
+                        $schRows[] = ['kind' => 'sell', 'num' => $nSells - $i, 'it' => $it];
+                    }
+                    $schRows[] = ['kind' => 'center'];
+                    foreach ($schBuys as $i => $it) {
+                        $schRows[] = ['kind' => 'buy', 'num' => $i + 1, 'it' => $it];
+                    }
+
+                    // Display-only %-distance label off the tick-aligned price.
+                    $schPct = function ($price) use ($schCenter, $fa) {
+                        if ($schCenter <= 0) {
+                            return $fa('0') . '٪';
+                        }
+                        $v    = ($price - $schCenter) / $schCenter * 100;
+                        $sign = $v > 0 ? '+' : ($v < 0 ? '−' : '');
+                        return $sign . $fa(number_format(abs($v), 2)) . '٪';
+                    };
+                @endphp
+
+                <div class="panel-section">
+                    <div class="panel-section__head">
+                        <span class="panel-section__title">شماتیک ساختار گرید</span>
+                        <span class="at-badge muted">{{ $plan['symbol'] }} · {{ $schMode }}</span>
+                    </div>
+                    <div class="panel-section__body at-stack">
+                        <span class="panel-section__sub">
+                            نمای پلکانی همان سطوحی که در جدول بالا محاسبه شد — قیمت‌ها تیک‌تراز؛ درصد هر سطح نسبت به قیمت مرکزی.
+                        </span>
+
+                        {{-- Summary strip — every value is one already shown above. --}}
+                        <div class="sch-summary">
+                            <div class="sch-sum-item">
+                                <label>قیمت مرکزی</label>
+                                <strong>{{ $fmt($plan['mid']) }}</strong> <small>ریال</small>
+                            </div>
+                            <div class="sch-sum-item">
+                                <label>تعداد سطوح</label>
+                                <strong>{{ $fa(count($items)) }}</strong>
+                                @if (($plan['mode'] ?? 'both') === 'both')
+                                    <small>{{ $fa($plan['per_side']) }} در هر سمت</small>
+                                @endif
+                            </div>
+                            <div class="sch-sum-item">
+                                <label>فاصله بین سطوح</label>
+                                <strong>{{ $schStep }}٪</strong>
+                            </div>
+                            <div class="sch-sum-item">
+                                <label>بودجه فعال</label>
+                                <strong>{{ $fmt($plan['budget_irt']) }}</strong> <small>ریال</small>
+                            </div>
+                            <div class="sch-sum-item">
+                                <label>ارزش هر سفارش</label>
+                                <strong>{{ $repNotional !== null ? $fmt($repNotional) : '—' }}</strong>
+                                @if ($repNotional !== null)<small>ریال</small>@endif
+                            </div>
+                            <div class="sch-sum-item">
+                                <label>اندازه تیک</label>
+                                <strong>{{ $fmt($plan['tick']) }}</strong>
+                            </div>
+                        </div>
+
+                        {{-- The escalator itself. --}}
+                        <div class="sch-diagram">
+                            <div class="sch-levels">
+                                @foreach ($schRows as $ri => $row)
+                                    @if ($row['kind'] === 'center')
+                                        <div class="sch-level center">
+                                            <div class="sch-name center">قیمت مرکزی</div>
+                                            <div class="sch-track"><span class="sch-line"></span><span class="sch-marker"></span></div>
+                                            <div class="sch-price"><b>{{ $fmt($schCenter) }} ریال</b></div>
+                                            <div class="sch-pct center">{{ $fa('0') }}٪</div>
+                                        </div>
+                                    @else
+                                        @php $it = $row['it']; $kind = $row['kind']; @endphp
+                                        <div class="sch-level {{ $kind }}">
+                                            <div class="sch-name {{ $kind }}">
+                                                {{ $kind === 'sell' ? 'فروش' : 'خرید' }} {{ $fa($row['num']) }}
+                                            </div>
+                                            <div class="sch-track"><span class="sch-line"></span><span class="sch-marker"></span></div>
+                                            <div class="sch-price">
+                                                <b>{{ $fmt($it['price'] ?? 0) }} ریال</b>
+                                                <span>{{ $fa($trim($it['quantity'] ?? '0')) }} {{ $schBase }} · {{ $fmt($it['notional'] ?? 0) }} ریال</span>
+                                            </div>
+                                            <div class="sch-pct {{ $kind }}">{{ $schPct($it['price'] ?? 0) }}</div>
+                                        </div>
+                                    @endif
+
+                                    @if ($ri !== count($schRows) - 1)
+                                        <div class="sch-gap">
+                                            <span class="sch-gap-line"></span>
+                                            <span class="sch-gap-chip">{{ $schStep }}٪ فاصله</span>
+                                            <span class="sch-gap-line"></span>
+                                        </div>
+                                    @endif
+                                @endforeach
+                            </div>
+                        </div>
+
+                        <div class="sch-legend">
+                            <span><i style="background:var(--at-accent)"></i> خرید</span>
+                            <span><i style="background:var(--at-neg)"></i> فروش</span>
+                            <span><i style="background:var(--at-blue)"></i> قیمت مرکزی</span>
+                        </div>
+                    </div>
+                </div>
+            @endif
+
             {{-- 2 & 3) Fees + gross profit per cycle --}}
             <div class="panel-section">
                 <div class="panel-section__head">
@@ -384,7 +678,7 @@
                                 <span class="metric-value neg" style="direction:ltr;">{{ $fa($trim($priceR['downward_risk_percent'] ?? 0)) }}٪</span>
                             </div>
                             <div class="metric-card is-row">
-                                <span class="metric-label">قرارگیری صعودی</span>
+                                <span class="metric-label">ریسک صعود</span>
                                 <span class="metric-value" style="direction:ltr;">{{ $fa($trim($priceR['upward_exposure_percent'] ?? 0)) }}٪</span>
                             </div>
                             <div class="metric-card is-row">
