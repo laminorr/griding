@@ -247,6 +247,67 @@
             .sch-name { font-size: var(--at-fs-label); }
             .sch-price b { font-size: var(--at-fs-label); }
         }
+
+        /* ============================================================
+           Full-round total — the green headline box (LAST section). Built
+           on the shared --at-* tokens (green accent = --at-accent #21d48b,
+           navy surface, --at-radius 16, Vazirmatn from the panel). The green
+           border + inset ring + faint top wash mark it as the page's summary
+           figure; no new colour system, no viteTheme. ==================== */
+        .calc-round {
+            border-color: var(--at-accent-line);
+            background:
+                linear-gradient(180deg, var(--at-accent-dim), transparent 62%),
+                var(--at-surface);
+            box-shadow: inset 0 0 0 1px var(--at-accent-line);
+        }
+        .calc-round .panel-section__title { color: var(--at-accent); }
+
+        .calc-round__net {
+            display: flex;
+            align-items: baseline;
+            flex-wrap: wrap;
+            gap: var(--at-gap-sm);
+        }
+        .calc-round__net-label {
+            font-size: var(--at-fs-body);
+            font-weight: 600;
+            color: var(--at-text-dim);
+        }
+        .calc-round__net-value {
+            font-size: 26px;
+            font-weight: 800;
+            line-height: 1.1;
+            color: var(--at-accent);
+            direction: ltr;
+            font-variant-numeric: tabular-nums;
+        }
+        .calc-round__net-unit { font-size: var(--at-fs-body); color: var(--at-muted); }
+
+        .calc-round__subs {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+            gap: var(--at-gap-sm);
+        }
+        .calc-round__sub {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: var(--at-gap-sm);
+            border: 1px solid var(--at-border);
+            border-radius: var(--at-radius-sm);
+            background: var(--at-surface-2);
+            padding: 7px 10px;
+        }
+        .calc-round__sub > span { font-size: var(--at-fs-label); color: var(--at-muted); }
+        .calc-round__sub > strong {
+            direction: ltr;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+        }
+        .calc-round__sub > strong.pos { color: var(--at-pos); }
+        .calc-round__sub > strong.neg { color: var(--at-neg); }
+        .calc-round__caption { margin-block-start: 0; }
     </style>
 
     <div class="at-stack">
@@ -636,7 +697,8 @@
                         </div>
                         <p class="calc-note" style="margin-block-start: var(--at-gap-md);">
                             سود ناخالص هر چرخه = ارزش سفارش × (فاصله ÷ ۱۰۰) = {{ $fmt($repNotional) }} × {{ $fa($trim($gridSpacing)) }}٪.
-                            کارمزد = ۲ × ارزش سفارش × (fee_bps ÷ ۱۰۰۰۰). یک چرخه = یک خرید و یک فروش کامل روی یک پله.
+                            کارمزد هر دو طرف حساب می‌شود: (fee_bps ÷ ۱۰۰۰۰) × (ارزش خرید + ارزش فروش)، که ارزش فروش = ارزش خرید × (۱ + فاصله ÷ ۱۰۰)
+                            — یعنی همان فرمول موتور واقعی (کارمزد طرف فروش روی ارزش بزرگ‌تر). یک چرخه = یک خرید و یک فروش کامل روی یک پله.
                             هیچ تعمیمی به روز/هفته/ماه انجام نمی‌شود.
                         </p>
                     @else
@@ -714,6 +776,53 @@
                                 </div>
                             </div>
                         @endif
+                    </div>
+                </div>
+            @endif
+
+            {{-- 5) FULL-ROUND TOTAL — the green summary box, LAST on the page.
+                 Deterministic total: if EVERY priced level round-trips its cycle
+                 exactly once, the sum of each level's engine net profit. Each
+                 cycle uses the SAME formula the engine records
+                 (CompletedTrade::createFromOrders) on that level's own notional:
+                     gross = notional × (فاصله ÷ ۱۰۰)
+                     fee   = (fee_bps ÷ ۱۰۰۰۰) × (ارزش خرید + ارزش فروش)
+                           = (fee_bps ÷ ۱۰۰۰۰) × notional × (۲ + فاصله ÷ ۱۰۰)
+                     net   = gross − fee
+                 summed over the priced buy levels (per_side cycles in «both»
+                 mode). NOT a projection — no ×day/week/month. Every value comes
+                 from GridCalculator::calculate(), which sums plan['items']. --}}
+            @if ($roundNetTotal !== null)
+                <div class="panel-section calc-round">
+                    <div class="panel-section__head">
+                        <span class="panel-section__title">سود کامل این دور</span>
+                        <span class="at-badge pos">
+                            <span class="at-dot pos"></span>
+                            {{ $fa($roundCycles) }} چرخه کامل
+                        </span>
+                    </div>
+                    <div class="panel-section__body at-stack">
+                        <div class="calc-round__net">
+                            <span class="calc-round__net-label">سود خالص کل:</span>
+                            <span class="calc-round__net-value">{{ $fmt($roundNetTotal) }}</span>
+                            <span class="calc-round__net-unit">ریال</span>
+                        </div>
+
+                        <div class="calc-round__subs">
+                            <div class="calc-round__sub">
+                                <span>سود ناخالص کل</span>
+                                <strong class="pos">{{ $fmt($roundGrossTotal) }} ریال</strong>
+                            </div>
+                            <div class="calc-round__sub">
+                                <span>کارمزد کل (۲ طرف هر چرخه)</span>
+                                <strong class="neg">{{ $fmt($roundFeeTotal) }} ریال</strong>
+                            </div>
+                        </div>
+
+                        <p class="calc-note calc-round__caption">
+                            اگر هر پله یک‌بار چرخه‌اش را کامل کند — بدون هیچ تعمیمی به روز/هفته/ماه.
+                            مجموع سود خالص همان پله‌های قیمت‌گذاری‌شده، با همان فرمول موتور واقعی (کارمزد هر دو طرف).
+                        </p>
                     </div>
                 </div>
             @endif
