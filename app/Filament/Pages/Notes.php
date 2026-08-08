@@ -27,9 +27,8 @@ class Notes extends Page implements HasForms
     
     protected static ?string $title = 'گفتمان و یادداشت‌ها';
     
-    protected static ?string $navigationGroup = 'ابزارها';
-    
-    protected static ?int $navigationSort = 3;
+    // Flat sidebar: no navigationGroup. Renders directly in the flat list.
+    protected static ?int $navigationSort = 4;
     
     protected static string $view = 'filament.pages.notes';
     
@@ -123,7 +122,7 @@ class Notes extends Page implements HasForms
                 ->label($this->isCreating ? 'ذخیره یادداشت' : 'یادداشت جدید')
                 ->icon($this->isCreating ? 'heroicon-o-check' : 'heroicon-o-plus')
                 ->color($this->isCreating ? 'success' : 'primary')
-                ->size('lg')
+                ->size('sm')
                 ->action($this->isCreating ? 'saveNote' : 'startCreating')
                 ->keyBindings(['command+n', 'ctrl+n']),
                 
@@ -137,7 +136,7 @@ class Notes extends Page implements HasForms
             Action::make('export')
                 ->label('صادرات')
                 ->icon('heroicon-o-arrow-down-tray')
-                ->color('info')
+                ->color('gray')
                 ->action('exportNotes'),
                 
             Action::make('clear_all')

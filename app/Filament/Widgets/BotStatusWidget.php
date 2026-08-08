@@ -8,6 +8,7 @@ use App\Models\GridOrder;
 use Filament\Widgets\StatsOverviewWidget as BaseWidget;
 use Filament\Widgets\StatsOverviewWidget\Stat;
 use Illuminate\Support\Number;
+use Illuminate\Support\Str;
 
 class BotStatusWidget extends BaseWidget
 {
@@ -54,55 +55,55 @@ class BotStatusWidget extends BaseWidget
         }
         
         return [
-            Stat::make('وضعیت ربات‌ها', $activeBots . ' از ' . $totalBots . ' فعال')
+            Stat::make('وضعیت ربات‌ها', Str::faDigits($activeBots . ' از ' . $totalBots . ' فعال'))
                 ->description($activeBots > 0 ? 'در حال معامله' : 'همه ربات‌ها غیرفعال')
                 ->descriptionIcon($activeBots > 0 ? 'heroicon-m-play' : 'heroicon-m-pause')
                 ->color($activeBots > 0 ? 'success' : 'gray')
                 ->chart($activeBots > 0 ? [3, 5, 4, 7, 6, 8, 9] : [0]),
-            
-            Stat::make('سرمایه کل', Number::format($totalCapitalIRT, 0) . ' ریال')
-                ->description('فعال: ' . Number::format($activeCapitalIRT, 0) . ' ریال')
+
+            Stat::make('سرمایه کل', Str::faDigits(Number::format($totalCapitalIRT, 0) . ' ریال'))
+                ->description(Str::faDigits('فعال: ' . Number::format($activeCapitalIRT, 0) . ' ریال'))
                 ->descriptionIcon('heroicon-m-banknotes')
                 ->color('primary'),
-            
-            Stat::make('سود امروز', 
-                ($todayProfit >= 0 ? '+' : '') . Number::format($todayProfit, 0) . ' ریال'
+
+            Stat::make('سود امروز',
+                Str::faDigits(($todayProfit >= 0 ? '+' : '') . Number::format($todayProfit, 0) . ' ریال')
             )
                 ->description(
-                    $todayProfit >= 0 
-                        ? Number::percentage($totalCapitalIRT > 0 ? ($todayProfit / $totalCapitalIRT) * 100 : 0, 3) . ' بازدهی'
+                    $todayProfit >= 0
+                        ? Str::faDigits(Number::percentage($totalCapitalIRT > 0 ? ($todayProfit / $totalCapitalIRT) * 100 : 0, 3) . ' بازدهی')
                         : 'ضرر روزانه'
                 )
                 ->descriptionIcon(
-                    $todayProfit >= 0 
-                        ? 'heroicon-m-arrow-trending-up' 
+                    $todayProfit >= 0
+                        ? 'heroicon-m-arrow-trending-up'
                         : 'heroicon-m-arrow-trending-down'
                 )
                 ->color($todayProfit >= 0 ? 'success' : 'danger')
                 ->chart($last7DaysProfit),
-            
-            Stat::make('سود این ماه', 
-                ($monthProfit >= 0 ? '+' : '') . Number::format($monthProfit, 0) . ' ریال'
+
+            Stat::make('سود این ماه',
+                Str::faDigits(($monthProfit >= 0 ? '+' : '') . Number::format($monthProfit, 0) . ' ریال')
             )
                 ->description(
-                    $monthProfit >= 0 
-                        ? Number::percentage($totalCapitalIRT > 0 ? ($monthProfit / $totalCapitalIRT) * 100 : 0, 2) . ' بازدهی ماهانه'
+                    $monthProfit >= 0
+                        ? Str::faDigits(Number::percentage($totalCapitalIRT > 0 ? ($monthProfit / $totalCapitalIRT) * 100 : 0, 2) . ' بازدهی ماهانه')
                         : 'ضرر ماهانه'
                 )
                 ->descriptionIcon(
-                    $monthProfit >= 0 
-                        ? 'heroicon-m-calendar-days' 
+                    $monthProfit >= 0
+                        ? 'heroicon-m-calendar-days'
                         : 'heroicon-m-exclamation-triangle'
                 )
                 ->color($monthProfit >= 0 ? 'success' : 'danger'),
-            
-            Stat::make('سفارشات فعال', Number::format($activeOrders))
+
+            Stat::make('سفارشات فعال', Str::faDigits(Number::format($activeOrders)))
                 ->description('در صف اجرا')
                 ->descriptionIcon('heroicon-m-queue-list')
                 ->color('warning'),
-            
-            Stat::make('نرخ موفقیت', Number::percentage($winRate, 1))
-                ->description(Number::format($totalTrades) . ' کل معاملات')
+
+            Stat::make('نرخ موفقیت', Str::faDigits(Number::percentage($winRate, 1)))
+                ->description(Str::faDigits(Number::format($totalTrades) . ' کل معاملات'))
                 ->descriptionIcon('heroicon-m-trophy')
                 ->color($winRate >= 70 ? 'success' : ($winRate >= 50 ? 'warning' : 'danger'))
                 ->chart([

@@ -18,9 +18,8 @@ class ConnectionTest extends Page
     
     protected static ?string $title = 'آزمایش اتصال API نوبیتکس';
     
-    protected static ?string $navigationGroup = 'ابزارها';
-    
-    protected static ?int $navigationSort = 1;
+    // Flat sidebar: no navigationGroup. Renders directly in the flat list.
+    protected static ?int $navigationSort = 3;
     
     protected static string $view = 'filament.pages.connection-test';
     
@@ -42,44 +41,52 @@ class ConnectionTest extends Page
 
     protected function getActions(): array
     {
+        // Phase P4: unify the header actions to the terminal palette — one
+        // accent (primary) call-to-action plus neutral (gray) secondaries,
+        // all small. No more green/red/blue/orange rainbow.
         return [
             Action::make('testConnection')
                 ->label('تست اتصال')
                 ->icon('heroicon-o-arrow-path')
                 ->color('primary')
-                ->size('lg')
+                ->size('sm')
                 ->action('performConnectionTest')
                 ->keyBindings(['command+t', 'ctrl+t']),
-                
+
             Action::make('testPriceApi')
                 ->label('تست قیمت')
                 ->icon('heroicon-o-currency-dollar')
-                ->color('info')
+                ->color('gray')
+                ->size('sm')
                 ->action('testPriceEndpoint'),
-                
+
             Action::make('testBalanceApi')
                 ->label('تست موجودی')
                 ->icon('heroicon-o-wallet')
-                ->color('warning')
+                ->color('gray')
+                ->size('sm')
                 ->action('testBalanceEndpoint'),
 
             Action::make('testOrderbook')
                 ->label('تست اردربوک')
                 ->icon('heroicon-o-chart-bar')
-                ->color('success')
+                ->color('gray')
+                ->size('sm')
                 ->action('testOrderbookEndpoint'),
-                
+
             Action::make('clearCache')
                 ->label('پاک کردن کش')
                 ->icon('heroicon-o-trash')
-                ->color('danger')
+                ->color('gray')
+                ->size('sm')
                 ->requiresConfirmation()
                 ->action('clearConnectionCache'),
 
             Action::make('healthCheck')
                 ->label('بررسی سلامت کامل')
                 ->icon('heroicon-o-heart')
-                ->color('info')
+                ->color('gray')
+                ->size('sm')
                 ->action('performHealthCheck'),
         ];
     }

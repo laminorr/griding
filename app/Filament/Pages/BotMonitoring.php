@@ -7,6 +7,7 @@ use App\Models\GridOrder;
 use App\Models\CompletedTrade;
 use App\Models\BotActivityLog;
 use Filament\Pages\Page;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
 class BotMonitoring extends Page
@@ -15,11 +16,48 @@ class BotMonitoring extends Page
 
     protected static string $view = 'filament.pages.bot-monitoring';
 
-    protected static ?string $navigationLabel = 'Bot Monitoring';
+    protected static ?string $navigationLabel = 'مانیتورینگ زنده';
 
-    protected static ?string $title = 'Grid Trading Bot Monitoring';
+    protected static ?string $title = 'مانیتورینگ زنده';
 
     protected static ?int $navigationSort = 2;
+
+    /**
+     * Selected bot for the deep single-bot analytics block (P4-final).
+     *
+     * The «هوش ربات» (Bot Intelligence) page was merged into this one: the live
+     * fleet view (above) and the deep per-bot analysis (grid map, capital
+     * concentration, grid drift, stability, completed pairs) now live on a
+     * single «مانیتورینگ زنده» page, driven by this picker. The metric methods
+     * below moved over verbatim from BotIntelDashboard — no computation changed.
+     */
+    public ?int $selectedBotId = null;
+    public ?BotConfig $selectedBot = null;
+
+    public function mount(): void
+    {
+        // Default the analytics picker to the first active bot (else the first).
+        $this->selectedBot = BotConfig::active()->first() ?? BotConfig::first();
+        $this->selectedBotId = $this->selectedBot?->id;
+    }
+
+    public function updatedSelectedBotId($value): void
+    {
+        $this->selectedBot = BotConfig::find($value);
+    }
+
+    /**
+     * Single source of truth for the page's selected bot.
+     *
+     * Driven by the prominent top-of-page selector (P4-compact): one click
+     * updates BOTH the live fleet view (Alpine focuses this bot via a
+     * $wire.$watch on selectedBotId) AND the deep analytics block below.
+     */
+    public function selectBot(int $botId): void
+    {
+        $this->selectedBotId = $botId;
+        $this->selectedBot = BotConfig::find($botId);
+    }
 
     public function getBotData()
     {
@@ -132,6 +170,26 @@ class BotMonitoring extends Page
                 ];
             }
 
+            // Currently-held grid levels: filled orders whose round-trip is
+            // still open (the continuation leg hasn't filled, or none exists
+            // yet). This is the "how many levels are filled right NOW" count
+            // shown in the «سفارشات فعال» subline. It is deliberately different
+            // from debug.total_filled below, which counts EVERY fill ever
+            // booked — both legs of every completed cycle — and therefore only
+            // ever grows (that cumulative number is why the subline read "۱۰"
+            // when a single level was actually held).
+            $filledLegs = $bot->gridOrders()
+                ->where('status', 'filled')
+                ->get(['id', 'paired_order_id']);
+            $filledIds = $filledLegs->pluck('id')->all();
+            $currentlyFilled = $filledLegs->filter(function ($o) use ($filledIds) {
+                // Open position = no continuation yet, or its partner leg
+                // (the paired order) has not itself filled. A closed cycle has
+                // both legs filled, so both are excluded here.
+                return $o->paired_order_id === null
+                    || ! in_array($o->paired_order_id, $filledIds, true);
+            })->count();
+
             // Debug data
             $debugData = [
                 'total_orders' => $bot->gridOrders()->count(),
@@ -139,6 +197,7 @@ class BotMonitoring extends Page
                 'total_not_executed' => $bot->gridOrders()->whereNull('filled_at')->count(),
                 'total_not_paired' => $bot->gridOrders()->whereNull('paired_order_id')->count(),
                 'total_filled' => $bot->gridOrders()->where('status', 'filled')->count(),
+                'currently_filled' => $currentlyFilled,
                 'completed_trades_total' => $bot->completedTrades()->count(),
                 'completed_trades_24h_actual' => $bot->completedTrades()->where('created_at', '>=', now()->subHours(24))->count(),
                 'profit_total' => $bot->completedTrades()->sum('profit'),
@@ -167,6 +226,11 @@ class BotMonitoring extends Page
                 'profit_24h' => $profit24h,
                 'profit_change_24h' => round($profitChange, 2),
                 'last_check_at' => $bot->last_check_at,
+                // Presentation-only: newest trade time, derived from the
+                // $completedTrades collection already loaded above (ordered asc,
+                // so last() is the most recent). No extra query — feeds the
+                // "زمان از آخرین معامله" stat card in the live view.
+                'last_trade_at' => optional($completedTrades->last())->created_at?->toIso8601String(),
 
                 // Chart data
                 'daily_profits' => $dailyProfits,
@@ -421,6 +485,268 @@ class BotMonitoring extends Page
             'avg_api_latency' => round($avgApiLatency, 1),
             'cycles_count_24h' => count($cycles24h),
             'error_count_24h' => $errorCount,
+        ];
+    }
+
+    /* =====================================================================
+       Deep single-bot analytics — relocated verbatim from the former
+       BotIntelDashboard (merged into this page in P4-final). These power the
+       bot-picker-driven analytics block: grid map, capital concentration,
+       grid drift, stability and completed pairs. The buy/sell dimension lives
+       in grid_orders.type (not `side`) — the P2 fix these methods carry — so
+       BotIntelDashboardSideMetricsTest keeps asserting against them here.
+       ===================================================================== */
+
+    /**
+     * All bots available for the analytics picker.
+     */
+    public function getAvailableBots(): Collection
+    {
+        return BotConfig::orderBy('is_active', 'desc')
+            ->orderBy('name')
+            ->get()
+            ->map(fn($bot) => [
+                'id' => $bot->id,
+                'name' => $bot->name,
+                'symbol' => $bot->symbol,
+                'is_active' => $bot->is_active,
+                'status' => $bot->is_active ? 'فعال' : 'متوقف',
+            ]);
+    }
+
+    /**
+     * Grid map data showing levels and active orders for the selected bot.
+     */
+    public function getGridMapData(): array
+    {
+        if (!$this->selectedBot) {
+            return ['levels' => []];
+        }
+
+        $bot = $this->selectedBot;
+        $activeOrders = $bot->gridOrders()
+            ->whereIn('status', ['placed', 'active'])
+            ->orderBy('price', 'desc')
+            ->get();
+
+        if ($activeOrders->isEmpty()) {
+            return [
+                'levels' => [],
+                'has_data' => false,
+                'message' => 'سفارش فعالی برای نمایش سطوح گرید وجود ندارد',
+            ];
+        }
+
+        $levels = [];
+        $index = 1;
+
+        foreach ($activeOrders as $order) {
+            $levels[] = [
+                'index' => $index++,
+                'price' => number_format($order->price, 0),
+                'side' => $order->type,
+                'amount' => $order->amount,
+                'status' => $order->status,
+                'order_id' => $order->id,
+            ];
+        }
+
+        return [
+            'levels' => $levels,
+            'has_data' => true,
+            'top_price' => $levels[0]['price'] ?? 'ندارد',
+            'bottom_price' => $levels[count($levels) - 1]['price'] ?? 'ندارد',
+            'total_levels' => count($levels),
+        ];
+    }
+
+    /**
+     * Recent completed trade pairs for the selected bot.
+     */
+    public function getCompletedPairs(): Collection
+    {
+        if (!$this->selectedBot) {
+            return collect([]);
+        }
+
+        return CompletedTrade::where('bot_config_id', $this->selectedBot->id)
+            ->orderBy('created_at', 'desc')
+            ->limit(10)
+            ->get()
+            ->map(fn($trade) => [
+                'id' => substr(md5($trade->id), 0, 8),
+                'buy_price' => number_format($trade->buy_price, 0),
+                'sell_price' => number_format($trade->sell_price, 0),
+                'profit' => number_format($trade->profit, 0),
+                'profit_formatted' => ($trade->profit >= 0 ? '+' : '') . number_format($trade->profit, 0) . ' IRT',
+                'duration' => $trade->execution_time_formatted ?? 'ندارد',
+                'completed_at' => $trade->created_at->diffForHumans(),
+                'is_profitable' => $trade->profit > 0,
+            ]);
+    }
+
+    /**
+     * Capital concentration across order types for the selected bot.
+     */
+    public function getCapitalConcentration(): array
+    {
+        if (!$this->selectedBot) {
+            return $this->getEmptyCapitalData();
+        }
+
+        $bot = $this->selectedBot;
+        $activeOrders = $bot->gridOrders()
+            ->whereIn('status', ['placed', 'active'])
+            ->get();
+
+        $buyOrders = $activeOrders->where('type', 'buy');
+        $sellOrders = $activeOrders->where('type', 'sell');
+
+        $buyCapital = $buyOrders->sum(fn($o) => $o->price * $o->amount);
+        $sellCapital = $sellOrders->sum(fn($o) => $o->price * $o->amount);
+        $totalCapital = $bot->budget_irt ?: $bot->total_capital ?: 1;
+        $freeCapital = max(0, $totalCapital - $buyCapital - $sellCapital);
+
+        $buyPercent = round(($buyCapital / $totalCapital) * 100, 1);
+        $sellPercent = round(($sellCapital / $totalCapital) * 100, 1);
+        $freePercent = round(($freeCapital / $totalCapital) * 100, 1);
+
+        return [
+            'buy' => [
+                'count' => $buyOrders->count(),
+                'capital' => number_format($buyCapital / 1000000000, 2) . 'M',
+                'percent' => $buyPercent,
+            ],
+            'sell' => [
+                'count' => $sellOrders->count(),
+                'capital' => number_format($sellCapital / 1000000000, 2) . 'M',
+                'percent' => $sellPercent,
+            ],
+            'free' => [
+                'capital' => number_format($freeCapital / 1000000000, 2) . 'M',
+                'percent' => $freePercent,
+            ],
+        ];
+    }
+
+    /**
+     * Grid drift indicator — where in the grid the bot is trading.
+     */
+    public function getGridDrift(): array
+    {
+        if (!$this->selectedBot) {
+            return ['status' => 'ندارد', 'description' => 'رباتی انتخاب نشده', 'position' => 50];
+        }
+
+        $bot = $this->selectedBot;
+        $activeOrders = $bot->gridOrders()
+            ->whereIn('status', ['placed', 'active'])
+            ->get();
+
+        if ($activeOrders->isEmpty()) {
+            return [
+                'status' => 'بدون داده',
+                'description' => 'سفارش فعالی برای سنجش انحراف وجود ندارد',
+                'position' => 50,
+                'color' => 'gray',
+            ];
+        }
+
+        $buyOrders = $activeOrders->where('type', 'buy')->count();
+        $totalOrders = $activeOrders->count();
+
+        $buyPercent = ($buyOrders / $totalOrders) * 100;
+
+        if ($buyPercent > 75) {
+            $status = 'یک‌چهارم پایینی گرید';
+            $color = 'info';
+        } elseif ($buyPercent > 60) {
+            $status = 'ناحیه میانی-پایین';
+            $color = 'primary';
+        } elseif ($buyPercent >= 40) {
+            $status = 'مرکز گرید';
+            $color = 'success';
+        } elseif ($buyPercent >= 25) {
+            $status = 'ناحیه میانی-بالا';
+            $color = 'primary';
+        } else {
+            $status = 'یک‌چهارم بالایی گرید';
+            $color = 'warning';
+        }
+
+        return [
+            'status' => $status,
+            'description' => 'شاخص ناحیه معاملاتی',
+            'position' => round(100 - $buyPercent, 1),
+            'color' => $color,
+        ];
+    }
+
+    /**
+     * System health & stability signals for the selected bot.
+     */
+    public function getSystemHealth(): array
+    {
+        if (!$this->selectedBot) {
+            return $this->getEmptySystemHealth();
+        }
+
+        $bot = $this->selectedBot;
+
+        $lastCheckTrades = BotActivityLog::where('bot_config_id', $bot->id)
+            ->where('action_type', 'CHECK_TRADES_END')
+            ->where('level', '!=', 'ERROR')
+            ->orderBy('created_at', 'desc')
+            ->first();
+
+        $lastApiCall = BotActivityLog::where('bot_config_id', $bot->id)
+            ->where('action_type', 'API_CALL')
+            ->orderBy('created_at', 'desc')
+            ->first();
+
+        $errorsLast24h = BotActivityLog::where('bot_config_id', $bot->id)
+            ->where('level', 'ERROR')
+            ->where('created_at', '>=', now()->subHours(24))
+            ->count();
+
+        return [
+            'check_trades' => [
+                'label' => 'آخرین بررسی',
+                'value' => $lastCheckTrades ? $lastCheckTrades->created_at->diffForHumans() : 'هرگز',
+                'status' => $lastCheckTrades && $lastCheckTrades->created_at->gt(now()->subMinutes(10)) ? 'healthy' : 'stale',
+                'color' => $lastCheckTrades && $lastCheckTrades->created_at->gt(now()->subMinutes(10)) ? 'success' : 'warning',
+            ],
+            'api_connectivity' => [
+                'label' => 'API نوبیتکس',
+                'value' => $lastApiCall ? $lastApiCall->created_at->diffForHumans() : 'بدون فراخوانی',
+                'status' => $lastApiCall && $lastApiCall->created_at->gt(now()->subMinutes(5)) ? 'healthy' : 'stale',
+                'color' => $lastApiCall && $lastApiCall->created_at->gt(now()->subMinutes(5)) ? 'success' : 'warning',
+            ],
+            'stability' => [
+                'label' => 'پایداری',
+                'value' => $errorsLast24h === 0 ? 'پایدار' : 'نیازمند بررسی',
+                'status' => $errorsLast24h === 0 ? 'healthy' : 'degraded',
+                'color' => $errorsLast24h === 0 ? 'success' : 'danger',
+                'errors_24h' => $errorsLast24h,
+            ],
+        ];
+    }
+
+    private function getEmptyCapitalData(): array
+    {
+        return [
+            'buy' => ['count' => 0, 'capital' => '0', 'percent' => 0],
+            'sell' => ['count' => 0, 'capital' => '0', 'percent' => 0],
+            'free' => ['capital' => '0', 'percent' => 100],
+        ];
+    }
+
+    private function getEmptySystemHealth(): array
+    {
+        return [
+            'check_trades' => ['label' => 'آخرین بررسی', 'value' => 'ندارد', 'status' => 'unknown', 'color' => 'gray'],
+            'api_connectivity' => ['label' => 'API نوبیتکس', 'value' => 'ندارد', 'status' => 'unknown', 'color' => 'gray'],
+            'stability' => ['label' => 'پایداری', 'value' => 'ندارد', 'status' => 'unknown', 'color' => 'gray', 'errors_24h' => 0],
         ];
     }
 }

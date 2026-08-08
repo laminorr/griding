@@ -14,7 +14,7 @@ class PerformanceChartWidget extends ChartWidget
     
     protected int | string | array $columnSpan = 'full';
     
-    protected static ?string $maxHeight = '300px';
+    protected static ?string $maxHeight = '180px';
 
     protected function getData(): array
     {
@@ -33,19 +33,22 @@ class PerformanceChartWidget extends ChartWidget
             $labels[] = $date->format('m/d');
         }
         
-        $color = $cumulative >= 0 ? 'rgb(34, 197, 94)' : 'rgb(239, 68, 68)';
-        
+        // Terminal palette: accent green for a net-positive curve, soft red
+        // for a net-negative one. Thin line, no dots — a dense sparkline look.
+        $color = $cumulative >= 0 ? 'rgb(52, 211, 153)' : 'rgb(248, 113, 113)';
+
         return [
             'datasets' => [
                 [
                     'label' => 'سود/زیان تجمعی (ریال)',
                     'data' => $data,
                     'borderColor' => $color,
-                    'backgroundColor' => $color . '20',
+                    'backgroundColor' => $color . '1F',
                     'fill' => true,
                     'tension' => 0.3,
-                    'pointRadius' => 3,
-                    'pointHoverRadius' => 5,
+                    'borderWidth' => 1.5,
+                    'pointRadius' => 0,
+                    'pointHoverRadius' => 3,
                 ],
             ],
             'labels' => $labels,
@@ -64,10 +67,17 @@ class PerformanceChartWidget extends ChartWidget
                 'legend' => [
                     'display' => true,
                     'position' => 'top',
+                    'align' => 'end',
                     'labels' => [
+                        'boxWidth' => 8,
+                        'boxHeight' => 8,
+                        'usePointStyle' => true,
+                        'padding' => 8,
                         'font' => [
                             'family' => 'Vazirmatn',
+                            'size' => 10,
                         ],
+                        'color' => '#7C8899',
                     ],
                 ],
             ],
@@ -75,12 +85,15 @@ class PerformanceChartWidget extends ChartWidget
                 'y' => [
                     'beginAtZero' => false,
                     'grid' => [
-                        'color' => 'rgba(255, 255, 255, 0.1)',
+                        'color' => 'rgba(148, 163, 184, 0.08)',
                     ],
                     'ticks' => [
+                        'maxTicksLimit' => 5,
                         'font' => [
                             'family' => 'Vazirmatn',
+                            'size' => 10,
                         ],
+                        'color' => '#7C8899',
                         'callback' => "function(value) { return value.toLocaleString() + ' ریال'; }",
                     ],
                 ],
@@ -89,10 +102,12 @@ class PerformanceChartWidget extends ChartWidget
                         'display' => false,
                     ],
                     'ticks' => [
+                        'maxTicksLimit' => 8,
                         'font' => [
                             'family' => 'Vazirmatn',
-                            'size' => 11,
+                            'size' => 9,
                         ],
+                        'color' => '#7C8899',
                     ],
                 ],
             ],

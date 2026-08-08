@@ -43,12 +43,10 @@ class AdminPanelProvider extends PanelProvider
                 'danger' => Color::Rose,
             ])
             ->font('Vazirmatn')
-            ->navigationGroups([
-                'ربات‌ها' => 1,
-                'معاملات' => 2,
-                'گزارش‌ها' => 3,
-                'تنظیمات' => 4,
-            ])
+            // Flat sidebar: no navigation GROUP headings. Resources/pages no
+            // longer assign a navigationGroup, so every item renders directly in
+            // one flat list ordered by navigationSort. (No ->navigationGroups()
+            // registration on purpose.)
             ->sidebarCollapsibleOnDesktop()
             ->sidebarFullyCollapsibleOnDesktop()
             ->topNavigation(false)
@@ -73,9 +71,12 @@ class AdminPanelProvider extends PanelProvider
                 <style>
                     :root {
                         --font-family: Vazirmatn, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-                        --sidebar-bg: linear-gradient(145deg, #0f172a 0%, #1e293b 50%, #334155 100%);
-                        --sidebar-border: rgba(148, 163, 184, 0.1);
-                        --sidebar-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+                        /* Flat navy sidebar (v3 mockup #101b2d) — aligned to the
+                           deeper navy design tokens; no gradient/shadow so the
+                           nav reads as one calm surface with the page. */
+                        --sidebar-bg: #101b2d;
+                        --sidebar-border: rgba(35, 51, 73, 0.9);
+                        --sidebar-shadow: none;
                         --sidebar-item-hover: rgba(16, 185, 129, 0.1);
                         --sidebar-item-active: rgba(16, 185, 129, 0.15);
                     }
@@ -88,15 +89,37 @@ class AdminPanelProvider extends PanelProvider
                         font-feature-settings: "ss02";
                     }
                     
-                    /* ========== SIDEBAR STYLING ========== */
+                    /* ========== SIDEBAR STYLING (COSMETIC ONLY) ==========
+                       IMPORTANT: this rule is deliberately cosmetic-only. Do NOT
+                       re-add position / inset / width / z-index overrides here.
+
+                       Filament v3 ships a correct, RTL-aware layout on its own:
+                       .fi-layout is a `flex flex-row-reverse` row, the sidebar is
+                       a real flex ITEM sized `w-[--sidebar-width]` (collapsed:
+                       `w-[--collapsed-sidebar-width]`), and .fi-main-ctn is
+                       `flex-1`, so the main column is naturally offset beside the
+                       sidebar with NO overlap. On desktop the sidebar is
+                       `lg:sticky top-0 h-screen`, so it stays pinned full-height
+                       while the page scrolls, expanded or collapsed.
+
+                       A previous pass forced `position: fixed` here. That pulls
+                       the sidebar OUT of the flex flow, so .fi-main-ctn (flex-1)
+                       expanded to the full viewport width and the fixed sidebar
+                       rendered ON TOP of the content — the overlap bug, in both
+                       the expanded and collapsed states. Removing the positioning
+                       override restores the native Filament flex layout (correct
+                       offset AND full height together). We keep only the navy
+                       background, the RTL divider, and the blur. The sidebar is
+                       still a positioned element natively (lg:sticky / fixed on
+                       mobile), so the ::before overlay below still anchors to it. */
                     .fi-sidebar {
                         background: var(--sidebar-bg) !important;
-                        border-right: 1px solid var(--sidebar-border) !important;
+                        /* RTL: sidebar is pinned to the inline-start (right) edge;
+                           the divider faces the content on its inline-end (left). */
+                        border-inline-end: 1px solid var(--sidebar-border) !important;
                         box-shadow: var(--sidebar-shadow) !important;
                         backdrop-filter: blur(20px) !important;
                         -webkit-backdrop-filter: blur(20px) !important;
-                        position: relative !important;
-                        z-index: 50 !important;
                     }
                     
                     /* Sidebar overlay effect */
@@ -237,45 +260,28 @@ class AdminPanelProvider extends PanelProvider
                         filter: drop-shadow(0 0 6px rgba(16, 185, 129, 0.4));
                     }
                     
-                    /* Navigation badges */
-                    .fi-sidebar-nav-item-badge {
-                        background: linear-gradient(135deg, #10b981, #059669) !important;
-                        color: white !important;
-                        font-size: 0.75rem !important;
-                        padding: 0.25rem 0.5rem !important;
-                        border-radius: 8px !important;
-                        font-weight: 600 !important;
-                        box-shadow: 0 2px 4px rgba(16, 185, 129, 0.3) !important;
-                        animation: pulse 2s infinite !important;
+                    /* Navigation badges — HIDDEN. The sidebar is a flat list of
+                       nav items with NO numeric count badges (e.g. the active-bot
+                       "2"). getNavigationBadge() is nulled in PHP so nothing
+                       renders; this display:none is belt-and-suspenders so no
+                       stray badge/count chip can ever appear. */
+                    .fi-sidebar-nav-item-badge,
+                    .fi-sidebar-nav-item .fi-badge,
+                    .fi-sidebar-group-collapse-button {
+                        display: none !important;
                     }
-                    
-                    @keyframes pulse {
-                        0%, 100% { transform: scale(1); }
-                        50% { transform: scale(1.05); }
+
+                    /* Navigation GROUP headings — HIDDEN. Resources/pages no
+                       longer assign a navigationGroup, so Filament renders the
+                       items ungrouped. This display:none defensively removes any
+                       group label/heading chrome so the list stays perfectly flat
+                       even if a group ever slips back in. */
+                    .fi-sidebar-nav-group-label,
+                    .fi-sidebar-group > .fi-sidebar-group-button,
+                    .fi-sidebar-nav-group > .fi-sidebar-nav-group-label {
+                        display: none !important;
                     }
-                    
-                    /* Navigation groups */
-                    .fi-sidebar-nav-group-label {
-                        color: rgba(255, 255, 255, 0.6) !important;
-                        font-size: 0.75rem !important;
-                        font-weight: 700 !important;
-                        text-transform: uppercase !important;
-                        letter-spacing: 0.05em !important;
-                        margin: 1.5rem 0 0.75rem 1rem !important;
-                        position: relative !important;
-                    }
-                    
-                    .fi-sidebar-nav-group-label::after {
-                        content: "";
-                        position: absolute;
-                        bottom: -4px;
-                        left: 0;
-                        width: 24px;
-                        height: 2px;
-                        background: linear-gradient(90deg, #10b981, transparent);
-                        border-radius: 1px;
-                    }
-                    
+
                     /* Scrollbar for sidebar */
                     .fi-sidebar::-webkit-scrollbar {
                         width: 6px;
@@ -296,11 +302,11 @@ class AdminPanelProvider extends PanelProvider
                         background: rgba(16, 185, 129, 0.5);
                     }
                     
-                    /* Dark mode enhancements */
+                    /* Dark mode enhancements (flat navy, matches the tokens) */
                     .dark .fi-sidebar {
-                        --sidebar-bg: linear-gradient(145deg, #020617 0%, #0f172a 50%, #1e293b 100%);
-                        --sidebar-border: rgba(148, 163, 184, 0.05);
-                        --sidebar-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.4);
+                        --sidebar-bg: #0d1727;
+                        --sidebar-border: rgba(35, 51, 73, 0.7);
+                        --sidebar-shadow: none;
                     }
                     
                     /* ========== MAIN CONTENT ADJUSTMENTS ========== */
