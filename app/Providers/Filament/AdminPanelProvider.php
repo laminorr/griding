@@ -89,30 +89,37 @@ class AdminPanelProvider extends PanelProvider
                         font-feature-settings: "ss02";
                     }
                     
-                    /* ========== SIDEBAR STYLING ========== */
-                    /* Full-height fixed sidebar. Filament v3 already makes
-                       .fi-sidebar position:fixed / height:100dvh; the previous
-                       design forced position:relative here, which dropped the
-                       sidebar back into normal flow — so on any page taller than
-                       the viewport it scrolled away and revealed the differently
-                       shaded page shell below the last nav item. We keep it
-                       FIXED and pinned to the full viewport height so the navy
-                       background fills top-to-bottom at all times, in both the
-                       expanded and collapsed states, regardless of content
-                       length or scroll position. A fixed element is still the
-                       containing block for its ::before overlay, so that keeps
-                       working without position:relative. */
+                    /* ========== SIDEBAR STYLING (COSMETIC ONLY) ==========
+                       IMPORTANT: this rule is deliberately cosmetic-only. Do NOT
+                       re-add position / inset / width / z-index overrides here.
+
+                       Filament v3 ships a correct, RTL-aware layout on its own:
+                       .fi-layout is a `flex flex-row-reverse` row, the sidebar is
+                       a real flex ITEM sized `w-[--sidebar-width]` (collapsed:
+                       `w-[--collapsed-sidebar-width]`), and .fi-main-ctn is
+                       `flex-1`, so the main column is naturally offset beside the
+                       sidebar with NO overlap. On desktop the sidebar is
+                       `lg:sticky top-0 h-screen`, so it stays pinned full-height
+                       while the page scrolls, expanded or collapsed.
+
+                       A previous pass forced `position: fixed` here. That pulls
+                       the sidebar OUT of the flex flow, so .fi-main-ctn (flex-1)
+                       expanded to the full viewport width and the fixed sidebar
+                       rendered ON TOP of the content — the overlap bug, in both
+                       the expanded and collapsed states. Removing the positioning
+                       override restores the native Filament flex layout (correct
+                       offset AND full height together). We keep only the navy
+                       background, the RTL divider, and the blur. The sidebar is
+                       still a positioned element natively (lg:sticky / fixed on
+                       mobile), so the ::before overlay below still anchors to it. */
                     .fi-sidebar {
                         background: var(--sidebar-bg) !important;
-                        border-right: 1px solid var(--sidebar-border) !important;
+                        /* RTL: sidebar is pinned to the inline-start (right) edge;
+                           the divider faces the content on its inline-end (left). */
+                        border-inline-end: 1px solid var(--sidebar-border) !important;
                         box-shadow: var(--sidebar-shadow) !important;
                         backdrop-filter: blur(20px) !important;
                         -webkit-backdrop-filter: blur(20px) !important;
-                        position: fixed !important;
-                        inset-block: 0 !important;      /* top:0 + bottom:0 */
-                        block-size: 100vh !important;
-                        block-size: 100dvh !important;
-                        z-index: 50 !important;
                     }
                     
                     /* Sidebar overlay effect */

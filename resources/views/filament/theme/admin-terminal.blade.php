@@ -709,15 +709,17 @@
     .fi-ta-cell .at-num { direction: ltr; }
 
     /* =====================================================================
-       Sidebar full-height. Root cause of the old empty strip: an earlier
-       override forced .fi-sidebar to position:relative, dropping it into normal
-       flow — so it was only one viewport tall and, on pages taller than the
-       viewport, scrolled away and exposed the page shell below the last nav
-       item. The authoritative fix now lives in AdminPanelProvider (keep
-       .fi-sidebar position:fixed + block-size:100dvh so its navy fills the full
-       viewport top-to-bottom at all times, expanded or collapsed). Here we just
-       make the inner nav stretch to fill the fixed sidebar so its own surface
-       never stops short of the bottom edge. */
+       Sidebar full-height. Filament's native layout already handles both the
+       positioning AND the height: the sidebar is a flex item in the
+       `flex-row-reverse` .fi-layout, sized by --sidebar-width, and carries
+       `h-screen` + `lg:sticky top-0`, so on desktop it stays pinned full-height
+       beside the (flex-1) main column — no overlap, no short/cut-off column.
+       We do NOT re-position it (that broke the layout before; see the cosmetic
+       .fi-sidebar rule in AdminPanelProvider). Here we only reinforce the full
+       height with dvh (dynamic viewport, kinder on mobile chrome) and stretch
+       the inner nav so the navy surface never stops short of the bottom edge.
+       Height-only — no position/width/inset — so the native flex offset stays
+       intact. */
     .fi-sidebar {
         block-size: 100vh;
         block-size: 100dvh;
