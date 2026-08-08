@@ -719,7 +719,22 @@
        height with dvh (dynamic viewport, kinder on mobile chrome) and stretch
        the inner nav so the navy surface never stops short of the bottom edge.
        Height-only — no position/width/inset — so the native flex offset stays
-       intact. */
+       intact.
+
+       The missing piece for SHORT pages: the sidebar is a flex item whose
+       rendered height tracks the .fi-layout flex row (`flex flex-row-reverse`).
+       On a long page (e.g. «مانیتورینگ زنده») the main column makes that row
+       taller than the viewport, so the sticky sidebar fills top-to-bottom. On a
+       short page the row only grows to its content, so the sidebar stops early
+       and leaves a navy-less gap below it. Guaranteeing the layout row is at
+       least one viewport tall makes the sidebar reach the bottom edge on EVERY
+       page. This is height-only (no position / width / inset), so it cannot
+       reintroduce the overlap bug and does not change the main content offset —
+       correct in both the 244px expanded and 72px collapsed states. */
+    .fi-layout {
+        min-block-size: 100vh;
+        min-block-size: 100dvh;
+    }
     .fi-sidebar {
         block-size: 100vh;
         block-size: 100dvh;
