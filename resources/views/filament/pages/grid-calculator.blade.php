@@ -789,9 +789,9 @@
                      fee   = (fee_bps ÷ ۱۰۰۰۰) × (ارزش خرید + ارزش فروش)
                            = (fee_bps ÷ ۱۰۰۰۰) × notional × (۲ + فاصله ÷ ۱۰۰)
                      net   = gross − fee
-                 summed over the priced buy levels (per_side cycles in «both»
-                 mode). NOT a projection — no ×day/week/month. Every value comes
-                 from GridCalculator::calculate(), which sums plan['items']. --}}
+                 summed over ALL priced levels on BOTH sides (= N placed cycles,
+                 not per_side). NOT a projection — no ×day/week/month. Every value
+                 comes from GridCalculator::calculate(), which sums plan['items']. --}}
             @if ($roundNetTotal !== null)
                 <div class="panel-section calc-round">
                     <div class="panel-section__head">

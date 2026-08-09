@@ -67,11 +67,11 @@ class GridCalculator extends Page
     public ?int $netPerCycle = null;         // gross - fee (IRT)
     public ?int $feeBps = null;              // the real fee driving the numbers
 
-    // ---- Full-round total (sum over the plan's priced cycle levels) ------
-    public ?int $roundCycles = null;         // number of priced levels summed (cycles in a full round)
-    public ?int $roundGrossTotal = null;     // Σ gross over cycle levels (IRT)
-    public ?int $roundFeeTotal = null;       // Σ fee   over cycle levels (IRT)
-    public ?int $roundNetTotal = null;       // Σ net   over cycle levels (IRT)
+    // ---- Full-round total (sum over ALL priced levels, both sides) -------
+    public ?int $roundCycles = null;         // number of priced levels summed (= N placed cycles, both sides)
+    public ?int $roundGrossTotal = null;     // Σ gross over all priced levels (IRT)
+    public ?int $roundFeeTotal = null;       // Σ fee   over all priced levels (IRT)
+    public ?int $roundNetTotal = null;       // Σ net   over all priced levels (IRT)
     public ?string $calcError = null;        // Persian error for a neutral empty state
     public bool $hasResults = false;
 
@@ -224,38 +224,43 @@ class GridCalculator extends Page
             $this->netPerCycle   = $this->grossPerCycle - $this->feePerCycle;
         }
 
-        // Full-round total: if EVERY priced level round-trips its cycle exactly
-        // once, the total profit = Σ (engine net) over the plan's priced cycle
-        // levels. A cycle is anchored by a priced BUY level round-tripping (the
-        // engine pairs buy→sell), so in «both» mode this is per_side cycles, not
-        // the total level count. One-sided sell mode has no buys, so each priced
-        // SELL level anchors a cycle instead. Below-min / zero-notional levels
-        // don't place orders, so they don't count. The count is DERIVED from the
-        // levels summed — never hard-coded. This is a deterministic sum of
-        // already-present notionals, NOT a projection to any time horizon.
-        $priced = array_values(array_filter(
+        // Full-round total: a "full round" is EVERY placed level round-tripping
+        // its cycle exactly once, so the total = Σ (engine net) over ALL priced
+        // levels on BOTH sides — not per_side. The read-only audit
+        // (docs/both-sides-cycle-audit.md) plus real data from bot 46 confirmed
+        // that in «both» mode the bot places all N levels on init (buy + sell)
+        // and sell-initiated cycles book profit identically to buy-initiated
+        // ones. So a full round = N cycles (all placed levels). Below-min /
+        // zero-notional levels don't place orders, so they don't count, and the
+        // count is DERIVED from the levels actually summed — never hard-coded,
+        // never per_side. This is a deterministic sum of already-present
+        // notionals, NOT a projection to any time horizon.
+        $cycleItems = array_values(array_filter(
             $items,
             fn ($it) => ((int) ($it['notional'] ?? 0)) > 0 && ! ($it['below_min'] ?? false),
         ));
-        $cycleItems = array_values(array_filter($priced, fn ($it) => ($it['side'] ?? '') === 'buy'));
-        if (count($cycleItems) === 0) {
-            $cycleItems = array_values(array_filter($priced, fn ($it) => ($it['side'] ?? '') === 'sell'));
-        }
 
         if (count($cycleItems) > 0) {
-            $grossTotal = 0.0;
-            $feeTotal   = 0.0;
+            $grossTotal = 0;
+            $feeTotal   = 0;
+            $netTotal   = 0;
+            // Round each level's gross/fee to integers FIRST — the engine books
+            // an integer profit per completed trade (CompletedTrade), so a full
+            // round is the sum of those integer per-cycle records. This is the
+            // SAME per-cycle rounding the representative box above uses, applied
+            // once per priced level, and it keeps net == gross − fee exactly.
             foreach ($cycleItems as $it) {
-                $n = (int) $it['notional'];
-                $grossTotal += $n * $s;
-                $feeTotal   += $n * $f * (2 + $s);
+                $n     = (int) $it['notional'];
+                $gross = (int) round($n * $s);
+                $fee   = (int) round($n * $f * (2 + $s));
+                $grossTotal += $gross;
+                $feeTotal   += $fee;
+                $netTotal   += $gross - $fee;
             }
             $this->roundCycles     = count($cycleItems);
-            $this->roundGrossTotal = (int) round($grossTotal);
-            $this->roundFeeTotal   = (int) round($feeTotal);
-            // net = gross − fee on the rounded totals so the three displayed
-            // sub-lines are internally consistent (net == gross − fee).
-            $this->roundNetTotal   = $this->roundGrossTotal - $this->roundFeeTotal;
+            $this->roundGrossTotal = $grossTotal;
+            $this->roundFeeTotal   = $feeTotal;
+            $this->roundNetTotal   = $netTotal; // == grossTotal − feeTotal
         }
 
         // ---- Risk assessment (PURE assessGridRisk) -------------------------
