@@ -259,9 +259,10 @@ class EditBotConfig extends EditRecord
             $score -= 10; // ربات غیرفعال
         }
         
-        // محاسبه سود کل
+        // محاسبه سود کل — profit already stores the net figure (gross − fee);
+        // do not subtract fee again or it is double-counted.
         $totalProfit = $this->record->completedTrades()
-            ->selectRaw('SUM(profit - fee) as net_profit')
+            ->selectRaw('SUM(profit) as net_profit')
             ->value('net_profit') ?? 0;
         
         if ($totalProfit < 0) {

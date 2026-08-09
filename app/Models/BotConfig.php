@@ -266,9 +266,10 @@ class BotConfig extends Model
 
     public function getTotalProfitAttribute(): float
     {
-        return (float) ($this->completedTrades()
-            ->selectRaw('COALESCE(SUM(profit - COALESCE(fee, 0)), 0) as net_profit')
-            ->value('net_profit') ?? 0);
+        // completed_trades.profit is already net of fees (CompletedTrade::createFromOrders
+        // stores gross - total_fee into `profit`). Sum it directly; do NOT subtract fee
+        // again — that double-counts the fee (gross - 2·fee).
+        return (float) $this->completedTrades()->sum('profit');
     }
 
     public function getTotalTradesCountAttribute(): int
@@ -278,8 +279,11 @@ class BotConfig extends Model
 
     public function getSuccessfulTradesCountAttribute(): int
     {
+        // profit is already net of fees, so a winner is simply profit > 0.
+        // (The old `profit - fee > 0` filter mislabelled genuine winners where
+        // 0 < net_profit < fee as losses.)
         return (int) $this->completedTrades()
-            ->whereRaw('profit - COALESCE(fee, 0) > 0')
+            ->whereRaw('profit > 0')
             ->count();
     }
 
