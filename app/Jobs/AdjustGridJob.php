@@ -233,9 +233,34 @@ class AdjustGridJob implements ShouldQueue
                     // ✅ Only adjust grid if price moved significantly outside current grid range
                     if (!empty($existingOrders)) {
                         $currentPrice = (int) ($plan['mid'] ?? 0);
-                        $prices = array_column($existingOrders, 'price');
-                        $minPrice = min($prices);
-                        $maxPrice = max($prices);
+
+                        // RANGE SOURCE (early-rebalance fix): measure min/max from
+                        // the FULL current grid generation (filled + open orders),
+                        // not the shrunken open-order band. getOpenForBot() drops
+                        // filled legs, so after one side fills its band narrows and
+                        // one-sides and a price still INSIDE the grid looks
+                        // "outside" — the spurious rebalance proved against bot 46.
+                        // getGridExtentForBot() recovers the true edges from the
+                        // persisted grid_orders rows (they keep their price after
+                        // filling). Fall back to the reconstructed planned extent
+                        // when no current-generation rows survive (grid never fully
+                        // placed), and only as a last resort to the legacy
+                        // open-order band, so this never crashes or uses an empty
+                        // range. NOTE: only the min/max SOURCE changes here — the
+                        // threshold, distances and skip condition below are
+                        // unchanged, and the diff/apply step keeps using open
+                        // orders ($existingOrders) exactly as before.
+                        $extent = $reg->getGridExtentForBot($bot->id, $symbol)
+                            ?? $this->reconstructGridExtent($bot, $plan);
+
+                        if ($extent !== null) {
+                            $minPrice = $extent['min'];
+                            $maxPrice = $extent['max'];
+                        } else {
+                            $prices = array_column($existingOrders, 'price');
+                            $minPrice = min($prices);
+                            $maxPrice = max($prices);
+                        }
 
                         // Calculate grid range
                         $gridRange = $maxPrice - $minPrice;
@@ -320,5 +345,91 @@ class AdjustGridJob implements ShouldQueue
             // Release global lock
             $globalLock->release();
         }
+    }
+
+    /**
+     * Reconstruct the planned grid bounds from the bot's center and its
+     * levels/spacing, mirroring GridPlanner's geometry (pow(1 ± step, i)) and
+     * tick rounding.
+     *
+     * This is the graceful fallback for the rebalance range check when the
+     * persisted current-generation grid rows are missing or too sparse to
+     * measure (e.g. the initial grid never fully placed). It anchors on the
+     * frozen grid_center_price when available — the same stable center the Kill
+     * Switch uses — and otherwise on the current plan mid. It reflects the FULL
+     * planned extent on the deployed side(s), so a partially-placed or one-sided
+     * grid still gets a stable range instead of a collapsing open-order band.
+     *
+     * READ-ONLY w.r.t. grid_center_price — it is only read here, never written.
+     *
+     * @param array<string,mixed> $plan
+     * @return array{min:int,max:int}|null null when there is no usable center.
+     */
+    private function reconstructGridExtent(BotConfig $bot, array $plan): ?array
+    {
+        $center = ($bot->grid_center_price !== null && (float) $bot->grid_center_price > 0)
+            ? (int) $bot->grid_center_price
+            : (int) ($plan['mid'] ?? 0);
+        if ($center <= 0) {
+            return null;
+        }
+
+        $levels = (int) ($bot->grid_levels ?? 6);
+        $step   = ((float) ($bot->grid_spacing ?? 0.25)) / 100.0;
+        $tick   = max(1, (int) ($plan['tick'] ?? 1));
+        $mode   = strtolower(trim((string) ($bot->mode ?? 'both')));
+        if (!in_array($mode, ['both', 'buy', 'sell'], true)) {
+            $mode = 'both';
+        }
+        if ($levels < 1 || $step <= 0) {
+            return null;
+        }
+
+        // Same per-side split as GridPlanner::plan (GridPlanner.php:84).
+        $perSide = $mode === 'both' ? max(1, intdiv($levels, 2)) : max(1, $levels);
+
+        // Buys sit below center (rounded DOWN to tick), sells above (rounded UP),
+        // matching GridPlanner's roundToTick usage (GridPlanner.php:100,110).
+        $lowestBuy   = (int) round($center * pow(1 - $step, $perSide));
+        $highestBuy  = (int) round($center * pow(1 - $step, 1));
+        $lowestSell  = (int) round($center * pow(1 + $step, 1));
+        $highestSell = (int) round($center * pow(1 + $step, $perSide));
+
+        if ($mode === 'buy') {
+            return [
+                'min' => $this->roundToTick($lowestBuy, $tick, down: true),
+                'max' => $this->roundToTick($highestBuy, $tick, down: true),
+            ];
+        }
+        if ($mode === 'sell') {
+            return [
+                'min' => $this->roundToTick($lowestSell, $tick, down: false),
+                'max' => $this->roundToTick($highestSell, $tick, down: false),
+            ];
+        }
+
+        return [
+            'min' => $this->roundToTick($lowestBuy, $tick, down: true),
+            'max' => $this->roundToTick($highestSell, $tick, down: false),
+        ];
+    }
+
+    /**
+     * Tick rounding identical to GridPlanner::roundToTick (GridPlanner.php:227),
+     * replicated here (small, intentionally not abstracted) so the reconstructed
+     * fallback bounds land on the same ticks the planner would have placed.
+     */
+    private function roundToTick(int $price, int $tick, bool $down): int
+    {
+        if ($tick <= 1) {
+            return $price;
+        }
+        $q = intdiv($price, $tick);
+        $hasRemainder = ($price % $tick) !== 0;
+
+        if ($down) {
+            return $q * $tick;
+        }
+        return $hasRemainder ? ($q + 1) * $tick : $price;
     }
 }
