@@ -181,4 +181,70 @@ final class GridOrderExecutorTest extends TestCase
         $this->assertSame('submission_unknown', $order->status);
         $this->assertSame($this->expectedClientOrderId(), $order->client_order_id);
     }
+
+    /**
+     * 5. Bug fix — SIMULATION cancel must mutate the DB, not just log.
+     *
+     * Before the fix, the $simulation branch of the to_cancel loop only logged
+     * EXEC_SIM_CANCEL and continued, so a stale local GridOrder scheduled for
+     * cancellation stayed status='placed' forever while the sim PLACE branch
+     * persisted new rows — the exact reason bot 46 showed old initial_grid sells
+     * coexisting with new rebalance sells. The fix mirrors the live branch's
+     * local update (:89-91) keyed on the same nobitex_order_id, WITHOUT touching
+     * the exchange. This test proves the targeted row flips to 'cancelled' and
+     * an unrelated row is left alone (no over-cancel).
+     */
+    public function test_simulation_cancel_flips_matching_local_row_to_cancelled(): void
+    {
+        Http::fake(); // nothing should reach the wire in simulation
+
+        // The stale order the rebalance wants gone (SIM sentinel id, as
+        // getOpenForBot would surface it for a simulated bot).
+        $stale = GridOrder::create([
+            'bot_config_id'    => self::BOT_ID,
+            'price'            => 126_000_000,
+            'amount'           => '0.001',
+            'type'             => 'sell',
+            'status'           => 'placed',
+            'role'             => 'initial_grid',
+            'nobitex_order_id' => 'SIM-stale-1',
+            'client_order_id'  => 'cli-stale-1',
+        ]);
+
+        // A second placed order NOT in the cancel list — must remain untouched.
+        $keep = GridOrder::create([
+            'bot_config_id'    => self::BOT_ID,
+            'price'            => 124_000_000,
+            'amount'           => '0.001',
+            'type'             => 'sell',
+            'status'           => 'placed',
+            'role'             => 'initial_grid',
+            'nobitex_order_id' => 'SIM-keep-1',
+            'client_order_id'  => 'cli-keep-1',
+        ]);
+
+        // The exchange must NEVER be called in the simulation cancel path.
+        $svc = Mockery::mock(NobitexService::class);
+        $svc->shouldReceive('cancelOrder')->never();
+
+        $diff = [
+            'symbol'    => self::SYMBOL,
+            'tick'      => 1,
+            'to_cancel' => [[
+                'id'    => 'SIM-stale-1',
+                'price' => 126_000_000,
+            ]],
+            // no to_place → the bcmath-backed place loop never runs
+        ];
+
+        $executor = new GridOrderExecutor($svc, new OrderRegistry());
+        $executor->applyForBot(self::BOT_ID, $diff, simulation: true, role: 'rebalance');
+
+        Http::assertNothingSent();
+
+        // The targeted stale row is now cancelled — it does NOT linger as 'placed'.
+        $this->assertSame('cancelled', $stale->fresh()->status);
+        // The unrelated row is untouched (no over-cancel).
+        $this->assertSame('placed', $keep->fresh()->status);
+    }
 }

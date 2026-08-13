@@ -73,6 +73,20 @@ class GridOrderExecutor
             }
 
             if ($simulation) {
+                // Mirror the live branch's local DB effect (:89-91) without touching
+                // the real exchange: flip the same GridOrder row to 'cancelled' so a
+                // simulated rebalance actually retires stale orders instead of leaving
+                // them 'placed' forever alongside the newly-placed sim orders.
+                $updated = GridOrder::where('bot_config_id', $botId)
+                    ->where('nobitex_order_id', $oid)
+                    ->update(['status' => 'cancelled']);
+
+                if ($updated === 0) {
+                    Log::channel('trading')->warning('EXEC_SIM_CANCEL_NO_LOCAL_RECORD', [
+                        'symbol' => $symbol, 'bot_id' => $botId, 'id' => $oid,
+                    ]);
+                }
+
                 Log::channel('trading')->info('EXEC_SIM_CANCEL', ['symbol'=>$symbol,'id'=>$oid,'price'=>is_array($o) ? ($o['price'] ?? null) : null]);
                 $cancelled++;
                 continue;
