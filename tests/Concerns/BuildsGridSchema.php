@@ -145,6 +145,11 @@ trait BuildsGridSchema
             $table->timestamp('last_check_at')->nullable();
             $table->timestamp('last_rebalance_at')->nullable();
 
+            // Rebalance bookkeeping counter (2025_10_23_000001 migration :18).
+            // integer default 0 in production; AdjustGridJob increments it on
+            // every rebalance that actually places/cancels orders.
+            $table->integer('rebalance_count')->default(0);
+
             $table->timestamps();
         });
 

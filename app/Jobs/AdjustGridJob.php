@@ -272,12 +272,29 @@ class AdjustGridJob implements ShouldQueue
                     // 3) Calculate diff
                     $diff = $sync->diff($plan, $existing, 1, 3.0);
 
+                    // Only a diff that actually places or cancels orders counts as
+                    // a real rebalance. An empty diff means the plan matched the
+                    // existing grid — nothing changed — so the bookkeeping below
+                    // must NOT be bumped (the within-range no-op already `continue`d
+                    // above; this guards the empty-diff no-op too).
+                    $rebalanceApplied = !empty($diff['to_place']) || !empty($diff['to_cancel']);
+
                     // 4) Apply changes with bot_id context
                     $exec->applyForBot($bot->id, $diff, simulation: $simulate, role: 'rebalance');
 
+                    // 5) Persist rebalance bookkeeping only when a real rebalance
+                    // actually placed/changed orders. `last_rebalance_at` is fillable;
+                    // `rebalance_count` is bumped atomically so it does not depend on
+                    // mass-assignment.
+                    if ($rebalanceApplied) {
+                        $bot->update(['last_rebalance_at' => now()]);
+                        $bot->increment('rebalance_count');
+                    }
+
                     Log::channel('trading')->info('ADJUST_GRID_BOT_COMPLETE', [
                         'bot_id' => $bot->id,
-                        'symbol' => $symbol
+                        'symbol' => $symbol,
+                        'rebalance_applied' => $rebalanceApplied,
                     ]);
 
                 } catch (\Throwable $e) {
