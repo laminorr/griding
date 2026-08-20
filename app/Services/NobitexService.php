@@ -69,7 +69,7 @@ class NobitexService implements ExchangeClient
     /* -----------------------------------------------------------------
      | Core HTTP
      |------------------------------------------------------------------*/
-    protected function http(array $headers = []): PendingRequest
+    protected function http(array $headers = [], bool $signed = false): PendingRequest
     {
         $defaultHeaders = [
             'Accept'       => 'application/json',
@@ -82,12 +82,67 @@ class NobitexService implements ExchangeClient
             ->acceptJson()
             ->withHeaders($defaultHeaders + $headers);
 
-        if ($this->apiKey !== '') {
+        if ($signed) {
+            // Ed25519 request-signing path: the Nobitex-* headers are supplied by
+            // the caller (already computed from method/full_path/raw_body). The
+            // legacy `Authorization: Token` header MUST NOT be attached here — the
+            // signature replaces it — so we deliberately skip the apiKey block.
+            $req = $req->withHeaders([
+                'User-Agent' => (string) config('trading.nobitex.signed_user_agent', 'TraderBot/Griding-1.0'),
+            ]);
+        } elseif ($this->apiKey !== '') {
             $req = $req->withHeaders(['Authorization' => 'Token ' . $this->apiKey]);
         }
 
         // throw() را در request() هندل می‌کنیم
         return $req;
+    }
+
+    /** Lazily-built Ed25519 signer (keys read from config → env). */
+    protected ?NobitexRequestSigner $signer = null;
+
+    protected function signer(): NobitexRequestSigner
+    {
+        return $this->signer ??= NobitexRequestSigner::fromConfig();
+    }
+
+    /**
+     * Send one authenticated request via the Ed25519 signing scheme.
+     *
+     * The signature is computed HERE — at the point where the final method,
+     * full path (incl. query string), and raw body bytes are all known — so what
+     * we sign is byte-for-byte what we send. json_encode is the single source of
+     * truth for both the wire body and the signed body, so they can never
+     * diverge. An empty payload signs and sends an empty body ("") — the shape
+     * proven to return HTTP 200 for POST /users/wallets/list.
+     *
+     * @param array<string,mixed>       $query
+     * @param array<string,mixed>|null  $json
+     * @param array<string,mixed>       $headers
+     */
+    protected function sendSigned(string $method, string $url, array $query, ?array $json, array $headers): \Illuminate\Http\Client\Response
+    {
+        $rawBody = ($json === null || $json === [])
+            ? ''
+            : (string) json_encode($json, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+
+        // full_path MUST include the query string when present — the signature has
+        // to cover exactly what is requested.
+        $fullPath = $url;
+        if ($method === 'GET' && $query !== []) {
+            $qs = http_build_query($query);
+            if ($qs !== '') {
+                $fullPath .= '?' . $qs;
+            }
+        }
+
+        $signHeaders = $this->signer()->signRequest($method, $fullPath, $rawBody);
+
+        // withBody + send transmits the EXACT bytes we signed; Laravel's
+        // ->post([]) would emit "{}"/form-encoded data instead of an empty body.
+        return $this->http($headers + $signHeaders, signed: true)
+            ->withBody($rawBody, 'application/json')
+            ->send($method, $fullPath);
     }
 
     /**
@@ -112,7 +167,8 @@ class NobitexService implements ExchangeClient
         array $query = [],
         ?array $json = null,
         array $headers = [],
-        bool $idempotentRetry = true
+        bool $idempotentRetry = true,
+        bool $signed = false
     ): array {
         $url = '/' . ltrim($path, '/');
 
@@ -154,12 +210,14 @@ class NobitexService implements ExchangeClient
             }
 
             try {
-                $res = match (strtoupper($method)) {
-                    'GET'    => $this->http($headers)->get($url, $query),
-                    'POST'   => $this->http($headers)->post($url, $json ?? []),
-                    'DELETE' => $this->http($headers)->delete($url, $json ?? []),
-                    default  => throw new \InvalidArgumentException('Unsupported HTTP method: ' . $method),
-                };
+                $res = $signed
+                    ? $this->sendSigned(strtoupper($method), $url, $query, $json, $headers)
+                    : match (strtoupper($method)) {
+                        'GET'    => $this->http($headers)->get($url, $query),
+                        'POST'   => $this->http($headers)->post($url, $json ?? []),
+                        'DELETE' => $this->http($headers)->delete($url, $json ?? []),
+                        default  => throw new \InvalidArgumentException('Unsupported HTTP method: ' . $method),
+                    };
 
                 if ($res->failed()) {
                     // HTML/404 → Exception
@@ -988,7 +1046,9 @@ class NobitexService implements ExchangeClient
      */
     public function getBalances(): array
     {
-        $data = $this->request('POST', '/users/wallets/list');
+        // Signed (Ed25519) authenticated read — POST /users/wallets/list with an
+        // empty body, the exact call proven to return HTTP 200.
+        $data = $this->request('POST', '/users/wallets/list', signed: true);
         if (!is_array($data) || ($data['status'] ?? null) !== 'ok') {
             throw new \RuntimeException('Nobitex getBalances bad payload');
         }
@@ -1169,8 +1229,8 @@ class NobitexService implements ExchangeClient
         $endpoint  = $this->baseUrl . '/users/wallets/list';
 
         try {
-            // Same call getBalances() uses — authenticated wallet read.
-            $data = $this->request('POST', '/users/wallets/list');
+            // Same call getBalances() uses — signed (Ed25519) authenticated read.
+            $data = $this->request('POST', '/users/wallets/list', signed: true);
 
             $responseTime = microtime(true) - $startTime;
             $isOk = is_array($data) && ($data['status'] ?? null) === 'ok';

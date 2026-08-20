@@ -30,12 +30,18 @@ final class NobitexHealthCheckTest extends TestCase
     {
         parent::setUp();
 
+        // healthCheck() now authenticates via Ed25519 request signing, so it needs
+        // a keypair configured (a self-contained test seed — never a real key).
+        $seed = str_repeat("\x09", SODIUM_CRYPTO_SIGN_SEEDBYTES);
+
         config([
-            'trading.nobitex.base_url'       => 'https://apiv2.nobitex.ir',
-            'trading.nobitex.api_key'        => '',
-            'trading.nobitex.retry.times'    => 1,
-            'trading.nobitex.retry.sleep'    => 0,
-            'trading.nobitex.rate_limit.rpm' => 1000,
+            'trading.nobitex.base_url'         => 'https://apiv2.nobitex.ir',
+            'trading.nobitex.api_key'          => '',
+            'trading.nobitex.api_public_key'   => 'test-public-key',
+            'trading.nobitex.api_private_key'  => rtrim(strtr(base64_encode($seed), '+/', '-_'), '='),
+            'trading.nobitex.retry.times'      => 1,
+            'trading.nobitex.retry.sleep'      => 0,
+            'trading.nobitex.rate_limit.rpm'   => 1000,
         ]);
     }
 
