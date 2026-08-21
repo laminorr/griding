@@ -729,6 +729,10 @@ class NobitexService implements ExchangeClient
      * details=2 asks for the fuller order objects (incl. clientOrderId
      * where the exchange has one).
      *
+     * Authenticated via the Ed25519 signed path (signed: true) — the query
+     * string is part of the signed full_path, so the signature covers exactly
+     * what is requested. Same mechanism getBalances/the order methods use.
+     *
      * @return array<int,array<string,mixed>> Raw order rows (possibly empty).
      */
     public function listOpenOrders(string $symbol): array
@@ -740,7 +744,7 @@ class NobitexService implements ExchangeClient
             'dstCurrency' => $dst,
             'status'      => 'open',
             'details'     => 2,
-        ]);
+        ], signed: true);
 
         return array_map(
             static fn ($o) => (array) $o,
@@ -761,6 +765,10 @@ class NobitexService implements ExchangeClient
      * invisible to both the status probe and the open-orders list. Its
      * trades, however, appear here.
      *
+     * Authenticated via the Ed25519 signed path (signed: true) — the query
+     * string is part of the signed full_path, so the signature covers exactly
+     * what is requested. Same mechanism getBalances/the order methods use.
+     *
      * @return array<int,array<string,mixed>> Raw trade rows (possibly empty),
      *         each carrying at least orderId/type/price/amount/timestamp.
      */
@@ -771,7 +779,7 @@ class NobitexService implements ExchangeClient
         $data = $this->request('GET', '/market/trades/list', [
             'srcCurrency' => $src,
             'dstCurrency' => $dst,
-        ]);
+        ], signed: true);
 
         return array_map(
             static fn ($t) => (array) $t,
