@@ -59,6 +59,16 @@ return [
     'nobitex' => [
         'api_key'  => env('NOBITEX_API_KEY', ''),
 
+        // Ed25519 request-signing credentials (replaces the legacy Token auth for
+        // signed endpoints). PUBLIC key is sent verbatim in the Nobitex-Key
+        // header; PRIVATE key is a url-safe base64 of a 32-byte Ed25519 SEED used
+        // to sign each request. See App\Services\NobitexRequestSigner.
+        'api_public_key'  => env('NOBITEX_API_PUBLIC_KEY', ''),
+        'api_private_key' => env('NOBITEX_API_PRIVATE_KEY', ''),
+
+        // User-Agent sent on every signed (authenticated) call.
+        'signed_user_agent' => env('NOBITEX_SIGNED_UA', 'TraderBot/Griding-1.0'),
+
         'base_url' => env('NOBITEX_USE_TESTNET', false)
             ? env('NOBITEX_TESTNET_URL', 'https://testnetapiv2.nobitex.ir')
             : env('NOBITEX_BASE_URL', 'https://apiv2.nobitex.ir'),
