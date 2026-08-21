@@ -67,14 +67,24 @@ final class NobitexRequestSignerTest extends TestCase
         $this->assertSame((string) $ts, $headers['Nobitex-Timestamp']);
         $this->assertArrayHasKey('Nobitex-Signature', $headers);
 
-        // Signature is url-safe base64, unpadded.
-        $this->assertDoesNotMatchRegularExpression('#[+/=]#', $headers['Nobitex-Signature']);
+        $sig = $headers['Nobitex-Signature'];
+
+        // Signature is url-safe base64 WITH padding preserved: Nobitex requires
+        // the '=' padding (an unpadded signature returns HTTP 400). A 64-byte
+        // Ed25519 signature encodes to 88 chars ending in '=='.
+        $this->assertSame(88, strlen($sig), 'Padded base64 of a 64-byte signature is 88 chars.');
+        $this->assertStringEndsWith('==', $sig, 'Padding must be preserved, not stripped.');
+        // url-safe alphabet only — never the standard '+'/'/'.
+        $this->assertDoesNotMatchRegularExpression('#[+/]#', $sig);
+
+        // Decoding as url-safe, padded base64 round-trips to the raw 64-byte sig.
+        $sigRaw = base64_decode(strtr($sig, '-_', '+/'), true);
+        $this->assertSame(SODIUM_CRYPTO_SIGN_BYTES, strlen($sigRaw));
+        $this->assertSame(64, strlen($sigRaw));
 
         // It verifies against the seed-derived Ed25519 public key over the exact
         // documented payload string.
         $payload = $ts.$method.$path.$body;
-        $sigRaw = base64_decode(strtr($headers['Nobitex-Signature'], '-_', '+/'));
-
         $this->assertTrue(
             sodium_crypto_sign_verify_detached($sigRaw, $payload, $pubRaw),
             'Ed25519 signature must verify against the derived public key.'

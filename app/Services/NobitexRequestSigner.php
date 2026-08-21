@@ -11,7 +11,7 @@ namespace App\Services;
  * Ed25519 signatures. Every authenticated call carries three headers instead:
  *
  *     Nobitex-Key       : <public key>                 (config nobitex.api_public_key)
- *     Nobitex-Signature : <Ed25519 sig, url-safe base64, unpadded>
+ *     Nobitex-Signature : <Ed25519 sig, url-safe base64, WITH padding>
  *     Nobitex-Timestamp : <unix seconds, UTC>
  *
  * The signature is over the exact concatenation (NO separators):
@@ -115,9 +115,16 @@ class NobitexRequestSigner
         return (string) base64_decode(strtr($s, '-_', '+/'));
     }
 
-    /** url-safe base64 encode, unpadded. */
+    /**
+     * url-safe base64 encode, WITH padding preserved.
+     *
+     * Nobitex requires the signature as url-safe base64 that KEEPS the trailing
+     * '=' padding (matching their Python sample's base64.urlsafe_b64encode). An
+     * unpadded signature returns HTTP 400 "UnexpectedError"; the padded form
+     * returns HTTP 200 with wallet data — proven on the host. Do NOT rtrim '='.
+     */
     private function urlSafeB64Encode(string $bin): string
     {
-        return rtrim(strtr(base64_encode($bin), '+/', '-_'), '=');
+        return strtr(base64_encode($bin), '+/', '-_');
     }
 }

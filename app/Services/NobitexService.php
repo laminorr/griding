@@ -22,7 +22,6 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\RateLimiter;
-use Psr\Http\Message\RequestInterface;
 use Throwable;
 
 /**
@@ -141,57 +140,17 @@ class NobitexService implements ExchangeClient
 
         $req = $this->http($headers + $signHeaders, signed: true);
 
-        if ($rawBody === '') {
-            // Bodyless signed POST (balance/health reads). Nobitex returns HTTP
-            // 400 ("UnexpectedError") if a request with NO body carries ANY
-            // Content-Type header. Proven on the host with isolated cURL against
-            // POST /users/wallets/list + the three Nobitex-* signature headers:
-            //   • no Content-Type                               → 200 + wallet JSON
-            //   • Content-Type: application/x-www-form-urlencoded → 400
-            //   • Content-Type: application/json                → 400
-            // Laravel's Http client ALWAYS attaches a Content-Type (form by
-            // default, JSON in json mode), and withHeaders(['Content-Type'=>null])
-            // does not strip it — so the request never matches the known-good raw
-            // wire format on its own. The only reliable fix is a Guzzle middleware
-            // that removes Content-Type from the final PSR-7 request right before
-            // it hits the wire. Laravel pushes withMiddleware() handlers AFTER
-            // Guzzle's prepare_body middleware, so this runs last and wins,
-            // yielding exactly: Nobitex-Key / Nobitex-Signature / Nobitex-Timestamp
-            // / User-Agent, no Content-Type, no body.
-            $req = $req->withMiddleware(self::stripContentTypeMiddleware());
-
-            // No withBody(): send an empty body. The signed payload's raw_body is
-            // "" (see above), so the wire body must be empty too.
-            return $req->send($method, $fullPath);
-        }
-
-        // Bodied signed request (order placement, later parts): the exact signed
-        // bytes go out WITH Content-Type: application/json, byte-for-byte what was
-        // signed. withBody + send transmits the exact bytes; Laravel's ->post([])
-        // would emit "{}"/form-encoded data instead.
+        // Send the exact signed bytes. withBody + send transmits the raw body
+        // byte-for-byte — byte-identical to what was signed — rather than letting
+        // Laravel re-encode via ->post([]) (which would emit "{}"/form data).
+        // An empty payload signs and sends an empty body; Content-Type is
+        // harmless (proven on the host: a bodyless POST /users/wallets/list with
+        // the PADDED signature returns HTTP 200 with or without a Content-Type),
+        // so there is no special case here — the padded signature is what the
+        // API requires, and matching that is the whole fix.
         return $req
             ->withBody($rawBody, 'application/json')
             ->send($method, $fullPath);
-    }
-
-    /**
-     * Guzzle middleware that removes the Content-Type header from the outgoing
-     * PSR-7 request. Used on the bodyless signed path so the request matches the
-     * known-good raw wire format (Nobitex-* + User-Agent only). Laravel applies
-     * withMiddleware() handlers AFTER Guzzle's prepare_body middleware, so this
-     * runs last and wins over whatever Content-Type Laravel/Guzzle attached.
-     *
-     * Exposed (static) so the strip can be unit-tested directly against a PSR-7
-     * request — the effect is invisible to Http::fake(), which records the
-     * request one stage earlier, before user middleware runs.
-     */
-    public static function stripContentTypeMiddleware(): callable
-    {
-        return static function (callable $handler): callable {
-            return static function (RequestInterface $request, array $options) use ($handler) {
-                return $handler($request->withoutHeader('Content-Type'), $options);
-            };
-        };
     }
 
     /**
