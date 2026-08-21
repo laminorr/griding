@@ -1,5 +1,12 @@
 # Laravel / PHP
 /vendor/
+
+# Vendored: sodium_compat must be committed (composer install unavailable on prod host)
+!/vendor/
+/vendor/*
+!/vendor/paragonie/
+/vendor/paragonie/*
+!/vendor/paragonie/sodium_compat/
 /.env
 /.env.*
 !/.env.example
