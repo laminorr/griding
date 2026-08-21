@@ -579,7 +579,9 @@ class NobitexService implements ExchangeClient
 
         // Order-creating POST → non-idempotent: never blind-retry an ambiguous
         // failure, or we risk placing this order twice with real money.
-        $data = $this->request('POST', '/market/orders/add', [], $payload, [], idempotentRetry: false);
+        // Ed25519-signed: the exact JSON body ($payload → json_encode in
+        // sendSigned) is what is signed AND sent, byte-for-byte.
+        $data = $this->request('POST', '/market/orders/add', [], $payload, [], idempotentRetry: false, signed: true);
 
         if (method_exists(CreateOrderResponse::class, 'fromApi')) {
             /** @var CreateOrderResponse $resp */
@@ -604,7 +606,7 @@ class NobitexService implements ExchangeClient
         $data = $this->request('POST', '/market/orders/update-status', [], [
             'order'  => $orderId,
             'status' => 'canceled',
-        ]);
+        ], signed: true);
 
         if (method_exists(ApiOkDto::class, 'fromApi')) {
             /** @var ApiOkDto $dto */
@@ -629,7 +631,7 @@ class NobitexService implements ExchangeClient
         foreach ($orderIds as $orderId) {
             try {
                 // Call API once per order (Nobitex doesn't support batch)
-                $data = $this->request('POST', '/market/orders/status', [], ['id' => $orderId]);
+                $data = $this->request('POST', '/market/orders/status', [], ['id' => $orderId], signed: true);
 
                 // Response has 'order' (singular) not 'orders' (plural)
                 $row = (array) ($data['order'] ?? []);
@@ -704,7 +706,7 @@ class NobitexService implements ExchangeClient
         try {
             $data = $this->request('POST', '/market/orders/status', [], [
                 'clientOrderId' => $clientOrderId,
-            ]);
+            ], signed: true);
         } catch (OrderNotFoundException) {
             return null;
         }
@@ -1104,7 +1106,8 @@ class NobitexService implements ExchangeClient
         }
 
         // Order-creating POST → non-idempotent, same policy as createOrder.
-        return $this->request('POST', '/market/orders/add', [], $payload, [], idempotentRetry: false);
+        // Ed25519-signed, same as createOrder: the exact JSON body is signed and sent.
+        return $this->request('POST', '/market/orders/add', [], $payload, [], idempotentRetry: false, signed: true);
     }
 
     /* -----------------------------------------------------------------

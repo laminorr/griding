@@ -53,6 +53,10 @@ final class SubmissionReconcilerTest extends TestCase
         config([
             'trading.nobitex.base_url'                  => 'https://apiv2.nobitex.ir',
             'trading.nobitex.api_key'                   => '',
+            // Order endpoints now authenticate via Ed25519 signing (PART 3), so a
+            // valid keypair must be configured or signRequest() throws before send.
+            'trading.nobitex.api_public_key'            => 'test-public-key',
+            'trading.nobitex.api_private_key'           => rtrim(strtr(base64_encode(str_repeat("\x07", SODIUM_CRYPTO_SIGN_SEEDBYTES)), '+/', '-_'), '='),
             'trading.nobitex.retry.times'               => 1,
             'trading.nobitex.retry.sleep'               => 0,
             'trading.nobitex.rate_limit.rpm'            => 1000,
