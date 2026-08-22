@@ -114,18 +114,6 @@ return [
             // App\Exceptions\RateLimitExceededException instead of sending.
             'max_wait_ms'    => (int) env('NOBITEX_RATE_LIMIT_MAX_WAIT_MS', 10_000),
         ],
-
-        // ************ NEW: Auth (login + 30-day token + auto-refresh) ************
-        'auth' => [
-            'username'     => env('NOBITEX_USERNAME'),            // ایمیل لاگین
-            'password'     => env('NOBITEX_PASSWORD'),            // پسورد
-            'remember'     => (string) env('NOBITEX_REMEMBER', 'yes') === 'yes', // 30 روزه
-            'totp_secret'  => env('NOBITEX_TOTP_SECRET'),         // اختیاری (2FA)
-            'login_path'   => env('NOBITEX_AUTH_LOGIN_PATH', '/auth/login/'),
-            'auto_refresh' => (bool) env('NOBITEX_AUTO_REFRESH_TOKEN', true),    // روی 401 رفرش کن
-            'cache_key'    => env('NOBITEX_TOKEN_CACHE_KEY', 'nobitex:api_token'),
-        ],
-        // **************************************************************************
     ],
 
     /*
