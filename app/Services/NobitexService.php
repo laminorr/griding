@@ -74,6 +74,11 @@ class NobitexService implements ExchangeClient
         $defaultHeaders = [
             'Accept'       => 'application/json',
             'Content-Type' => 'application/json',
+            // The config key is named `signed_user_agent` for historical reasons
+            // (it once applied only to the signed path), but the TraderBot UA now
+            // rides on EVERY request — signed and public (orderbook/stats/OHLC)
+            // alike — per Nobitex's recommendation to identify bot traffic.
+            'User-Agent'   => (string) config('trading.nobitex.signed_user_agent', 'TraderBot/Griding-1.0'),
         ];
 
         $req = Http::baseUrl($this->baseUrl)
@@ -82,15 +87,11 @@ class NobitexService implements ExchangeClient
             ->acceptJson()
             ->withHeaders($defaultHeaders + $headers);
 
-        if ($signed) {
-            // Ed25519 request-signing path: the Nobitex-* headers are supplied by
-            // the caller (already computed from method/full_path/raw_body). The
-            // legacy `Authorization: Token` header MUST NOT be attached here — the
-            // signature replaces it — so we deliberately skip the apiKey block.
-            $req = $req->withHeaders([
-                'User-Agent' => (string) config('trading.nobitex.signed_user_agent', 'TraderBot/Griding-1.0'),
-            ]);
-        } elseif ($this->apiKey !== '') {
+        if (!$signed && $this->apiKey !== '') {
+            // Legacy `Authorization: Token` header for unsigned authenticated
+            // calls. On the Ed25519 signing path (signed: true) this is
+            // deliberately skipped: the Nobitex-* signature headers — supplied by
+            // the caller, computed from method/full_path/raw_body — replace it.
             $req = $req->withHeaders(['Authorization' => 'Token ' . $this->apiKey]);
         }
 
@@ -518,7 +519,18 @@ class NobitexService implements ExchangeClient
         [$src, $dstForPublic] = $this->splitSymbolPublic($symbol); // e.g. ['btc','irt']
         $marketDashedLower = $src . '-' . $dstForPublic;           // btc-irt
 
-        // 1) v3
+        // 1) v3 PATH form (documented primary): GET /v3/orderbook/{symbol}
+        //    — symbol in the PATH (e.g. /v3/orderbook/BTCIRT), on the apiv2 base.
+        //    Response family (bids/asks/status/lastUpdate/lastTradePrice) is the
+        //    same one mapOrderbookPayloadToDto() already handles.
+        try {
+            $data = $this->request('GET', '/v3/orderbook/' . $symbol);
+            return $this->mapOrderbookPayloadToDto($data, $symbol);
+        } catch (Throwable $e) {
+            Log::channel('nobitex')->notice('orderbook v3 (path form) failed; falling back', ['symbol' => $symbol, 'error' => $e->getMessage()]);
+        }
+
+        // 2) v3 legacy alias: GET /market/orderbook-v3?symbol={symbol} (query form)
         try {
             $data = $this->request('GET', '/market/orderbook-v3', ['symbol' => $symbol]);
             return $this->mapOrderbookPayloadToDto($data, $symbol);
@@ -526,7 +538,7 @@ class NobitexService implements ExchangeClient
             Log::channel('nobitex')->notice('orderbook-v3 failed; falling back', ['symbol' => $symbol, 'error' => $e->getMessage()]);
         }
 
-        // 2) v2 با SYMBOL (بدون dash)
+        // 3) v2 با SYMBOL (بدون dash)
         try {
             $data = $this->request('GET', '/market/orderbook', ['symbol' => $symbol]);
             return $this->mapOrderbookPayloadToDto($data, $symbol);
@@ -534,7 +546,7 @@ class NobitexService implements ExchangeClient
             Log::channel('nobitex')->notice('orderbook v2 (upper) failed; falling back', ['symbol' => $symbol, 'error' => $e->getMessage()]);
         }
 
-        // 3) v2 با dashed lower (btc-irt)
+        // 4) v2 با dashed lower (btc-irt)
         try {
             $data = $this->request('GET', '/market/orderbook', ['symbol' => $marketDashedLower]);
             return $this->mapOrderbookPayloadToDto($data, $symbol);
@@ -542,7 +554,7 @@ class NobitexService implements ExchangeClient
             Log::channel('nobitex')->notice('orderbook v2 (dashed) failed; falling back to stats', ['symbol' => $symbol, 'market' => $marketDashedLower, 'error' => $e->getMessage()]);
         }
 
-        // 4) /market/stats – چند کلید محتمل را چک می‌کنیم (irt/rls)
+        // 5) /market/stats – چند کلید محتمل را چک می‌کنیم (irt/rls)
         $stats = $this->request('GET', '/market/stats', [
             'srcCurrency' => $src,
             'dstCurrency' => $dstForPublic,
@@ -1058,6 +1070,91 @@ class NobitexService implements ExchangeClient
             'spreadPercent' => $spreadPercent,
             'dayChange'     => $dayChange,
         ];
+    }
+
+    /**
+     * تاریخچهٔ کندل/OHLC (فرمت TradingView UDF) — عمومی و بدون امضا.
+     *
+     * GET /market/udf/history. برخلاف بقیهٔ مسیرهای عمومی، این endpoint از
+     * srcCurrency/dstCurrency استفاده نمی‌کند: نماد عیناً به‌صورت BTCIRT (uppercase)
+     * در پارامتر `symbol` ارسال می‌شود و از splitSymbolPublic() عبور نمی‌کند.
+     *
+     * پاسخ UDF به آرایهٔ نرمال‌شده تبدیل می‌شود. مقادیر o/h/l/c/v به‌صورت STRING
+     * نگه داشته می‌شوند (نه float) تا روی مقادیر بزرگ ریالی دقت از دست نرود —
+     * هم‌راستا با انضباط Money/BCMath پروژه. `t` یک int (unix seconds) می‌ماند.
+     *
+     * @param string   $symbol     نماد AS-IS مثل "BTCIRT"
+     * @param string   $resolution یکی از: 1,5,15,30,60,180,240,360,720,D,1D,2D,3D
+     * @param int      $to         unix seconds (الزامی)
+     * @param int|null $from       unix seconds (اختیاری)
+     * @param int|null $countback  اختیاری؛ در صورت >۵۰۰ به ۵۰۰ محدود می‌شود (سقف مستندات)
+     * @param int      $page       اختیاری، پیش‌فرض ۱
+     * @return array{status:string,candles:array<int,array{t:int,o:string,h:string,l:string,c:string,v:string}>,errmsg:?string}
+     */
+    public function getOhlc(string $symbol, string $resolution, int $to, ?int $from = null, ?int $countback = null, int $page = 1): array
+    {
+        $allowedResolutions = ['1', '5', '15', '30', '60', '180', '240', '360', '720', 'D', '1D', '2D', '3D'];
+        if (!in_array($resolution, $allowedResolutions, true)) {
+            throw new \InvalidArgumentException('Unsupported OHLC resolution: ' . $resolution);
+        }
+
+        // symbol AS-IS (uppercase BTCIRT) — this endpoint does NOT use src/dst.
+        $query = [
+            'symbol'     => $symbol,
+            'resolution' => $resolution,
+            'to'         => $to,
+        ];
+        if ($from !== null) {
+            $query['from'] = $from;
+        }
+        if ($countback !== null) {
+            // Docs cap countback at 500 — clamp anything larger.
+            $query['countback'] = min($countback, 500);
+        }
+        $query['page'] = $page;
+
+        // Public, unsigned market-data read.
+        $data = $this->request('GET', '/market/udf/history', $query);
+
+        $status = (string) ($data['s'] ?? 'error');
+
+        // no_data is a valid, non-error answer: empty candle set.
+        if ($status === 'no_data') {
+            return ['status' => 'no_data', 'candles' => [], 'errmsg' => null];
+        }
+
+        // error: surface as status 'error' with errmsg; do NOT throw.
+        if ($status !== 'ok') {
+            return [
+                'status'  => 'error',
+                'candles' => [],
+                'errmsg'  => isset($data['errmsg']) ? (string) $data['errmsg'] : null,
+            ];
+        }
+
+        // ok: zip the parallel t/o/h/l/c/v arrays into per-candle rows.
+        $t = array_values((array) ($data['t'] ?? []));
+        $o = array_values((array) ($data['o'] ?? []));
+        $h = array_values((array) ($data['h'] ?? []));
+        $l = array_values((array) ($data['l'] ?? []));
+        $c = array_values((array) ($data['c'] ?? []));
+        $v = array_values((array) ($data['v'] ?? []));
+
+        $candles = [];
+        foreach ($t as $i => $ts) {
+            $candles[] = [
+                't' => (int) $ts,
+                // Preserve o/h/l/c/v as STRINGS (cast raw JSON scalars) to avoid
+                // float precision loss on large IRT values.
+                'o' => (string) ($o[$i] ?? ''),
+                'h' => (string) ($h[$i] ?? ''),
+                'l' => (string) ($l[$i] ?? ''),
+                'c' => (string) ($c[$i] ?? ''),
+                'v' => (string) ($v[$i] ?? ''),
+            ];
+        }
+
+        return ['status' => 'ok', 'candles' => $candles, 'errmsg' => null];
     }
 
     /**
