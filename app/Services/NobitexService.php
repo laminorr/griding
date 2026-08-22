@@ -790,7 +790,7 @@ class NobitexService implements ExchangeClient
     /** موجودی یک ارز */
     public function getBalance(string $currency): BalanceDto
     {
-        $data = $this->request('POST', '/users/wallets/balance', [], ['currency' => $currency]);
+        $data = $this->request('POST', '/users/wallets/balance', [], ['currency' => $currency], signed: true);
 
         if (method_exists(BalanceDto::class, 'fromApi')) {
             /** @var BalanceDto $dto */
@@ -830,7 +830,8 @@ class NobitexService implements ExchangeClient
     {
         $payload = $dto + ['mode' => 'oco'];
         // Also posts to /market/orders/add → non-idempotent, same as createOrder.
-        $data = $this->request('POST', '/market/orders/add', [], $payload, [], idempotentRetry: false);
+        // Ed25519-signed, mirroring createOrder: the exact JSON body is signed and sent.
+        $data = $this->request('POST', '/market/orders/add', [], $payload, [], idempotentRetry: false, signed: true);
         return ['orders' => $data['orders'] ?? []];
     }
 
@@ -850,7 +851,7 @@ class NobitexService implements ExchangeClient
             'pageSize'    => $pageSize,
         ], fn($v) => !is_null($v));
 
-        $data = $this->request('GET', '/positions/list', $query);
+        $data = $this->request('GET', '/positions/list', $query, signed: true);
         return [
             'positions' => $data['positions'] ?? [],
             'hasNext'   => (bool) ($data['hasNext'] ?? false),
@@ -859,7 +860,7 @@ class NobitexService implements ExchangeClient
 
     public function getPositionStatus(int $positionId): array
     {
-        $data = $this->request('GET', "/positions/{$positionId}/status");
+        $data = $this->request('GET', "/positions/{$positionId}/status", signed: true);
         return $data['position'] ?? [];
     }
 
@@ -867,7 +868,7 @@ class NobitexService implements ExchangeClient
     {
         // Creates a closing order → non-idempotent; a blind retry could open a
         // second closing order.
-        $data = $this->request('POST', "/positions/{$positionId}/close", [], $dto, [], idempotentRetry: false);
+        $data = $this->request('POST', "/positions/{$positionId}/close", [], $dto, [], idempotentRetry: false, signed: true);
         return $data['order'] ?? [];
     }
 
@@ -875,7 +876,7 @@ class NobitexService implements ExchangeClient
     {
         // Moves collateral on the position → non-idempotent (a resend could
         // apply the collateral change twice).
-        $data = $this->request('POST', "/positions/{$positionId}/edit-collateral", [], ['collateral' => $collateral], [], idempotentRetry: false);
+        $data = $this->request('POST', "/positions/{$positionId}/edit-collateral", [], ['collateral' => $collateral], [], idempotentRetry: false, signed: true);
         return $data['position'] ?? [];
     }
 
@@ -927,7 +928,7 @@ class NobitexService implements ExchangeClient
     public function addressBookList(?string $network = null): array
     {
         $query = array_filter(['network' => $network]);
-        $data = $this->request('GET', '/address_book', $query);
+        $data = $this->request('GET', '/address_book', $query, signed: true);
         return $data['data'] ?? [];
     }
 
@@ -937,19 +938,19 @@ class NobitexService implements ExchangeClient
         // duplicate resend would attempt to create the same whitelisted address
         // twice. Losing this to a blind retry is not a money move, but it MODIFIES
         // security-sensitive state, so it gets the conservative policy.
-        $data = $this->request('POST', '/address_book', [], $dto, [], idempotentRetry: false);
+        $data = $this->request('POST', '/address_book', [], $dto, [], idempotentRetry: false, signed: true);
         return $data['data'] ?? [];
     }
 
     public function addressBookDelete(int $addressId): array
     {
-        $this->request('DELETE', "/address_book/{$addressId}/delete");
+        $this->request('DELETE', "/address_book/{$addressId}/delete", signed: true);
         return ['status' => 'ok'];
     }
 
     public function activateWhitelist(): array
     {
-        $this->request('POST', '/address_book/whitelist/activate');
+        $this->request('POST', '/address_book/whitelist/activate', signed: true);
         return ['status' => 'ok'];
     }
 
@@ -958,7 +959,7 @@ class NobitexService implements ExchangeClient
         $this->request('POST', '/address_book/whitelist/deactivate', [], [
             'otpCode' => $otpCode,
             'tfaCode' => $tfaCode,
-        ]);
+        ], signed: true);
         return ['status' => 'ok'];
     }
 
@@ -968,7 +969,7 @@ class NobitexService implements ExchangeClient
     public function getOptionsV2(): array
     {
         return Cache::remember('nobitex:options:v2', 300, function () {
-            $data = $this->request('GET', '/v2/options');
+            $data = $this->request('GET', '/v2/options', signed: true);
             return [
                 'features' => $data['features'] ?? [],
                 'coins'    => $data['coins'] ?? [],
