@@ -138,6 +138,31 @@ class GridOrder extends Model
         );
     }
 
+    /**
+     * Documented Nobitex constraint on the clientOrderId parameter
+     * (apidocs.nobitex.ir): at most 32 characters, and matching the character
+     * class ^[A-Za-z0-9-]+$ (ASCII letters, digits and the hyphen only).
+     *
+     * This is a pure predicate — the single source of truth for "would Nobitex
+     * accept this clientOrderId?". It exists so any FUTURE change to the id
+     * scheme can be locked against both constraints in a test (or asserted at
+     * generation time) instead of silently producing ids the exchange rejects.
+     *
+     * NOTE: it is intentionally NOT wired as a throwing guard inside
+     * buildClientOrderId() today — the current 'grid:{bot}:{SYMBOL}:{side}:{price}'
+     * scheme uses ':' separators and an unbounded IRT price, so it does not yet
+     * satisfy these constraints, and that exact wire format is deliberately
+     * pinned by existing placement tests. Tightening the generator to be
+     * compliant changes the clientOrderId actually sent on placement, which is a
+     * deliberate, separately-reviewed change.
+     */
+    public static function isValidNobitexClientOrderId(string $clientOrderId): bool
+    {
+        return $clientOrderId !== ''
+            && strlen($clientOrderId) <= 32
+            && preg_match('/^[A-Za-z0-9-]+$/', $clientOrderId) === 1;
+    }
+
     public function botConfig(): BelongsTo
     {
         return $this->belongsTo(BotConfig::class, 'bot_config_id');

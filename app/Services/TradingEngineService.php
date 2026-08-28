@@ -536,8 +536,48 @@ class TradingEngineService
                         ]);
                         $cancelledCount++;
                     } else {
-                        // LIVE MODE - Cancel real order
-                        $this->nobitexService->cancelOrder($order->nobitex_order_id);
+                        // LIVE MODE - Cancel real order.
+                        //
+                        // Nobitex returns HTTP 200 with status:"failed" when the
+                        // cancel cannot be applied — most importantly when the
+                        // order already FILLED and is no longer cancellable. The
+                        // old code discarded cancelOrder()'s result and then
+                        // unconditionally marked the local row 'cancelled', which
+                        // would silently erase a real fill.
+                        $result = $this->nobitexService->cancelOrder($order->nobitex_order_id);
+
+                        if (! $result->isOk()) {
+                            $observed = $this->observeOrderStatus($order->nobitex_order_id);
+
+                            Log::channel('trading')->warning('CANCEL_FAILED_ORDER_STATE', [
+                                'bot_id'           => $botConfig->id,
+                                'grid_order_id'    => $order->id,
+                                'nobitex_order_id' => $order->nobitex_order_id,
+                                'observed_status'  => $observed,
+                                'cancel_message'   => $result->message,
+                            ]);
+
+                            if ($observed === 'FILLED') {
+                                // The order executed before the cancel landed. Do
+                                // NOT mark it 'cancelled' — that would erase a real
+                                // fill. Leave the row live so CheckTradesJob's next
+                                // status poll (by numeric id) runs the normal fill
+                                // accounting (CompletedTrade / continuation pair).
+                                // A filled order is no longer open, so it does not
+                                // endanger the freshly (re)initialized grid.
+                                continue;
+                            }
+
+                            // Still open (or indeterminate): a genuine cancel
+                            // failure. This method must NOT let a grid initialize
+                            // on top of a still-live order (two grids on the same
+                            // capital), so surface it — the catch below rethrows.
+                            throw new Exception(
+                                "Cancel of existing order #{$order->id} (Nobitex {$order->nobitex_order_id}) "
+                                . "returned failed and the order is still '{$observed}'"
+                            );
+                        }
+
                         $cancelledCount++;
                     }
                 }
@@ -568,6 +608,29 @@ class TradingEngineService
             'total_orders' => $existingOrders->count(),
             'cancelled' => $cancelledCount
         ];
+    }
+
+    /**
+     * Best-effort read of an order's current status enum value by numeric id,
+     * used on the failed-cancel path. A Done/Filled order is still resolvable by
+     * its numeric id (unlike a clientOrderId lookup, which only covers open
+     * orders). Returns 'unknown' when the probe fails or returns nothing.
+     */
+    private function observeOrderStatus(string $nobitexOrderId): string
+    {
+        try {
+            $dtos = $this->nobitexService->getOrdersStatus([$nobitexOrderId]);
+            $dto  = $dtos[0] ?? null;
+
+            return $dto !== null ? $dto->status->value : 'unknown';
+        } catch (\Throwable $e) {
+            Log::channel('trading')->warning('CANCEL_FAILED_STATUS_PROBE_ERR', [
+                'nobitex_order_id' => $nobitexOrderId,
+                'error'            => $e->getMessage(),
+            ]);
+
+            return 'unknown';
+        }
     }
 
     /**
