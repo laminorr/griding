@@ -372,7 +372,7 @@ class CheckTradesJob implements ShouldQueue
             case 'CANCELED':
             case 'INACTIVE':
                 // سفارش لغو شده است
-                $this->handleCanceledOrder($order, $statusDto);
+                $this->handleCanceledOrder($order, $statusDto, $bot);
                 break;
 
             case 'ERROR':
@@ -529,12 +529,75 @@ class CheckTradesJob implements ShouldQueue
     /**
      * پردازش سفارش لغو شده (CANCELED)
      *
+     * Nobitex docs (order status): a Canceled order MAY carry matchedAmount > 0
+     * — part of it executed before the cancellation landed. OrderStatusDto maps
+     * that matched quantity into filledBase for ANY status, so it is available
+     * here too. The old implementation ignored it and simply flipped the row to
+     * 'cancelled', silently discarding a real executed trade from the ledger.
+     *
+     * We now record the executed portion into the SAME ledger fields a partial
+     * fill writes (filled_amount / remaining_amount / average_fill_price /
+     * last_fill_at) BEFORE finalizing, but we do NOT reuse handlePartialFill():
+     * its terminal status is 'partially_filled', which is a LIVE status that
+     * would keep the order being polled and — worse — is not a state from which
+     * the order is retired. A canceled order is terminal, so the final status
+     * is 'cancelled'. Because processBot() only pairs rows with status
+     * 'filled', a 'cancelled' row (even with a recorded partial) never spawns a
+     * continuation/pair order for the canceled remainder. Invariants held:
+     *   (a) filled_amount persists (executed base/quote is not lost),
+     *   (b) the order ends in a terminal 'cancelled' state,
+     *   (c) no pair/continuation order is created for the unfilled remainder.
+     *
      * @param GridOrder $order
      * @param \App\DTOs\OrderStatusDto $statusDto
+     * @param BotConfig $bot
      * @return void
      */
-    private function handleCanceledOrder(GridOrder $order, $statusDto): void
+    private function handleCanceledOrder(GridOrder $order, $statusDto, BotConfig $bot): void
     {
+        // Compare with BCMath discipline (Money), never a naive float == 0:
+        // a tiny-but-real matched amount must count as a partial execution.
+        $filledBase = Money::normalize($statusDto->filledBase);
+
+        if (Money::isPositive($filledBase)) {
+            $originalAmount = $order->original_amount ?? $order->amount;
+            $remaining      = number_format(
+                max(0, (float) $originalAmount - (float) $statusDto->filledBase),
+                8,
+                '.',
+                ''
+            );
+
+            $order->update([
+                'status'             => 'cancelled', // terminal — NOT 'partially_filled'
+                // 'amount' is intentionally left as the originally requested
+                // quantity; the executed part lives in filled_amount.
+                'original_amount'    => $originalAmount,
+                'filled_amount'      => $statusDto->filledBase,
+                'remaining_amount'   => $remaining,
+                // DTO has no true average-fill-price field; for our limit orders
+                // matches happen at the limit price, so priceIRT / order price
+                // is the correct fill price.
+                'average_fill_price' => $statusDto->priceIRT ?? $order->price,
+                'last_fill_at'       => now(),
+            ]);
+
+            Log::channel('trading')->info('CANCELED_WITH_PARTIAL_FILL', [
+                'order_id'         => $order->id,
+                'bot_id'           => $bot->id,
+                'type'             => $order->type,
+                'price'            => (string) ($statusDto->priceIRT ?? $order->price),
+                'original_amount'  => (string) $originalAmount,
+                'filled_amount'    => (string) $statusDto->filledBase,
+                'remaining_amount' => $remaining,
+                'nobitex_order_id' => $order->nobitex_order_id,
+            ]);
+
+            Log::info("CheckTradesJob: Order {$order->id} cancelled after a partial fill of {$statusDto->filledBase} — executed portion recorded, no continuation pair created");
+            return;
+        }
+
+        // Common case: canceled with nothing matched — behaviour unchanged.
         $order->update([
             'status' => 'cancelled',
         ]);

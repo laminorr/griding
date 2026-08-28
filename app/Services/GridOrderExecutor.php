@@ -97,7 +97,23 @@ class GridOrderExecutor
                 // The local GridOrder record is only flipped to 'cancelled' once the
                 // exchange has confirmed the cancellation, immediately afterward —
                 // never before, and never if the call below throws.
-                $this->svc->cancelOrder($oid);
+                $cancelResult = $this->svc->cancelOrder($oid);
+
+                // Nobitex returns HTTP 200 with status:"failed" when the cancel
+                // transition cannot be applied — most importantly when the order
+                // already FILLED and is therefore no longer cancellable. Marking
+                // the local row 'cancelled' here would silently erase a real
+                // fill, so on a failed cancel we NEVER cancel locally: we observe
+                // the order's actual state and leave the row in place so
+                // CheckTradesJob's next status poll (by numeric id) runs the
+                // normal fill accounting / pairing for a filled order, or retries
+                // the cancel for one still open.
+                if (! $cancelResult->isOk()) {
+                    $this->handleFailedCancel($botId, $symbol, $oid, $cancelResult->message);
+                    $errors++;
+                    continue;
+                }
+
                 $this->reg->forget($symbol, $oid);
 
                 $updated = GridOrder::where('bot_config_id', $botId)
@@ -329,6 +345,56 @@ class GridOrderExecutor
             return [substr($s, 0, 3), substr($s, 3)];
         }
         throw new \InvalidArgumentException("Unsupported symbol: {$symbol}");
+    }
+
+    /**
+     * React to a cancel that came back status:"failed" (HTTP 200).
+     *
+     * Observe the order's ACTUAL state on the exchange (a Done/Filled order is
+     * still resolvable by its numeric id, unlike a clientOrderId lookup) and
+     * record it. Crucially, this NEVER flips the local GridOrder to 'cancelled':
+     *   - if the order FILLED, the local row is left in its live status so
+     *     CheckTradesJob's next status poll drives it through the normal
+     *     handleFilledOrder path (CompletedTrade booked / continuation pair
+     *     created) — the fill is accounted, never lost;
+     *   - if it is genuinely still open, the row likewise stays live and the
+     *     failed cancel is surfaced for a retry on a later run.
+     */
+    private function handleFailedCancel(int $botId, string $symbol, string $oid, ?string $message): void
+    {
+        $observed = $this->observeOrderStatus($oid);
+
+        Log::channel('trading')->warning('CANCEL_FAILED_ORDER_STATE', [
+            'bot_id'           => $botId,
+            'symbol'           => $symbol,
+            'nobitex_order_id' => $oid,
+            'observed_status'  => $observed,
+            'cancel_message'   => $message,
+            'note'             => $observed === 'FILLED'
+                ? 'Cancel failed because the order already filled — local row left live for CheckTradesJob to account the fill.'
+                : 'Cancel failed; order not confirmed cancelled — local row left live for retry.',
+        ]);
+    }
+
+    /**
+     * Best-effort read of an order's current status enum value by numeric id.
+     * Returns 'unknown' when the probe fails or the exchange returns nothing.
+     */
+    private function observeOrderStatus(string $oid): string
+    {
+        try {
+            $dtos = $this->svc->getOrdersStatus([$oid]);
+            $dto  = $dtos[0] ?? null;
+
+            return $dto !== null ? $dto->status->value : 'unknown';
+        } catch (\Throwable $e) {
+            Log::channel('trading')->warning('CANCEL_FAILED_STATUS_PROBE_ERR', [
+                'nobitex_order_id' => $oid,
+                'error'            => $e->getMessage(),
+            ]);
+
+            return 'unknown';
+        }
     }
 
     /** رُند کردن قیمت روی مضارب tick (پیش‌فرض: کف تیک) */
