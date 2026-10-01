@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Jobs\ProcessOrderEventJob;
 use App\Models\ExchangeWsEvent;
+use App\Support\Money;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Throwable;
@@ -22,6 +24,12 @@ use Throwable;
  *  - a matched, newly stored event logs one WS_PRIVATE_EVENT line (the W4
  *    yardstick: what the exchange said vs. what the bot believed);
  *  - malformed events are logged (warning) and skipped; nothing here throws.
+ *
+ * W4 (behind config('trading.websocket.act_on_private_events'), default false):
+ * a NEWLY stored, matched, actionable Spot orders event additionally dispatches
+ * ProcessOrderEventJob, which re-checks the order via REST through the
+ * existing CheckTradesJob code. The event is only a trigger — nothing here
+ * writes grid_orders. With the flag off, recording is exactly as in W3.
  */
 class ExchangeWsEventRecorder
 {
@@ -106,7 +114,85 @@ class ExchangeWsEventRecorder
             ]);
         }
 
+        if ($inserted > 0 && $match !== null && $channel === ExchangeWsEvent::CHANNEL_ORDERS) {
+            $this->maybeDispatch((int) $match->id, $row, $event);
+        }
+
         return $inserted;
+    }
+
+    /**
+     * W4: queue a REST re-check of the matched grid order. Flag off → returns
+     * before doing or logging anything. Never throws (the WS read loop must
+     * survive a queue/DB outage; the minute poller is the safety net).
+     *
+     * @param array<string,mixed> $row   the stored exchange_ws_events row
+     * @param array<string,mixed> $event the raw event
+     */
+    private function maybeDispatch(int $gridOrderId, array $row, array $event): void
+    {
+        if (!(bool) config('trading.websocket.act_on_private_events', false)) {
+            return;
+        }
+
+        try {
+            if (!$this->isActionable($row, $event)) {
+                return;
+            }
+
+            // PendingDispatch pushes on destruct; unset() keeps that inside the try.
+            $pending = ProcessOrderEventJob::dispatch($gridOrderId, $row['status'], $row['event_time_ms']);
+            unset($pending);
+
+            // "Requested": if a job for this order is already queued and not yet
+            // started, ShouldBeUniqueUntilProcessing absorbs this one.
+            $this->log('info', 'WS_EVENT_DISPATCH_REQUESTED', [
+                'grid_order_id' => $gridOrderId,
+                'event_status'  => $row['status'],
+                'event_time_ms' => $row['event_time_ms'],
+            ]);
+        } catch (Throwable $e) {
+            $this->warn('WS_EVENT_DISPATCH_FAILED', ExchangeWsEvent::CHANNEL_ORDERS, $e->getMessage(), [
+                'grid_order_id' => $gridOrderId,
+            ]);
+        }
+    }
+
+    /**
+     * Actionable = the order may have changed in a way the poller acts on:
+     * Done, Canceled, Inactive, or Active with filledAmount > 0 (a partial).
+     * New / zero-fill Active, Failed and non-Spot events are ignored.
+     *
+     * @param array<string,mixed> $row
+     * @param array<string,mixed> $event
+     */
+    private function isActionable(array $row, array $event): bool
+    {
+        if ($row['market_type'] !== 'Spot') {
+            return false;
+        }
+
+        return match ($row['status']) {
+            'Done', 'Canceled', 'Inactive' => true,
+            'Active' => $this->isPositiveAmount($event['filledAmount'] ?? null),
+            default => false,
+        };
+    }
+
+    private function isPositiveAmount(mixed $v): bool
+    {
+        if (is_int($v) || is_float($v)) {
+            $v = Money::normalize($v); // a JSON number; fixed-point, never "1.0E-5"
+        }
+        if (!is_string($v)) {
+            return false; // null/bool/arrays: not an amount
+        }
+        $s = trim($v);
+        if (preg_match('/^[0-9]+(\.[0-9]+)?$/', $s) !== 1) {
+            return false;
+        }
+
+        return Money::isPositive(Money::normalize($s));
     }
 
     /** @return array<string,mixed>|null */

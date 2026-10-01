@@ -303,8 +303,9 @@ class CheckTradesJob implements ShouldQueue
                         continue;
                     }
 
-                    // پردازش وضعیت سفارش
-                    $this->processOrderStatus($order, $statusDto, $bot);
+                    // پردازش وضعیت سفارش — under the per-order status lock
+                    // shared with the WS event path (processSingleOrder).
+                    $this->processOrderStatusLocked($order, $statusDto, $bot);
 
                 } catch (\Exception $e) {
                     Log::error("CheckTradesJob: Error processing order {$order->id}: " . $e->getMessage());
@@ -319,6 +320,141 @@ class CheckTradesJob implements ShouldQueue
             Log::error("CheckTradesJob: Error checking orders status for bot {$bot->name}: " . $e->getMessage());
             Log::error($e->getTraceAsString());
         }
+    }
+
+    /**
+     * Statuses the poller fetches from the exchange (see processBot()). The
+     * single-order path uses the same set so it never polls a row the minute
+     * poller would not.
+     */
+    private const POLLED_STATUSES = ['placed', 'partially_filled'];
+
+    /**
+     * TTL (seconds) of the per-order status lock. It covers one REST status
+     * fetch (HTTP timeout + retries) plus local processing; a crashed holder
+     * frees the order within this window.
+     */
+    public const ORDER_STATUS_LOCK_TTL = 30;
+
+    /**
+     * Per-order status lock shared by the minute poller and the WS event path
+     * (ProcessOrderEventJob). Non-blocking for both: if it is busy, the other
+     * path is already handling this order and the caller skips it.
+     */
+    public static function orderStatusLockKey(int $gridOrderId): string
+    {
+        return "order-status:{$gridOrderId}";
+    }
+
+    /**
+     * Poller side: processOrderStatus() for one order under the per-order
+     * status lock. The row is re-read inside the lock because the event path
+     * may have advanced it after this run loaded its batch; a row that is no
+     * longer in a polled status is left alone (its stale DTO must not be
+     * applied). Without a concurrent event path this is exactly the old call.
+     */
+    private function processOrderStatusLocked(GridOrder $order, $statusDto, BotConfig $bot): void
+    {
+        $lock = Cache::lock(self::orderStatusLockKey($order->id), self::ORDER_STATUS_LOCK_TTL);
+
+        if (!$lock->get()) {
+            Log::channel('trading')->info('ORDER_STATUS_LOCK_BUSY', [
+                'grid_order_id' => $order->id,
+                'bot_id'        => $bot->id,
+                'path'          => 'poller',
+            ]);
+            return;
+        }
+
+        try {
+            $order->refresh();
+
+            if (!in_array($order->status, self::POLLED_STATUSES, true)) {
+                Log::info("CheckTradesJob: Order {$order->id} moved to '{$order->status}' since this run loaded it — skipping stale status");
+                return;
+            }
+
+            $this->processOrderStatus($order, $statusDto, $bot);
+        } finally {
+            $lock->release();
+        }
+    }
+
+    /**
+     * Single-order entry point (W4) — used by ProcessOrderEventJob when a
+     * private WS order event arrives. It runs the SAME code the minute poller
+     * runs for one order, nothing new:
+     *   1. under the "order-status:{id}" lock: fetch the order's status from
+     *      the exchange with the same NobitexService::getOrdersStatus() call
+     *      checkOrdersStatus() uses, then route it through processOrderStatus();
+     *   2. if the order is now filled and unpaired: createPairOrder() (with its
+     *      own pair-order lock, lockForUpdate re-read and client_order_id dedup).
+     * The exchange REST status is the only input; no event payload is used.
+     * Simulation bots never reach the exchange here (returns 'simulation').
+     *
+     * @return array{outcome:string, api_status:?string, pair_attempted:bool}
+     *   outcome: processed | lock_busy | not_polled | no_nobitex_id | no_status | simulation
+     */
+    public function processSingleOrder(GridOrder $order, BotConfig $bot): array
+    {
+        $result = ['outcome' => 'processed', 'api_status' => null, 'pair_attempted' => false];
+
+        if ($bot->simulation) {
+            $result['outcome'] = 'simulation';
+            return $result;
+        }
+
+        $lock = Cache::lock(self::orderStatusLockKey($order->id), self::ORDER_STATUS_LOCK_TTL);
+
+        if (!$lock->get()) {
+            Log::channel('trading')->info('ORDER_STATUS_LOCK_BUSY', [
+                'grid_order_id' => $order->id,
+                'bot_id'        => $bot->id,
+                'path'          => 'event',
+            ]);
+            $result['outcome'] = 'lock_busy';
+            return $result;
+        }
+
+        try {
+            $order->refresh();
+
+            if (!in_array($order->status, self::POLLED_STATUSES, true)) {
+                $result['outcome'] = 'not_polled';
+            } elseif (!$order->nobitex_order_id) {
+                $result['outcome'] = 'no_nobitex_id';
+            } else {
+                /** @var NobitexService $nobitexService */
+                $nobitexService = app(NobitexService::class);
+
+                $apiStart   = microtime(true);
+                $statusDtos = $nobitexService->getOrdersStatus([$order->nobitex_order_id]);
+                $apiTime    = (int) ((microtime(true) - $apiStart) * 1000);
+
+                app(BotActivityLogger::class)->logApiCall($bot->id, 'orders/status', ['order_ids' => [$order->nobitex_order_id]], ['orders' => $statusDtos], $apiTime);
+
+                $statusDto = collect($statusDtos)->keyBy('orderId')->get($order->nobitex_order_id);
+
+                if (!$statusDto) {
+                    Log::warning("CheckTradesJob: No status received from Nobitex for order {$order->id} (Nobitex ID: {$order->nobitex_order_id})");
+                    $result['outcome'] = 'no_status';
+                } else {
+                    $result['api_status'] = $statusDto->status->value;
+                    $this->processOrderStatus($order, $statusDto, $bot);
+                }
+            }
+        } finally {
+            $lock->release();
+        }
+
+        // Same pairing step processBot() runs for filled-but-unpaired orders.
+        $order->refresh();
+        if ($order->status === 'filled' && $order->paired_order_id === null) {
+            $result['pair_attempted'] = true;
+            $this->createPairOrder($order, $bot);
+        }
+
+        return $result;
     }
 
     /**
