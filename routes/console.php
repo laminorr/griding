@@ -10,6 +10,7 @@ use App\Jobs\ReconcileSubmissionsJob;
 use App\Support\ScheduleCadence;
 use App\Support\QueueDepthHealthCheck;
 use App\Support\WsFeedHealthCheck;
+use App\Models\ExchangeWsEvent;
 
 Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
@@ -110,5 +111,14 @@ if ((bool) config('trading.enable_scheduler', true)) {
         ->name('ws-feed-health-check')
         ->description('Alert if the Nobitex WebSocket feed is dead or silent')
         ->everyFiveMinutes()
+        ->withoutOverlapping();
+
+    // ---- Private WS event log retention (W3) ----
+    // nobitex:ws-private records the user's own order/trade events into
+    // exchange_ws_events (observe-only). Keep 30 days. Inline, never throws.
+    Schedule::call(fn () => ExchangeWsEvent::pruneOlderThan(ExchangeWsEvent::RETENTION_DAYS))
+        ->name('exchange-ws-events-prune')
+        ->description('Prune private WS events older than 30 days')
+        ->dailyAt('03:40')
         ->withoutOverlapping();
 }

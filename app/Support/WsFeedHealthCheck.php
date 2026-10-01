@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Support;
 
+use App\Services\NobitexPrivateWsService;
 use App\Services\NobitexWebSocketService;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
@@ -24,6 +25,12 @@ use Throwable;
  * config('trading.websocket.health.*') and LOGS only — no restarts, no other
  * side effects. Scheduled INLINE via Schedule::call() in routes/console.php,
  * and never throws out of schedule:run.
+ *
+ * W3: also watches the private order/trade consumer (nobitex:ws-private) via
+ * NobitexPrivateWsService::HEARTBEAT_FRAME_KEY — but ONLY when that key exists
+ * (missing = feature not deployed → silent). Stale beyond the same dead
+ * threshold → CRITICAL WS_PRIVATE_DEAD. This is independent of, and never
+ * changes, the public-feed result that check() returns.
  */
 final class WsFeedHealthCheck
 {
@@ -31,6 +38,7 @@ final class WsFeedHealthCheck
     public const DEAD       = 'WS_FEED_DEAD';
     public const SILENT     = 'WS_FEED_SILENT';
     public const NEVER_SEEN = 'WS_FEED_NEVER_SEEN';
+    public const PRIVATE_DEAD = 'WS_PRIVATE_DEAD';
 
     /**
      * Run the check. Returns the observed status, or null when the check could
@@ -39,9 +47,64 @@ final class WsFeedHealthCheck
      */
     public function check(?int $now = null): ?string
     {
+        $now ??= time();
+
+        $status = $this->checkPublic($now);
+
+        // null = cache/log unavailable, already reported by the public check.
+        if ($status !== null) {
+            $this->checkPrivate($now);
+        }
+
+        return $status;
+    }
+
+    /**
+     * Private consumer heartbeat. Returns null when the key is absent (not
+     * deployed — nothing logged) or the check could not run; OK or
+     * PRIVATE_DEAD otherwise. Never throws.
+     */
+    public function checkPrivate(?int $now = null): ?string
+    {
         try {
             $now ??= time();
 
+            $frameAt = Cache::get(NobitexPrivateWsService::HEARTBEAT_FRAME_KEY);
+            if (!is_numeric($frameAt)) {
+                return null;
+            }
+
+            $age = $now - (int) $frameAt;
+            $deadAfter = self::deadAfterSeconds();
+            if ($age > $deadAfter) {
+                Log::channel('queue')->critical(self::PRIVATE_DEAD, [
+                    'last_frame_at'     => (int) $frameAt,
+                    'age_seconds'       => $age,
+                    'threshold_seconds' => $deadAfter,
+                    'hint' => 'No frame on the private order/trade WebSocket (nobitex:ws-private). '
+                        . 'Is scripts/ws-private-keepalive.sh in cron? Check storage/logs/ws-private.log.',
+                ]);
+
+                return self::PRIVATE_DEAD;
+            }
+
+            return self::OK;
+        } catch (Throwable $e) {
+            try {
+                Log::channel('queue')->warning('WS_PRIVATE_CHECK_FAILED', [
+                    'error' => $e->getMessage(),
+                ]);
+            } catch (Throwable) {
+                // never take down the scheduler tick
+            }
+
+            return null;
+        }
+    }
+
+    private function checkPublic(int $now): ?string
+    {
+        try {
             $frameAt = Cache::get(NobitexWebSocketService::HEARTBEAT_FRAME_KEY);
             $pubAt   = Cache::get(NobitexWebSocketService::HEARTBEAT_PUBLICATION_KEY);
 
