@@ -996,11 +996,53 @@ class NobitexService implements ExchangeClient
         });
     }
 
-    /** WebSocket token (for private channels) */
-    public function getWebsocketToken(): array
+    /** Cache key for the (per-user constant) private-channel suffix. */
+    public const WS_AUTH_PARAM_CACHE_KEY = 'nobitex:ws:private:auth_param';
+    public const WS_AUTH_PARAM_CACHE_TTL = 86400;
+
+    /**
+     * Centrifugo connection token for the private WebSocket channels
+     * (GET /auth/ws/token/, Ed25519-signed — legacy Token auth is retired).
+     * Lifetime ~1200s; never cached and never logged.
+     *
+     * @throws \RuntimeException when the response carries no usable token
+     */
+    public function getWebsocketToken(): string
     {
-        $data = $this->request('GET', '/auth/ws/token/');
-        return ['token' => $data['token'] ?? null];
+        $data = $this->request('GET', '/auth/ws/token/', signed: true);
+
+        $token = $data['token'] ?? null;
+        if (($data['status'] ?? null) !== 'ok' || !is_string($token) || $token === '') {
+            throw new \RuntimeException('Nobitex WS token unavailable (status=' . (string) ($data['status'] ?? 'null') . ')');
+        }
+
+        return $token;
+    }
+
+    /**
+     * websocketAuthParam from the signed GET /users/profile — the suffix of the
+     * private:orders#… / private:trades#… channel names. Constant per user, so
+     * cached for 24h. Never logged in full.
+     *
+     * @throws \RuntimeException when the profile carries no usable param
+     */
+    public function getWebsocketAuthParam(): string
+    {
+        $cached = Cache::get(self::WS_AUTH_PARAM_CACHE_KEY);
+        if (is_string($cached) && $cached !== '') {
+            return $cached;
+        }
+
+        $data = $this->request('GET', '/users/profile', signed: true);
+
+        $param = $data['profile']['websocketAuthParam'] ?? null;
+        if (($data['status'] ?? null) !== 'ok' || !is_string($param) || $param === '') {
+            throw new \RuntimeException('Nobitex websocketAuthParam unavailable (status=' . (string) ($data['status'] ?? 'null') . ')');
+        }
+
+        Cache::put(self::WS_AUTH_PARAM_CACHE_KEY, $param, self::WS_AUTH_PARAM_CACHE_TTL);
+
+        return $param;
     }
 
     /* -----------------------------------------------------------------
