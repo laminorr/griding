@@ -18,6 +18,28 @@
 --}}
 <x-filament-panels::page>
 
+    {{-- «نمودار قیمت» styles — scoped to .at-pchart only (no sidebar/layout
+         rules; the panel design system lives in the admin-terminal partial). --}}
+    <style>
+        .at-pchart { min-width: 0; }
+        .at-pchart .panel-section__head { flex-wrap: wrap; gap: var(--at-gap-sm, 8px); }
+        .at-pchart__tools { display: flex; flex-wrap: wrap; align-items: center; gap: var(--at-gap-sm, 8px); }
+        .at-pchart__tf { display: flex; flex-wrap: wrap; gap: 4px; }
+        .at-pchart__tf .at-btn { min-width: 0; }
+        .at-pchart__body { min-width: 0; }
+        .at-pchart__canvas {
+            position: relative;
+            inline-size: 100%;
+            max-inline-size: 100%;
+            min-inline-size: 0;
+            overflow: hidden;
+            border-radius: 14px;
+            background: #0B1220;
+            border: 1px solid var(--at-border, #233349);
+        }
+        .at-pchart__empty { min-block-size: 180px; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+    </style>
+
     {{-- =================================================================
          TOP BOT SELECTOR (v3 mockup .bot-selector-wrap). One prominent «انتخاب
          ربات» dropdown at the top of the page — the single source of truth for
@@ -224,6 +246,46 @@
                             </div>
                         </div>
                     </div>
+
+                    {{-- Price chart («نمودار قیمت») — selected bot only. Candles from
+                         CandleService (RIAL for IRT markets) + the bot's real open
+                         grid orders as price lines, polled via $wire.getChartData().
+                         Re-created when the selection changes (x-for key + x-if). --}}
+                    <template x-if="String(bot.id) === String(selectedBotId)">
+                        <div class="panel-section at-pchart" x-data="priceChart()">
+                            <div class="panel-section__head">
+                                <div>
+                                    <span class="panel-section__title">نمودار قیمت</span>
+                                    <p class="panel-section__sub">
+                                        <span class="at-mono" x-text="symbol || bot.symbol"></span>
+                                        <template x-if="unitLabel">
+                                            <span> · <span x-text="'واحد: ' + unitLabel"></span></span>
+                                        </template>
+                                        <template x-if="hasData">
+                                            <span> · <span x-text="faDigits(levelCount) + ' سفارش باز روی نمودار'"></span></span>
+                                        </template>
+                                    </p>
+                                </div>
+                                <div class="at-pchart__tools">
+                                    <span class="at-badge" :class="live ? 'pos' : 'muted'" x-show="hasData"
+                                          x-text="live ? 'زنده' : 'با تأخیر'"></span>
+                                    <div class="at-pchart__tf" role="group" aria-label="بازه زمانی">
+                                        <template x-for="tf in timeframes" :key="tf.res">
+                                            <button type="button" class="at-btn" :class="resolution === tf.res ? 'at-btn--accent' : ''"
+                                                    :aria-pressed="resolution === tf.res" @click="setResolution(tf.res)" x-text="tf.label"></button>
+                                        </template>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="panel-section__body at-pchart__body">
+                                <div class="at-pchart__canvas" x-ref="canvas" dir="ltr" x-show="hasData"></div>
+                                <div class="at-empty at-pchart__empty" x-show="!hasData">
+                                    <div class="at-empty__icon">📉</div>
+                                    <span x-text="emptyMessage"></span>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
 
                     {{-- Open orders  |  cycle summary + next targets --}}
                     <div class="at-cols-2">
@@ -703,9 +765,14 @@
         };
 
         function botMonitoring(initialBotId = null) {
+            // Server-rendered snapshot, used ONLY to seed the first paint.
+            // Every refresh after that asks the server again via $wire.
+            const seed = @json($this->botDataPayload());
+
             return {
-                bots: [],
-                loading: true,
+                bots: Array.isArray(seed) ? seed : [],
+                loading: !Array.isArray(seed),
+                fetching: false,
                 clock: '',
                 // Which bot the whole page is focused on. Seeded from the
                 // Livewire $selectedBotId at render and kept in sync with the
@@ -714,7 +781,9 @@
 
                 init() {
                     this.tick();
-                    this.fetchData();
+                    // First paint comes from the server-rendered seed (no extra
+                    // round-trip); fetch immediately only if there was none.
+                    if (this.loading) this.fetchData();
                     setInterval(() => this.tick(), 1000);
                     setInterval(() => this.fetchData(), 30000);
 
@@ -743,13 +812,22 @@
                     this.clock = new Date().toLocaleString('fa-IR');
                 },
 
+                // Fresh data from the server on every call (Livewire 3 action;
+                // renderless on the server, so it does not re-render the page).
+                // A failed refresh keeps the last good data on screen.
                 async fetchData() {
+                    if (this.fetching || !this.$wire) return;
+                    this.fetching = true;
                     try {
-                        const data = @json($this->getBotData());
-                        this.bots = data;
-                        this.loading = false;
+                        const data = await this.$wire.getBotData();
+                        if (Array.isArray(data)) {
+                            this.bots = data;
+                        }
                     } catch (error) {
-                        console.error('Error:', error);
+                        console.error('[bot-monitoring] live refresh failed', error);
+                    } finally {
+                        this.fetching = false;
+                        this.loading = false;
                     }
                 },
 
@@ -781,6 +859,281 @@
                     return date.toLocaleDateString('fa-IR', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
                 }
             }
+        }
+
+        // ------------------------------------------------------------------
+        // «نمودار قیمت» — TradingView Lightweight Charts (pinned, loaded once
+        // from the CDN on first use; attribution logo left enabled per its
+        // license). Everything is wrapped so a chart/CDN failure only ever
+        // shows this section's empty state and never breaks the page.
+        // ------------------------------------------------------------------
+        const AT_LWC_URL = 'https://cdn.jsdelivr.net/npm/lightweight-charts@5.2.1/dist/lightweight-charts.standalone.production.js';
+        const AT_LWC_SRI = 'sha384-KkYqTZlM13Zya6fVUF3IGCBOQ1ehFeJVVgxaVvD/0MebineF9EI8Jkd3NnWNChqN';
+
+        window.atLoadLightweightCharts = window.atLoadLightweightCharts || function () {
+            if (window.LightweightCharts) return Promise.resolve(window.LightweightCharts);
+            if (!window.__atLwcPromise) {
+                window.__atLwcPromise = new Promise((resolve, reject) => {
+                    const s = document.createElement('script');
+                    s.src = AT_LWC_URL;
+                    s.integrity = AT_LWC_SRI;
+                    s.crossOrigin = 'anonymous';
+                    s.async = true;
+                    s.onload = () => window.LightweightCharts
+                        ? resolve(window.LightweightCharts)
+                        : reject(new Error('LightweightCharts global missing'));
+                    s.onerror = () => { window.__atLwcPromise = null; reject(new Error('LightweightCharts failed to load')); };
+                    document.head.appendChild(s);
+                });
+            }
+            return window.__atLwcPromise;
+        };
+
+        function priceChart() {
+            const TEHRAN = 'Asia/Tehran';
+            const COLORS = {
+                bg: '#0B1220', text: '#8d9cb0', grid: 'rgba(35, 51, 73, 0.45)', border: '#233349',
+                up: '#23d18b', down: '#ff5d68',
+            };
+
+            // Non-reactive handles (kept out of Alpine's proxies on purpose).
+            let chart = null, series = null, lines = [], ro = null, timer = null, lwc = null;
+            let levelRange = null, userMoved = false;
+
+            return {
+                timeframes: [
+                    { res: '1',  label: '۱ دقیقه' },
+                    { res: '15', label: '۱۵ دقیقه' },
+                    { res: '60', label: '۱ ساعت' },
+                    { res: 'D',  label: '۱ روز' },
+                ],
+                resolution: '15',
+                status: 'loading',
+                live: false,
+                unit: null,
+                symbol: null,
+                candleCount: 0,
+                levelCount: 0,
+                fetching: false,
+                destroyed: false,
+                seq: 0,
+                fitNext: true,
+
+                get hasData() { return this.status === 'ok' && this.candleCount > 0; },
+                get unitLabel() { return this.unit === 'IRR' ? 'ریال' : (this.unit || ''); },
+                get emptyMessage() {
+                    if (this.status === 'loading') return 'در حال بارگذاری نمودار…';
+                    if (this.status === 'lib_error') return 'نمودار بارگذاری نشد — داده‌ای در دسترس نیست';
+                    return 'داده‌ای در دسترس نیست';
+                },
+
+                init() {
+                    // Selector change: the live view re-creates this component for the
+                    // newly selected bot (x-for key + x-if), which re-runs init() and
+                    // fetches that bot's chart. The parent's $wire.$watch('selectedBotId')
+                    // drives that; nothing extra to subscribe to here.
+                    this.load(true);
+                    timer = setInterval(() => this.load(false), 10000);
+                },
+
+                destroy() {
+                    this.destroyed = true;
+                    if (timer) clearInterval(timer);
+                    try { if (ro) ro.disconnect(); } catch (e) {}
+                    try { if (chart) chart.remove(); } catch (e) {}
+                    chart = series = ro = timer = null;
+                    lines = [];
+                },
+
+                setResolution(res) {
+                    if (res === this.resolution) return;
+                    this.resolution = res;
+                    this.fitNext = true;
+                    this.load(true);
+                },
+
+                async load(force) {
+                    if (this.destroyed || !this.$wire) return;
+                    if (this.fetching && !force) return;
+                    const mySeq = ++this.seq;
+                    const res = this.resolution;
+                    this.fetching = true;
+                    try {
+                        const data = await this.$wire.getChartData(res);
+                        if (this.destroyed || mySeq !== this.seq || res !== this.resolution) return;
+                        await this.apply(data);
+                    } catch (error) {
+                        console.error('[price-chart] refresh failed', error);
+                        // Keep the last good candles on screen, but stop calling them live.
+                        if (mySeq === this.seq) this.live = false;
+                        if (mySeq === this.seq && !this.hasData && this.status === 'loading') this.status = 'error';
+                    } finally {
+                        if (mySeq === this.seq) this.fetching = false;
+                    }
+                },
+
+                async apply(data) {
+                    const candles = (data && Array.isArray(data.candles)) ? data.candles : [];
+                    this.symbol = data && data.symbol ? data.symbol : null;
+                    this.unit = data && data.unit ? data.unit : null;
+
+                    if (!data || data.status !== 'ok' || candles.length === 0) {
+                        this.status = (data && data.status && data.status !== 'ok') ? data.status : 'no_data';
+                        this.live = false;
+                        this.candleCount = 0;
+                        return;
+                    }
+
+                    try {
+                        lwc = lwc || await window.atLoadLightweightCharts();
+                    } catch (e) {
+                        console.error('[price-chart] library unavailable', e);
+                        this.status = 'lib_error';
+                        this.candleCount = 0;
+                        return;
+                    }
+                    if (this.destroyed) return;
+
+                    this.status = 'ok';
+                    this.live = data.live === true;
+                    this.candleCount = candles.length;
+                    await this.$nextTick(); // canvas container is now displayed
+
+                    try {
+                        this.ensureChart();
+                        const isIrr = this.unit === 'IRR';
+                        series.applyOptions({
+                            priceFormat: { type: 'price', precision: isIrr ? 0 : 2, minMove: isIrr ? 1 : 0.01 },
+                        });
+                        chart.applyOptions({ timeScale: { timeVisible: this.resolution !== 'D', secondsVisible: false } });
+                        series.setData(candles.map(c => ({
+                            time: Number(c.t),
+                            open: Number(c.o), high: Number(c.h), low: Number(c.l), close: Number(c.c),
+                        })));
+                        this.drawLevels(Array.isArray(data.levels) ? data.levels : []);
+                        if (this.fitNext) { this.fit(); this.fitNext = false; }
+                    } catch (e) {
+                        console.error('[price-chart] render failed', e);
+                        this.status = 'lib_error';
+                        this.candleCount = 0;
+                    }
+                },
+
+                fit() {
+                    chart.timeScale().fitContent();
+                    userMoved = false;
+                },
+
+                // Remove every previous line, then draw the current open orders.
+                drawLevels(levels) {
+                    lines.forEach(l => { try { series.removePriceLine(l); } catch (e) {} });
+                    lines = [];
+                    levelRange = null;
+                    levels.forEach(lv => {
+                        const price = Number(lv.price);
+                        if (!isFinite(price) || price <= 0) return;
+                        const buy = lv.side === 'buy';
+                        levelRange = levelRange === null
+                            ? { min: price, max: price }
+                            : { min: Math.min(levelRange.min, price), max: Math.max(levelRange.max, price) };
+                        lines.push(series.createPriceLine({
+                            price,
+                            color: buy ? COLORS.up : COLORS.down,
+                            lineWidth: 1,
+                            lineStyle: lwc.LineStyle.Dashed,
+                            axisLabelVisible: true,
+                            title: buy ? 'خرید' : 'فروش',
+                        }));
+                    });
+                    this.levelCount = lines.length;
+                },
+
+                fmtPrice(p) {
+                    if (p === null || p === undefined || !isFinite(p)) return '';
+                    const digits = this.unit === 'IRR' ? 0 : 2;
+                    return faDigits(Number(p).toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits }));
+                },
+
+                fmtTime(t, opts) {
+                    const ts = typeof t === 'number' ? t * 1000 : Date.UTC(t.year, t.month - 1, t.day);
+                    return new Date(ts).toLocaleString('fa-IR', Object.assign({ timeZone: TEHRAN }, opts));
+                },
+
+                chartHeight(width) { return width < 520 ? 280 : 380; },
+
+                ensureChart() {
+                    if (chart) return;
+                    const el = this.$refs.canvas;
+                    const width = Math.max(el.clientWidth || 0, 280);
+                    const self = this;
+                    chart = lwc.createChart(el, {
+                        width,
+                        height: this.chartHeight(width),
+                        layout: {
+                            background: { type: 'solid', color: COLORS.bg },
+                            textColor: COLORS.text,
+                            fontFamily: "Vazirmatn, system-ui, sans-serif",
+                            fontSize: 11,
+                            attributionLogo: true,
+                        },
+                        grid: { vertLines: { color: COLORS.grid }, horzLines: { color: COLORS.grid } },
+                        rightPriceScale: { borderColor: COLORS.border },
+                        timeScale: { borderColor: COLORS.border, timeVisible: true, secondsVisible: false,
+                            tickMarkFormatter: (time, type) => {
+                                // 0 Year, 1 Month, 2 DayOfMonth, 3 Time, 4 TimeWithSeconds
+                                if (type === 0) return self.fmtTime(time, { year: 'numeric' });
+                                if (type === 1) return self.fmtTime(time, { month: 'short' });
+                                if (type === 2) return self.fmtTime(time, { day: 'numeric', month: 'short' });
+                                return self.fmtTime(time, { hour: '2-digit', minute: '2-digit', hour12: false });
+                            },
+                        },
+                        crosshair: { mode: 0 },
+                        localization: {
+                            locale: 'fa-IR',
+                            priceFormatter: (p) => self.fmtPrice(p),
+                            timeFormatter: (t) => self.fmtTime(t, self.resolution === 'D'
+                                ? { year: 'numeric', month: 'short', day: 'numeric' }
+                                : { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }),
+                        },
+                    });
+                    series = chart.addSeries(lwc.CandlestickSeries, {
+                        upColor: COLORS.up, downColor: COLORS.down,
+                        borderUpColor: COLORS.up, borderDownColor: COLORS.down,
+                        wickUpColor: COLORS.up, wickDownColor: COLORS.down,
+                        // No series last-price line: it would read like a grid level.
+                        // The last price stays labelled on the axis.
+                        priceLineVisible: false,
+                        // Keep the open grid levels inside the visible price range.
+                        autoscaleInfoProvider: (original) => {
+                            const res = original();
+                            if (!res || !res.priceRange || levelRange === null) return res;
+                            return {
+                                priceRange: {
+                                    minValue: Math.min(res.priceRange.minValue, levelRange.min),
+                                    maxValue: Math.max(res.priceRange.maxValue, levelRange.max),
+                                },
+                                margins: res.margins,
+                            };
+                        },
+                    });
+
+                    if (window.ResizeObserver) {
+                        let lastW = width;
+                        ro = new ResizeObserver(entries => {
+                            const w = Math.floor(entries[0].contentRect.width);
+                            if (!chart || w <= 0 || w === lastW) return;
+                            lastW = w;
+                            chart.resize(w, this.chartHeight(w));
+                            // Re-fit while the user has not panned/zoomed yet (first layout).
+                            if (!userMoved) chart.timeScale().fitContent();
+                        });
+                        ro.observe(el);
+                    }
+                    // Once the user pans/zooms, stop auto-fitting on resize.
+                    ['pointerdown', 'wheel', 'touchstart'].forEach(ev =>
+                        el.addEventListener(ev, () => { userMoved = true; }, { passive: true }));
+                },
+            };
         }
 
         function activityLog() {

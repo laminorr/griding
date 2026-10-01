@@ -6,6 +6,8 @@ use App\Models\BotConfig;
 use App\Models\GridOrder;
 use App\Models\CompletedTrade;
 use App\Models\BotActivityLog;
+use App\Services\CandleService;
+use App\Support\Money;
 use Filament\Pages\Page;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -41,6 +43,42 @@ class BotMonitoring extends Page
         $this->selectedBotId = $this->selectedBot?->id;
     }
 
+    /**
+     * Resolutions offered by the «نمودار قیمت» chart (1m, 15m, 1h, 1d).
+     */
+    public const CHART_RESOLUTIONS = ['1', '15', '60', 'D'];
+
+    public const CHART_CANDLE_COUNT = 200;
+
+    /**
+     * Grid-order statuses drawn as price lines on the chart: orders that are
+     * still resting on the book (same set CheckTradesJob polls as live).
+     */
+    public const CHART_OPEN_ORDER_STATUSES = ['placed', 'partially_filled'];
+
+    /**
+     * Request-scoped (protected, so never dehydrated): true when this request
+     * applied a public-property update (e.g. the bot selector's
+     * wire:model.live). The client-polled data methods below skip the full
+     * page re-render — but must NOT do so when they were bundled into the same
+     * Livewire commit as a property update, or the analytics block would miss
+     * the new selection.
+     */
+    protected bool $propertyUpdatedThisRequest = false;
+
+    public function updated($name): void
+    {
+        $this->propertyUpdatedThisRequest = true;
+    }
+
+    /** Skip the re-render for pure data polls (see $propertyUpdatedThisRequest). */
+    protected function skipRenderForDataPoll(): void
+    {
+        if (! $this->propertyUpdatedThisRequest) {
+            $this->skipRender();
+        }
+    }
+
     public function updatedSelectedBotId($value): void
     {
         $this->selectedBot = BotConfig::find($value);
@@ -59,7 +97,33 @@ class BotMonitoring extends Page
         $this->selectedBot = BotConfig::find($botId);
     }
 
-    public function getBotData()
+    /**
+     * Live fleet data for the Alpine live view, polled every 30s from the
+     * browser via `$wire.getBotData()` (a pure data poll: no page re-render).
+     * The first paint is seeded server-side from botDataPayload() instead, so
+     * both paths return the exact same shape.
+     */
+    public function getBotData(): array
+    {
+        $this->skipRenderForDataPoll();
+
+        return $this->botDataPayload();
+    }
+
+    /**
+     * The live fleet data normalised to plain JSON-decoded arrays
+     * (Collections -> lists, Carbon -> ISO strings) — exactly what the view's
+     * former `@json($this->getBotData())` snapshot produced, so the Alpine
+     * template sees an identical shape whether seeded or polled.
+     */
+    public function botDataPayload(): array
+    {
+        $data = $this->buildBotData();
+
+        return json_decode(json_encode($data, JSON_PARTIAL_OUTPUT_ON_ERROR), true) ?? [];
+    }
+
+    protected function buildBotData(): array
     {
         $bots = BotConfig::where('is_active', true)->get();
 
@@ -248,6 +312,77 @@ class BotMonitoring extends Page
         }
 
         return $data;
+    }
+
+    /**
+     * Candles + open-order levels for the «نمودار قیمت» chart (selected bot).
+     *
+     * Polled from the browser via `$wire.getChartData(res)`. Prices are decimal
+     * strings in the CandleService output unit (RIAL for IRT markets — the
+     * same unit as grid_orders.price). Levels are the selected bot's real open
+     * grid orders only. Nothing is synthesised: no bot / no candles comes back
+     * as an explicit status the view renders as an empty state.
+     *
+     * @return array{status:string,live:bool,unit:?string,candles:array,levels:array,symbol:?string,resolution:string}
+     */
+    public function getChartData(string $resolution): array
+    {
+        $this->skipRenderForDataPoll();
+
+        if (! in_array($resolution, self::CHART_RESOLUTIONS, true)) {
+            return [
+                'status' => 'invalid_resolution', 'live' => false, 'unit' => null,
+                'candles' => [], 'levels' => [], 'symbol' => null, 'resolution' => $resolution,
+            ];
+        }
+
+        $bot = $this->selectedBotId !== null ? BotConfig::find($this->selectedBotId) : null;
+        if (! $bot) {
+            return [
+                'status' => 'no_bot', 'live' => false, 'unit' => null,
+                'candles' => [], 'levels' => [], 'symbol' => null, 'resolution' => $resolution,
+            ];
+        }
+
+        $symbol = trim((string) $bot->symbol) !== '' ? (string) $bot->symbol : 'BTCIRT';
+
+        try {
+            $result = app(CandleService::class)->getCandles($symbol, $resolution, self::CHART_CANDLE_COUNT);
+        } catch (\Throwable $e) {
+            report($e);
+            $result = ['status' => 'error', 'candles' => [], 'live' => false, 'unit' => CandleService::priceUnit($symbol)];
+        }
+
+        $candles = [];
+        foreach ((array) ($result['candles'] ?? []) as $row) {
+            $candles[] = [
+                't' => (int) $row['t'],
+                'o' => (string) $row['o'],
+                'h' => (string) $row['h'],
+                'l' => (string) $row['l'],
+                'c' => (string) $row['c'],
+                'v' => (string) $row['v'],
+            ];
+        }
+
+        $levels = $bot->gridOrders()
+            ->whereIn('status', self::CHART_OPEN_ORDER_STATUSES)
+            ->whereIn('type', ['buy', 'sell'])
+            ->orderBy('price', 'desc')
+            ->get(['id', 'price', 'type'])
+            ->map(fn ($o) => ['price' => Money::normalize($o->getRawOriginal('price')), 'side' => (string) $o->type])
+            ->values()
+            ->all();
+
+        return [
+            'status'     => (string) ($result['status'] ?? 'error'),
+            'live'       => (bool) ($result['live'] ?? false),
+            'unit'       => $result['unit'] ?? CandleService::priceUnit($symbol),
+            'candles'    => $candles,
+            'levels'     => $levels,
+            'symbol'     => strtoupper($symbol),
+            'resolution' => $resolution,
+        ];
     }
 
     /**
