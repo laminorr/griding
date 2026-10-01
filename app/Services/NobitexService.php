@@ -1008,21 +1008,9 @@ class NobitexService implements ExchangeClient
     {
         $symbol = strtoupper(trim($symbol));
 
-        // 1) تلاش از WebSocket snapshot اگر سرویس موجود باشد
-        try {
-            if (class_exists(\App\Services\NobitexWebSocketService::class)) {
-                $ws = app(\App\Services\NobitexWebSocketService::class);
-                if (method_exists($ws, 'getLastPriceSnapshot')) {
-                    $snap = $ws->getLastPriceSnapshot($symbol);
-                    $p = (float)($snap['price'] ?? 0);
-                    if ($p > 0) return $p;
-                }
-            }
-        } catch (\Throwable $e) {
-            // ignore و برگرد به REST
-        }
-
-        // 2) REST /market/stats
+        // REST /market/stats. (The WS in-memory snapshot only exists inside the
+        // nobitex:ws-consumer process; WS-fed prices are read from the cache by
+        // MarketDataLayer, never from a fresh NobitexWebSocketService here.)
         [$src, $dstPublic] = $this->splitSymbolPublic($symbol);
         $data = $this->request('GET', '/market/stats', [
             'srcCurrency' => $src,

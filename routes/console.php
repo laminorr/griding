@@ -9,6 +9,7 @@ use App\Jobs\ReadMarketStatsJob;
 use App\Jobs\ReconcileSubmissionsJob;
 use App\Support\ScheduleCadence;
 use App\Support\QueueDepthHealthCheck;
+use App\Support\WsFeedHealthCheck;
 
 Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
@@ -95,6 +96,19 @@ if ((bool) config('trading.enable_scheduler', true)) {
     Schedule::call(fn () => (new QueueDepthHealthCheck())->check())
         ->name('queue-depth-health-check')
         ->description('Alert if the jobs backlog exceeds the configured threshold')
+        ->everyFiveMinutes()
+        ->withoutOverlapping();
+
+    // ---- WebSocket feed health guard ----
+    // scripts/ws-keepalive.sh restarts nobitex:ws-consumer only when the process
+    // is gone; this catches a consumer that is alive but silently dead. Reads
+    // the heartbeat keys the consumer writes and LOGS (queue channel):
+    // CRITICAL WS_FEED_DEAD (no frame), WARNING WS_FEED_SILENT (frames but no
+    // orderbook publications), WARNING WS_FEED_NEVER_SEEN (no heartbeat at
+    // all). Log-only, inline, never throws.
+    Schedule::call(fn () => (new WsFeedHealthCheck())->check())
+        ->name('ws-feed-health-check')
+        ->description('Alert if the Nobitex WebSocket feed is dead or silent')
         ->everyFiveMinutes()
         ->withoutOverlapping();
 }
