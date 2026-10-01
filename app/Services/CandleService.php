@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Support\Money;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
@@ -18,6 +19,16 @@ use Illuminate\Support\Facades\Log;
  * count) to stay well inside the endpoint's 60 requests/minute limit; errors are
  * negatively cached for ERROR_CACHE_TTL_SECONDS so a failing endpoint is not
  * hammered either.
+ *
+ * PRICE UNIT: for IRT-quoted markets Nobitex returns candle prices in TOMAN —
+ * both the REST UDF history and the WS candle channel (verified on the host:
+ * BTCIRT candles ~21,639,000,000 vs orderbook/order/stats ~216,390,000,000) —
+ * while every other price in this bot (orderbook, orders, stats, grid_orders)
+ * is in RIAL. getCandles() therefore multiplies o/h/l/c by 10 for IRT markets
+ * (exact decimal-string math via Money; v is base-asset volume and untouched)
+ * and reports 'unit' => 'IRR'. The conversion happens ONLY at this output:
+ * the REST cache (candles:rest:*) and the WS cache (mdl:candle:*) keep the raw
+ * exchange values, and NobitexService::getOhlc() is unchanged.
  */
 class CandleService
 {
@@ -38,12 +49,16 @@ class CandleService
      *     'status'  => 'ok'|'no_data'|'error',
      *     'candles' => list<array{t:int,o:string,h:string,l:string,c:string,v:string}>,
      *                  ascending by t (unix seconds, candle open time); o/h/l/c/v are
-     *                  decimal strings — the exact NobitexService::getOhlc() row shape.
+     *                  decimal strings — the NobitexService::getOhlc() row shape, with
+     *                  o/h/l/c expressed in 'unit' (for IRT markets: the exchange's
+     *                  TOMAN values ×10 = RIAL; v is base-asset volume, unchanged).
      *                  At most min($count, 500) rows (oldest dropped if the live
      *                  candle is appended).
      *     'live'    => bool, true only when the live candle was applied (replaced
      *                  the last row with equal t, or appended as a newer row),
      *     'errmsg'  => ?string, REST error message when status is 'error',
+     *     'unit'    => ?string, price unit of o/h/l/c: 'IRR' for *IRT markets, the
+     *                  quote currency (e.g. 'USDT') otherwise; null if unknown,
      *   ]
      * Overlay: live.t == last.t -> replace last; live.t > last.t -> append;
      * older -> ignored. If REST yields no_data/error but a live candle exists,
@@ -53,10 +68,58 @@ class CandleService
      * @param string $symbol      e.g. "BTCIRT" (case-insensitive)
      * @param string $resolution  one of NobitexService::OHLC_RESOLUTIONS
      * @param int    $count       requested candles, clamped to 1..500
-     * @return array{status:string,candles:array<int,array{t:int,o:string,h:string,l:string,c:string,v:string}>,live:bool,errmsg:?string}
+     * @return array{status:string,candles:array<int,array{t:int,o:string,h:string,l:string,c:string,v:string}>,live:bool,errmsg:?string,unit:?string}
      * @throws \InvalidArgumentException for an unsupported resolution or empty symbol
      */
     public function getCandles(string $symbol, string $resolution, int $count = 200): array
+    {
+        $symbol = strtoupper(trim($symbol));
+
+        return $this->toOutputUnit($symbol, $this->rawCandles($symbol, $resolution, $count));
+    }
+
+    /**
+     * Quote-currency price unit of getCandles() output for a market symbol.
+     * IRT markets are reported in RIAL ('IRR'); USDT markets in 'USDT'.
+     */
+    public static function priceUnit(string $symbol): ?string
+    {
+        $symbol = strtoupper(trim($symbol));
+        if (str_ends_with($symbol, 'IRT')) {
+            return 'IRR';
+        }
+        if (str_ends_with($symbol, 'USDT')) {
+            return 'USDT';
+        }
+        return null;
+    }
+
+    /**
+     * Convert exchange-unit candles to the output unit and attach 'unit'.
+     * IRT markets: o/h/l/c TOMAN -> RIAL (×10, exact string math); v unchanged.
+     */
+    protected function toOutputUnit(string $symbol, array $result): array
+    {
+        $unit = self::priceUnit($symbol);
+
+        if ($unit === 'IRR' && $result['candles'] !== []) {
+            foreach ($result['candles'] as $i => $row) {
+                foreach (['o', 'h', 'l', 'c'] as $f) {
+                    $row[$f] = Money::mul($row[$f], '10');
+                }
+                $result['candles'][$i] = $row;
+            }
+        }
+
+        $result['unit'] = $unit;
+        return $result;
+    }
+
+    /**
+     * Raw exchange-unit candles (REST history overlaid with the live WS candle).
+     * @return array{status:string,candles:array,live:bool,errmsg:?string}
+     */
+    protected function rawCandles(string $symbol, string $resolution, int $count): array
     {
         $symbol     = strtoupper(trim($symbol));
         $resolution = strtoupper(trim($resolution));
