@@ -38,6 +38,12 @@ use Throwable;
  */
 class NobitexService implements ExchangeClient
 {
+    /**
+     * OHLC/candle resolutions Nobitex accepts — shared by getOhlc() (REST
+     * /market/udf/history), the WS candle channels and CandleService.
+     */
+    public const OHLC_RESOLUTIONS = ['1', '5', '15', '30', '60', '180', '240', '360', '720', 'D', '1D', '2D', '3D'];
+
     protected string $baseUrl;
     protected string $apiKey;
     protected int    $timeout;
@@ -1081,8 +1087,7 @@ class NobitexService implements ExchangeClient
      */
     public function getOhlc(string $symbol, string $resolution, int $to, ?int $from = null, ?int $countback = null, int $page = 1): array
     {
-        $allowedResolutions = ['1', '5', '15', '30', '60', '180', '240', '360', '720', 'D', '1D', '2D', '3D'];
-        if (!in_array($resolution, $allowedResolutions, true)) {
+        if (!in_array($resolution, self::OHLC_RESOLUTIONS, true)) {
             throw new \InvalidArgumentException('Unsupported OHLC resolution: ' . $resolution);
         }
 

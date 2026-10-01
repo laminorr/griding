@@ -20,11 +20,20 @@ use Throwable;
  * Cache keys:
  *  - mdl:last_price:{SYMBOL} => ['price'=>int,'ts'=>int]
  *  - mdl:orderbook:{SYMBOL}  => OrderBookDto::toArray()
+ *  - mdl:candle:{SYMBOL}:{RESOLUTION} => latest WS candle, getOhlc() row shape
+ *    (written by NobitexWebSocketService, read by CandleService)
  */
 class MarketDataLayer implements MarketData
 {
     public const CACHE_PREFIX_PRICE     = 'mdl:last_price:';
     public const CACHE_PREFIX_ORDERBOOK = 'mdl:orderbook:';
+    public const CACHE_PREFIX_CANDLE    = 'mdl:candle:';
+
+    /** Cache key of the latest live candle: mdl:candle:{SYMBOL}:{RESOLUTION} */
+    public static function candleCacheKey(string $symbol, string $resolution): string
+    {
+        return self::CACHE_PREFIX_CANDLE . strtoupper($symbol) . ':' . $resolution;
+    }
 
     protected ExchangeClient $rest;
     protected ?NobitexWebSocketService $ws;

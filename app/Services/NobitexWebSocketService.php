@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Support\DecimalString;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
@@ -11,6 +12,9 @@ use Illuminate\Support\Facades\Log;
  * -----------------------
  * WebSocket consumer for Nobitex (Centrifugo-based).
  * - Subscribes to public orderbook channels: public:orderbook-{SYMBOL}
+ * - Subscribes to candle channels public:candle-{SYMBOL}-{RESOLUTION} from
+ *   config('trading.websocket.candle_*') and caches the latest candle per
+ *   (symbol, resolution) at MarketDataLayer::candleCacheKey() (read by CandleService)
  * - Handles ping/pong ({}) and reconnect with backoff + jitter
  * - Seeds each symbol's orderbook from REST v3 on every (re)connect, since the
  *   orderbook channel only publishes on change
@@ -34,6 +38,11 @@ class NobitexWebSocketService
     /** Heartbeat keys are written at most this often (in-memory guard) */
     protected const HEARTBEAT_WRITE_GUARD_SECONDS = 10;
     protected const HEARTBEAT_TTL_SECONDS = 86400;
+
+    /** Candle channel prefix: public:candle-{SYMBOL}-{RESOLUTION} */
+    public const CANDLE_CHANNEL_PREFIX = 'public:candle-';
+    /** TTL of the latest-candle cache key */
+    public const CANDLE_TTL_SECONDS = 300;
 
     /** Laravel cache store name */
     protected string $cacheStore;
@@ -68,6 +77,17 @@ class NobitexWebSocketService
 
     /** @var array<string,int> heartbeat key => last write (unix seconds) */
     protected array $heartbeatWrittenAt = [];
+
+    /**
+     * Latest candle per "{SYMBOL}:{RESOLUTION}" (getOhlc row shape), with its
+     * own throttle state mirroring the orderbook one.
+     * @var array<string,array{symbol:string,resolution:string,candle:array{t:int,o:string,h:string,l:string,c:string,v:string}}>
+     */
+    protected array $candleSnap = [];
+    /** @var array<string,int> candle key => ms of last cache write */
+    protected array $lastCandleWriteMs = [];
+    /** @var array<string,true> candle keys whose latest candle is not yet in cache */
+    protected array $dirtyCandles = [];
 
     public function __construct()
     {
@@ -181,7 +201,10 @@ class NobitexWebSocketService
         $this->seedOrderbooks($symbols);
 
         // Subscribe to orderbooks: public:orderbook-{SYMBOL}
-        $this->subscribeOrderbooks($client, $symbols);
+        $nextId = $this->subscribeOrderbooks($client, $symbols);
+
+        // Then candles on the same connection, continuing the frame id sequence
+        $this->subscribeCandles($client, $nextId);
 
         $framesPrinted = 0;
 
@@ -315,8 +338,9 @@ class NobitexWebSocketService
     /**
      * Subscribe to given symbols' orderbooks.
      * @param array<int,string> $symbols
+     * @return int next unused frame id
      */
-    protected function subscribeOrderbooks(\WebSocket\Client $client, array $symbols): void
+    protected function subscribeOrderbooks(\WebSocket\Client $client, array $symbols): int
     {
         $i = 2; // we've used id=1 for connect
         foreach ($symbols as $symbol) {
@@ -331,6 +355,63 @@ class NobitexWebSocketService
             $client->send(json_encode($frame, JSON_UNESCAPED_SLASHES));
             $this->out('[WS] Subscribed', ['channel' => $channel]);
         }
+
+        return $i;
+    }
+
+    /**
+     * Subscribe to the configured candle channels, ids starting at $firstId.
+     * Delta/fossil is deliberately NOT requested.
+     * @return int next unused frame id
+     */
+    protected function subscribeCandles(\WebSocket\Client $client, int $firstId): int
+    {
+        $i = $firstId;
+        foreach ($this->candleChannels() as $channel) {
+            $client->send(json_encode([
+                'id' => $i++,
+                'subscribe' => ['channel' => $channel],
+            ], JSON_UNESCAPED_SLASHES));
+            $this->out('[WS] Subscribed', ['channel' => $channel]);
+        }
+
+        return $i;
+    }
+
+    /**
+     * Candle channels from config: one per (symbol, resolution). Resolutions not
+     * in NobitexService::OHLC_RESOLUTIONS (and malformed symbols) are skipped
+     * with a warning — never fatal.
+     * @return array<int,string>
+     */
+    protected function candleChannels(): array
+    {
+        $symbols     = (array) config('trading.websocket.candle_symbols', ['BTCIRT']);
+        $resolutions = (array) config('trading.websocket.candle_resolutions', ['1', '15', '60', 'D']);
+
+        $validResolutions = [];
+        foreach ($resolutions as $res) {
+            $res = strtoupper(trim((string) $res));
+            if (!in_array($res, NobitexService::OHLC_RESOLUTIONS, true)) {
+                $this->out('[WS] Invalid candle resolution in config; skipped', ['resolution' => $res], 'warning');
+                continue;
+            }
+            $validResolutions[$res] = true;
+        }
+
+        $channels = [];
+        foreach ($symbols as $symbol) {
+            $symbol = strtoupper(trim((string) $symbol));
+            if (preg_match('/^[A-Z0-9]+$/', $symbol) !== 1) {
+                $this->out('[WS] Invalid candle symbol in config; skipped', ['symbol' => $symbol], 'warning');
+                continue;
+            }
+            foreach (array_keys($validResolutions) as $res) {
+                $channels[] = self::CANDLE_CHANNEL_PREFIX . $symbol . '-' . $res;
+            }
+        }
+
+        return array_values(array_unique($channels));
     }
 
     /* ============================== Publications ============================= */
@@ -343,27 +424,181 @@ class NobitexWebSocketService
      */
     protected function processPublicationPayload(string $channel, $payload): void
     {
+        if (strpos($channel, self::CANDLE_CHANNEL_PREFIX) === 0) {
+            $this->processCandlePublication($channel, $payload);
+            return;
+        }
+
         if (strpos($channel, 'public:orderbook-') !== 0) {
             return; // ignore other channels here
         }
         $symbol = strtoupper(substr($channel, strlen('public:orderbook-')));
 
-        // Decode or accept as-is
-        if (is_string($payload)) {
-            $pub = json_decode($payload, true);
-            if (!is_array($pub)) {
-                $this->out('[WS] Bad publication payload (string not json)', ['channel' => $channel], 'warning');
-                return;
-            }
-        } elseif (is_array($payload)) {
-            $pub = $payload;
-        } else {
-            $this->out('[WS] Bad publication payload (unknown type)', ['channel' => $channel], 'warning');
+        $pub = $this->decodePublication($channel, $payload);
+        if ($pub === null) {
             return;
         }
 
         $this->ingestOrderbook($symbol, $pub, false);
         $this->writeHeartbeat(self::HEARTBEAT_PUBLICATION_KEY);
+    }
+
+    /**
+     * Decode a publication payload (JSON string or already-decoded array).
+     * @param mixed $payload
+     * @return array<string,mixed>|null null (logged) when unusable
+     */
+    protected function decodePublication(string $channel, $payload): ?array
+    {
+        if (is_string($payload)) {
+            $pub = json_decode($payload, true);
+            if (!is_array($pub)) {
+                $this->out('[WS] Bad publication payload (string not json)', ['channel' => $channel], 'warning');
+                return null;
+            }
+            return $pub;
+        }
+
+        if (is_array($payload)) {
+            return $payload;
+        }
+
+        $this->out('[WS] Bad publication payload (unknown type)', ['channel' => $channel], 'warning');
+        return null;
+    }
+
+    /* ================================ Candles ================================ */
+
+    /**
+     * Parse "public:candle-{SYMBOL}-{RESOLUTION}" by splitting on the LAST hyphen
+     * (so "public:candle-BTCIRT-1D" -> BTCIRT / 1D).
+     * @return array{symbol:string,resolution:string}|null null for anything malformed
+     */
+    public static function parseCandleChannel(string $channel): ?array
+    {
+        if (strpos($channel, self::CANDLE_CHANNEL_PREFIX) !== 0) {
+            return null;
+        }
+        $rest = substr($channel, strlen(self::CANDLE_CHANNEL_PREFIX));
+        $cut = strrpos($rest, '-');
+        if ($cut === false) {
+            return null;
+        }
+
+        $symbol     = strtoupper(substr($rest, 0, $cut));
+        $resolution = strtoupper(substr($rest, $cut + 1));
+
+        if (preg_match('/^[A-Z0-9]+$/', $symbol) !== 1
+            || !in_array($resolution, NobitexService::OHLC_RESOLUTIONS, true)) {
+            return null;
+        }
+
+        return ['symbol' => $symbol, 'resolution' => $resolution];
+    }
+
+    /**
+     * Candle publication -> getOhlc() row -> throttled cache write. Does NOT touch
+     * HEARTBEAT_PUBLICATION_KEY (that heartbeat means "orderbook publications").
+     * Malformed input is logged and dropped; nothing is thrown.
+     * @param mixed $payload
+     */
+    protected function processCandlePublication(string $channel, $payload): void
+    {
+        $parsed = self::parseCandleChannel($channel);
+        if ($parsed === null) {
+            $this->out('[WS] Unrecognised candle channel; ignored', ['channel' => $channel], 'debug');
+            return;
+        }
+
+        $pub = $this->decodePublication($channel, $payload);
+        if ($pub === null) {
+            return;
+        }
+
+        $candle = $this->normalizeCandle($pub);
+        if ($candle === null) {
+            $this->out('[WS] Malformed candle payload; dropped', ['channel' => $channel], 'warning');
+            return;
+        }
+
+        $this->ingestCandle($parsed['symbol'], $parsed['resolution'], $candle);
+    }
+
+    /**
+     * WS candle {"t":int,"o":double,...} -> exactly the REST getOhlc() row shape.
+     * @param array<string,mixed> $pub
+     * @return array{t:int,o:string,h:string,l:string,c:string,v:string}|null
+     */
+    protected function normalizeCandle(array $pub): ?array
+    {
+        $t = $pub['t'] ?? null;
+        if (!(is_int($t) || is_float($t) || (is_string($t) && is_numeric($t)))) {
+            return null;
+        }
+        $tf = (float) $t;
+        if (!is_finite($tf) || floor($tf) !== $tf || $tf <= 0) {
+            return null;
+        }
+
+        $row = ['t' => (int) $tf];
+        foreach (['o', 'h', 'l', 'c', 'v'] as $field) {
+            $value = $pub[$field] ?? null;
+            if (!(is_int($value) || is_float($value) || (is_string($value) && is_numeric($value)))) {
+                return null;
+            }
+            try {
+                $row[$field] = DecimalString::fromNumber($value);
+            } catch (\InvalidArgumentException) {
+                return null;
+            }
+        }
+
+        return $row;
+    }
+
+    /** Update the in-memory candle and write it to cache (throttled per symbol+resolution). */
+    protected function ingestCandle(string $symbol, string $resolution, array $candle): void
+    {
+        $key = $symbol . ':' . $resolution;
+
+        // Never let a late/out-of-order publication regress to an older candle.
+        $current = $this->candleSnap[$key]['candle']['t'] ?? null;
+        if ($current !== null && $candle['t'] < $current) {
+            $this->out('[WS] Stale candle ignored', ['symbol' => $symbol, 'resolution' => $resolution, 't' => $candle['t'], 'current_t' => $current], 'debug');
+            return;
+        }
+
+        $this->candleSnap[$key] = ['symbol' => $symbol, 'resolution' => $resolution, 'candle' => $candle];
+
+        if ($this->intervalElapsed($this->lastCandleWriteMs[$key] ?? null)) {
+            $this->writeCandleToCache($key);
+        } else {
+            $this->dirtyCandles[$key] = true;
+        }
+
+        $this->out('[WS] Candle update', ['symbol' => $symbol, 'resolution' => $resolution, 't' => $candle['t']], 'debug');
+    }
+
+    protected function writeCandleToCache(string $key): void
+    {
+        if (!isset($this->candleSnap[$key])) {
+            return;
+        }
+        $snap = $this->candleSnap[$key];
+        $this->lastCandleWriteMs[$key] = $this->nowMs();
+
+        try {
+            Cache::store($this->cacheStore)->put(
+                MarketDataLayer::candleCacheKey($snap['symbol'], $snap['resolution']),
+                $snap['candle'],
+                self::CANDLE_TTL_SECONDS
+            );
+            unset($this->dirtyCandles[$key]);
+        } catch (\Throwable $e) {
+            // Keep it dirty: retried on a later frame once the interval elapses.
+            $this->dirtyCandles[$key] = true;
+            $this->out('[WS] Candle cache write failed', ['key' => $key, 'error' => $e->getMessage()], 'warning');
+        }
     }
 
     /**
@@ -429,10 +664,16 @@ class NobitexWebSocketService
 
     protected function cacheWriteDue(string $symbol): bool
     {
-        if (!isset($this->lastCacheWriteMs[$symbol])) {
+        return $this->intervalElapsed($this->lastCacheWriteMs[$symbol] ?? null);
+    }
+
+    /** True when no write happened yet or cache_write_interval_ms has passed since $lastWriteMs. */
+    protected function intervalElapsed(?int $lastWriteMs): bool
+    {
+        if ($lastWriteMs === null) {
             return true;
         }
-        return ($this->nowMs() - $this->lastCacheWriteMs[$symbol]) >= $this->cacheWriteIntervalMs;
+        return ($this->nowMs() - $lastWriteMs) >= $this->cacheWriteIntervalMs;
     }
 
     /* ======================== Per-frame housekeeping ======================== */
@@ -449,6 +690,12 @@ class NobitexWebSocketService
         foreach (array_keys($this->dirtySymbols) as $symbol) {
             if ($this->cacheWriteDue($symbol)) {
                 $this->writeSnapshotToCache($symbol);
+            }
+        }
+
+        foreach (array_keys($this->dirtyCandles) as $key) {
+            if ($this->intervalElapsed($this->lastCandleWriteMs[$key] ?? null)) {
+                $this->writeCandleToCache($key);
             }
         }
     }

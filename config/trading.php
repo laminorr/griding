@@ -230,6 +230,14 @@ return [
         // (the socket is already open and server pings need a reply in 20s).
         'seed_budget_seconds' => (int) env('NOBITEX_WS_SEED_BUDGET_SECONDS', 15),
 
+        // Candle (OHLC) channels public:candle-{SYMBOL}-{RESOLUTION}, subscribed on
+        // the same connection. Comma-separated in env. Each resolution must be in
+        // NobitexService::OHLC_RESOLUTIONS; invalid entries are skipped + logged.
+        // Latest candle is cached at mdl:candle:{SYMBOL}:{RESOLUTION} (TTL 300s),
+        // throttled by cache_write_interval_ms per (symbol, resolution).
+        'candle_symbols' => array_values(array_filter(array_map('trim', explode(',', (string) env('NOBITEX_WS_CANDLE_SYMBOLS', 'BTCIRT'))), fn ($v) => $v !== '')),
+        'candle_resolutions' => array_values(array_filter(array_map('trim', explode(',', (string) env('NOBITEX_WS_CANDLE_RESOLUTIONS', '1,15,60,D'))), fn ($v) => $v !== '')),
+
         // WsFeedHealthCheck thresholds (log-only).
         'health' => [
             // No frame at all (not even a {} ping) for this long -> CRITICAL WS_FEED_DEAD
