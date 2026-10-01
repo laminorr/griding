@@ -217,6 +217,30 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | WebSocket market-data feed (nobitex:ws-consumer)
+    |--------------------------------------------------------------------------
+    */
+    'websocket' => [
+        // Per-symbol minimum gap between orderbook/price cache writes. The
+        // in-memory snapshot updates on every publication; a throttled symbol
+        // is flushed on the next frame once this interval has elapsed.
+        'cache_write_interval_ms' => (int) env('NOBITEX_WS_CACHE_WRITE_INTERVAL_MS', 1000),
+
+        // Max wall time spent seeding orderbooks from REST after each connect
+        // (the socket is already open and server pings need a reply in 20s).
+        'seed_budget_seconds' => (int) env('NOBITEX_WS_SEED_BUDGET_SECONDS', 15),
+
+        // WsFeedHealthCheck thresholds (log-only).
+        'health' => [
+            // No frame at all (not even a {} ping) for this long -> CRITICAL WS_FEED_DEAD
+            'dead_after_seconds'   => (int) env('NOBITEX_WS_DEAD_AFTER_SECONDS', 180),
+            // Frames arriving but no orderbook publication for this long -> WARNING WS_FEED_SILENT
+            'silent_after_seconds' => (int) env('NOBITEX_WS_SILENT_AFTER_SECONDS', 600),
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Feature flags & Logging
     |--------------------------------------------------------------------------
     */

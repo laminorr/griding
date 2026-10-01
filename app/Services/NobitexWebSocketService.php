@@ -12,7 +12,12 @@ use Illuminate\Support\Facades\Log;
  * WebSocket consumer for Nobitex (Centrifugo-based).
  * - Subscribes to public orderbook channels: public:orderbook-{SYMBOL}
  * - Handles ping/pong ({}) and reconnect with backoff + jitter
- * - Updates Laravel cache using keys expected by MarketDataLayer
+ * - Seeds each symbol's orderbook from REST v3 on every (re)connect, since the
+ *   orderbook channel only publishes on change
+ * - Updates Laravel cache using keys expected by MarketDataLayer, throttled per
+ *   symbol (cache.default is a DB store in production: every put is a write)
+ * - Writes heartbeat keys (last frame / last publication) read by
+ *   App\Support\WsFeedHealthCheck
  * - Keeps small in-memory snapshots for fast read (used by MarketDataLayer)
  *
  * Requires: composer require textalk/websocket
@@ -22,8 +27,13 @@ class NobitexWebSocketService
     /** WebSocket endpoint (default from .env or config) */
     protected string $wsUrl;
 
-    /** Optional connection token (not required for public channels) */
-    protected ?string $token;
+    /** Heartbeat cache keys (read by App\Support\WsFeedHealthCheck) */
+    public const HEARTBEAT_FRAME_KEY       = 'nobitex:ws:last_frame_at';
+    public const HEARTBEAT_PUBLICATION_KEY = 'nobitex:ws:last_publication_at';
+
+    /** Heartbeat keys are written at most this often (in-memory guard) */
+    protected const HEARTBEAT_WRITE_GUARD_SECONDS = 10;
+    protected const HEARTBEAT_TTL_SECONDS = 86400;
 
     /** Laravel cache store name */
     protected string $cacheStore;
@@ -46,6 +56,19 @@ class NobitexWebSocketService
     /** @var array<string,array{asks:array,bids:array,lastTradePrice:int,lastUpdate:int}> */
     protected array $orderbookSnap = [];
 
+    /** Per-symbol cache write throttle */
+    protected int $cacheWriteIntervalMs;
+    /** @var array<string,int> symbol => ms of last cache write */
+    protected array $lastCacheWriteMs = [];
+    /** @var array<string,true> symbols whose latest snapshot is not yet in cache */
+    protected array $dirtySymbols = [];
+
+    /** Max wall time spent seeding per connection (server ping deadline) */
+    protected int $seedBudgetSeconds;
+
+    /** @var array<string,int> heartbeat key => last write (unix seconds) */
+    protected array $heartbeatWrittenAt = [];
+
     public function __construct()
     {
         $cfg = (array) config('trading.nobitex', []);
@@ -53,10 +76,11 @@ class NobitexWebSocketService
         $this->wsUrl = $cfg['websocket_url']
             ?? env('NOBITEX_WS_URL', env('WEBSOCKET_URL', 'wss://ws.nobitex.ir/connection/websocket'));
 
-        $this->token = $cfg['api_key'] ?? null; // not needed for public channels
         $this->cacheStore = (string) config('cache.default');
         $this->ttlPriceSeconds     = (int) (config('trading.cache.price_ttl', 5));
         $this->ttlOrderbookSeconds = (int) (config('trading.cache.market_stats_ttl', 60));
+        $this->cacheWriteIntervalMs = max(0, (int) config('trading.websocket.cache_write_interval_ms', 1000));
+        $this->seedBudgetSeconds    = max(0, (int) config('trading.websocket.seed_budget_seconds', 15));
     }
 
     /* ====================== Public helpers (used elsewhere) ====================== */
@@ -137,12 +161,6 @@ class NobitexWebSocketService
      */
     protected function consume(array $symbols): void
     {
-        // Prepare headers (token not required for public channels)
-        $headers = [];
-        if ($this->token) {
-            $headers['Authorization'] = 'Token '.$this->token;
-        }
-
         $this->out('[WS] Connecting', [
             'url' => $this->wsUrl,
             'ssl_insecure' => false,
@@ -151,12 +169,16 @@ class NobitexWebSocketService
         // textalk/websocket client
         $client = new \WebSocket\Client($this->wsUrl, [
             'timeout' => 25,
-            'headers' => $headers,
+            'headers' => $this->buildHandshakeHeaders(),
         ]);
         $this->out('[WS] Connected OK');
 
         // Centrifugo connect frame. For public channels auth is optional; send empty connect {}.
         $client->send(json_encode(['connect' => (object)[], 'id' => 1], JSON_UNESCAPED_SLASHES));
+
+        // The orderbook channel publishes only on change, so seed the cache from
+        // REST v3 first (per Nobitex docs). Never blocks connecting/subscribing.
+        $this->seedOrderbooks($symbols);
 
         // Subscribe to orderbooks: public:orderbook-{SYMBOL}
         $this->subscribeOrderbooks($client, $symbols);
@@ -170,6 +192,9 @@ class NobitexWebSocketService
 
             // Receive frame (string)
             $raw = $client->receive();
+
+            // Heartbeat + flush throttled snapshots on EVERY frame (pings included)
+            $this->onFrameReceived();
 
             if ($raw === null || $raw === '') {
                 // Some servers may push no-op/empty occasionally; just continue
@@ -226,6 +251,65 @@ class NobitexWebSocketService
         $this->out('[WS] Frame', ['data' => $data], 'debug');
     }
 
+    /**
+     * Headers for the WebSocket handshake. Public channels need no auth, and
+     * Nobitex retired the legacy `Authorization: Token` scheme, so none is sent.
+     * @return array<string,string>
+     */
+    protected function buildHandshakeHeaders(): array
+    {
+        return [];
+    }
+
+    /* ================================ Seeding ================================ */
+
+    /**
+     * Seed each symbol's orderbook cache from REST (NobitexService::getOrderBook,
+     * primary GET /v3/orderbook/{symbol}). Bypasses the write throttle. A failure
+     * for one symbol is logged and skipped — it must never stop the consumer.
+     * Bounded by a time budget because the socket is already open and the
+     * server's {} pings must be answered within 20s.
+     * @param array<int,string> $symbols
+     */
+    protected function seedOrderbooks(array $symbols): void
+    {
+        $started = $this->nowMs();
+
+        foreach ($symbols as $symbol) {
+            $symbol = strtoupper($symbol);
+
+            if ($this->seedBudgetSeconds > 0 && ($this->nowMs() - $started) >= $this->seedBudgetSeconds * 1000) {
+                $this->out('[WS] Seed budget exhausted; skipping', ['symbol' => $symbol, 'budget_s' => $this->seedBudgetSeconds], 'warning');
+                continue;
+            }
+
+            try {
+                $dto = app(NobitexService::class)->getOrderBook($symbol);
+
+                if ($dto->asks === [] && $dto->bids === [] && $dto->lastPrice <= 0) {
+                    $this->out('[WS] Orderbook seed empty; skipping', ['symbol' => $symbol], 'warning');
+                    continue;
+                }
+
+                $toL2 = fn(array $rows): array => array_map(
+                    fn($r) => [(string) ($r['price'] ?? 0), (string) ($r['quantity'] ?? '0')],
+                    $rows
+                );
+
+                $this->ingestOrderbook($symbol, [
+                    'asks'           => $toL2($dto->asks),
+                    'bids'           => $toL2($dto->bids),
+                    'lastTradePrice' => $dto->lastPrice > 0 ? $dto->lastPrice : null,
+                    'lastUpdate'     => $dto->ts > 0 ? $dto->ts * 1000 : null,
+                ], true);
+
+                $this->out('[WS] Seeded orderbook from REST', ['symbol' => $symbol]);
+            } catch (\Throwable $e) {
+                $this->out('[WS] Orderbook seed failed', ['symbol' => $symbol, 'error' => $e->getMessage()], 'warning');
+            }
+        }
+    }
+
     /* ============================== Subscriptions ============================= */
 
     /**
@@ -278,6 +362,19 @@ class NobitexWebSocketService
             return;
         }
 
+        $this->ingestOrderbook($symbol, $pub, false);
+        $this->writeHeartbeat(self::HEARTBEAT_PUBLICATION_KEY);
+    }
+
+    /**
+     * Single entry point for orderbook state (WS publications AND REST seed):
+     * normalizes, updates the in-memory snapshot, then writes the cache — at
+     * most once per throttle interval per symbol unless $bypassThrottle.
+     * A throttled symbol is marked dirty and flushed by onFrameReceived().
+     * @param array<string,mixed> $pub  asks/bids/lastTradePrice(/last/lastPrice)/lastUpdate
+     */
+    protected function ingestOrderbook(string $symbol, array $pub, bool $bypassThrottle): void
+    {
         // Normalize bids/asks as array of [price, amount] strings
         $asks = $this->normalizeL2($pub['asks'] ?? []);
         $bids = $this->normalizeL2($pub['bids'] ?? []);
@@ -287,36 +384,90 @@ class NobitexWebSocketService
         $lastPrice = is_numeric($last) ? (int) $last : $this->inferMidPrice($asks, $bids);
 
         // lastUpdate in ms; if absent, now()
-        $lastUpdate = (int) ($pub['lastUpdate'] ?? (int) round(microtime(true) * 1000));
+        $lastUpdate = (int) ($pub['lastUpdate'] ?? $this->nowMs());
 
-        // --- Write to cache with keys MarketDataLayer expects
-        Cache::store($this->cacheStore)->put(
-            \App\Services\MarketDataLayer::CACHE_PREFIX_ORDERBOOK . $symbol,
-            [
-                'asks' => $asks,
-                'bids' => $bids,
-                'lastTradePrice' => $lastPrice,
-                'lastUpdate' => $lastUpdate,
-            ],
-            $this->ttlOrderbookSeconds
-        );
-
-        Cache::store($this->cacheStore)->put(
-            \App\Services\MarketDataLayer::CACHE_PREFIX_PRICE . $symbol,
-            ['price' => $lastPrice, 'ts' => time()],
-            $this->ttlPriceSeconds
-        );
-
-        // --- Update in-memory snapshots
+        // --- Update in-memory snapshots (always: this is the latest state)
         $this->orderbookSnap[$symbol] = [
             'asks' => $asks,
             'bids' => $bids,
             'lastTradePrice' => $lastPrice,
             'lastUpdate' => $lastUpdate,
         ];
-        $this->lastPriceSnap[$symbol] = ['price' => $lastPrice, 'ts' => time()];
+        $this->lastPriceSnap[$symbol] = ['price' => $lastPrice, 'ts' => $this->nowSeconds()];
+
+        if ($bypassThrottle || $this->cacheWriteDue($symbol)) {
+            $this->writeSnapshotToCache($symbol);
+        } else {
+            $this->dirtySymbols[$symbol] = true;
+        }
 
         $this->out('[WS] OB update', ['symbol' => $symbol, 'last' => $lastPrice], 'debug');
+    }
+
+    /** Write a symbol's current in-memory snapshot to the keys MarketDataLayer reads. */
+    protected function writeSnapshotToCache(string $symbol): void
+    {
+        if (!isset($this->orderbookSnap[$symbol], $this->lastPriceSnap[$symbol])) {
+            return;
+        }
+
+        Cache::store($this->cacheStore)->put(
+            \App\Services\MarketDataLayer::CACHE_PREFIX_ORDERBOOK . $symbol,
+            $this->orderbookSnap[$symbol],
+            $this->ttlOrderbookSeconds
+        );
+
+        Cache::store($this->cacheStore)->put(
+            \App\Services\MarketDataLayer::CACHE_PREFIX_PRICE . $symbol,
+            $this->lastPriceSnap[$symbol],
+            $this->ttlPriceSeconds
+        );
+
+        $this->lastCacheWriteMs[$symbol] = $this->nowMs();
+        unset($this->dirtySymbols[$symbol]);
+    }
+
+    protected function cacheWriteDue(string $symbol): bool
+    {
+        if (!isset($this->lastCacheWriteMs[$symbol])) {
+            return true;
+        }
+        return ($this->nowMs() - $this->lastCacheWriteMs[$symbol]) >= $this->cacheWriteIntervalMs;
+    }
+
+    /* ======================== Per-frame housekeeping ======================== */
+
+    /**
+     * Called for every received frame, including empty {} pings: refreshes the
+     * frame heartbeat and flushes any throttled (dirty) symbol whose interval
+     * has elapsed, so the latest state is never dropped.
+     */
+    protected function onFrameReceived(): void
+    {
+        $this->writeHeartbeat(self::HEARTBEAT_FRAME_KEY);
+
+        foreach (array_keys($this->dirtySymbols) as $symbol) {
+            if ($this->cacheWriteDue($symbol)) {
+                $this->writeSnapshotToCache($symbol);
+            }
+        }
+    }
+
+    /** Put a heartbeat key = now, at most once per guard window (limits DB writes). */
+    protected function writeHeartbeat(string $key): void
+    {
+        $now = $this->nowSeconds();
+        $last = $this->heartbeatWrittenAt[$key] ?? null;
+        if ($last !== null && ($now - $last) < self::HEARTBEAT_WRITE_GUARD_SECONDS) {
+            return;
+        }
+
+        try {
+            Cache::store($this->cacheStore)->put($key, $now, self::HEARTBEAT_TTL_SECONDS);
+            $this->heartbeatWrittenAt[$key] = $now;
+        } catch (\Throwable $e) {
+            $this->out('[WS] Heartbeat write failed', ['key' => $key, 'error' => $e->getMessage()], 'warning');
+        }
     }
 
     /** @param array<int,mixed> $rows
@@ -355,6 +506,18 @@ class NobitexWebSocketService
     }
 
     /* ============================== Utilities ============================== */
+
+    /** Clock (ms). Overridable in tests. */
+    protected function nowMs(): int
+    {
+        return (int) round(microtime(true) * 1000);
+    }
+
+    /** Clock (unix seconds). Overridable in tests. */
+    protected function nowSeconds(): int
+    {
+        return time();
+    }
 
     protected function computeBackoffWithJitter(int $attempt): int
     {
