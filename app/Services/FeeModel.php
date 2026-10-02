@@ -261,6 +261,98 @@ class FeeModel
     }
 
     // ------------------------------------------------------------------
+    // Per-fill fee fields (grid_orders persistence)
+    // ------------------------------------------------------------------
+
+    /**
+     * The fee columns to persist on a grid_orders row for a (partial or full)
+     * fill. Used by EVERY fill path — poller and W4 single-order (via the
+     * shared CheckTradesJob handlers) and simulation — so they all record the
+     * same shape.
+     *
+     * Source priority: the exchange-reported cumulative $actualFee (classified
+     * by magnitude) → otherwise a FeeModel estimate (fee_source 'estimated').
+     * An actual fee that cannot be classified also falls back to the estimate.
+     *
+     * @param string      $side         'buy' | 'sell' (the order's side)
+     * @param string      $filled       cumulative matched base amount
+     * @param string      $limitPrice   the order's limit price (fallback fill price)
+     * @param string|null $averagePrice exchange averagePrice, if reported
+     * @param string|null $actualFee    exchange cumulative fee, if reported
+     * @param string|null $totalPrice   exchange matched quote total, if reported
+     * @return array{fee_amount:?string, fee_currency:?string, fee_asset:?string, fee_source:?string, fee_quote:?string, avg_fill_price:?string, net_base_delta:?string}
+     */
+    public function fillFields(
+        ?BotConfig $bot,
+        string $side,
+        string $symbol,
+        string $filled,
+        string $limitPrice,
+        ?string $averagePrice = null,
+        ?string $actualFee = null,
+        ?string $totalPrice = null,
+    ): array {
+        $side = $this->assertSide($side);
+
+        $empty = [
+            'fee_amount' => null, 'fee_currency' => null, 'fee_asset' => null, 'fee_source' => null,
+            'fee_quote' => null, 'avg_fill_price' => null, 'net_base_delta' => null,
+        ];
+        if (! Money::isPositive($filled)) {
+            return $empty;
+        }
+
+        $fillPrice = ($averagePrice !== null && Money::isPositive($averagePrice)) ? $averagePrice : $limitPrice;
+        $total     = ($totalPrice !== null && Money::isPositive($totalPrice)) ? $totalPrice : Money::mul($filled, $fillPrice);
+
+        $fee = null;
+        $currency = null;
+        $source = self::SOURCE_ESTIMATED;
+        if ($actualFee !== null) {
+            $class = $this->classifyActualFee($side, $filled, $total, $actualFee, $bot);
+            if ($class['currency'] !== null) {
+                $fee      = Money::trimZeros($actualFee);
+                $currency = $class['currency'];
+                $source   = self::SOURCE_ACTUAL;
+            }
+        }
+        if ($fee === null) {
+            $est      = $this->estimate($side, $filled, $fillPrice, $bot);
+            $fee      = $est['amount'];
+            $currency = $est['currency'];
+        }
+
+        [$baseAsset, $quoteAsset] = self::assetsOf($symbol);
+        $baseFee = $currency === self::CURRENCY_BASE ? $fee : '0';
+        $gross   = $side === self::SIDE_BUY ? $filled : Money::sub('0', $filled);
+
+        return [
+            'fee_amount'     => $fee,
+            'fee_currency'   => $currency,
+            'fee_asset'      => $currency === self::CURRENCY_BASE ? $baseAsset : $quoteAsset,
+            'fee_source'     => $source,
+            'fee_quote'      => $this->feeToQuote($fee, $currency, $fillPrice),
+            'avg_fill_price' => $fillPrice,
+            'net_base_delta' => Money::sub($gross, $baseFee),
+        ];
+    }
+
+    /**
+     * Lower-case [base, quote] asset codes as the private API names them
+     * (BTCIRT → ['btc', 'rls']).
+     *
+     * @return array{0:string,1:string}
+     */
+    public static function assetsOf(string $symbol): array
+    {
+        try {
+            return GridOrderExecutor::splitSymbol($symbol);
+        } catch (\InvalidArgumentException) {
+            return ['base', 'quote'];
+        }
+    }
+
+    // ------------------------------------------------------------------
     // Break-even spacing
     // ------------------------------------------------------------------
 

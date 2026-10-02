@@ -17,6 +17,8 @@ class GridOrder extends Model
         'original_amount','filled_amount','remaining_amount','average_fill_price','last_fill_at',
         'role',
         'reconcile_attempts','reconcile_not_found_count','reconcile_last_attempt_at',
+        // Fee model Phase 3 — per-order fee capture (see FeeModel::fillFields).
+        'fee_amount','fee_currency','fee_asset','fee_source','fee_quote','avg_fill_price','net_base_delta',
     ];
 
     protected $casts = [
@@ -40,6 +42,11 @@ class GridOrder extends Model
         'reconcile_attempts'        => 'integer',
         'reconcile_not_found_count' => 'integer',
         'reconcile_last_attempt_at' => 'datetime',
+        // DECIMAL(36,18) — read back as exact decimal strings.
+        'fee_amount'         => 'decimal:18',
+        'fee_quote'          => 'decimal:18',
+        'avg_fill_price'     => 'decimal:18',
+        'net_base_delta'     => 'decimal:18',
     ];
 
     /**

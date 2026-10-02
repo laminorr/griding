@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Models\BotConfig;
 use App\Models\GridOrder;
 use App\Models\CompletedTrade;
+use App\Services\FeeModel;
 use App\Services\NobitexService;
 use App\Services\TradingEngineService;
 use App\Services\BotActivityLogger;
@@ -227,10 +228,24 @@ class CheckTradesJob implements ShouldQueue
 
                 DB::beginTransaction();
                 try {
+                    // Fee model Phase 3 — a simulated limit order fills in full
+                    // at its own price. Record the same ledger + fee columns a
+                    // live fill gets, with a FeeModel ESTIMATE as the fee
+                    // (fee_source 'estimated'), so simulation exits are sized by
+                    // the same fee-aware path as live (Phase 4).
+                    $simFilled = self::dec($order->original_amount ?? $order->amount);
+                    $simPrice  = self::dec($order->price);
+                    $simFields = app(FeeModel::class)->fillFields($bot, (string) $order->type, $symbol, $simFilled, $simPrice);
+
                     $order->update([
-                        'status' => 'filled',
-                        'filled_at' => now(),
-                    ]);
+                        'status'             => 'filled',
+                        'filled_at'          => now(),
+                        'original_amount'    => $simFilled,
+                        'filled_amount'      => $simFilled,
+                        'remaining_amount'   => '0',
+                        'average_fill_price' => $simPrice,
+                        'last_fill_at'       => now(),
+                    ] + $simFields);
 
                     app(BotActivityLogger::class)->logOrderFilled($bot->id, $order);
 
@@ -458,6 +473,51 @@ class CheckTradesJob implements ShouldQueue
     }
 
     /**
+     * A decimal string for an exchange/DB quantity; anything non-numeric → '0'.
+     * Keeps bcmath from throwing on a malformed payload value.
+     */
+    private static function dec(mixed $v): string
+    {
+        if ($v === null || $v === '' || is_bool($v) || is_array($v) || is_object($v)) {
+            return '0';
+        }
+        if (is_string($v) && !is_numeric($v)) {
+            return '0';
+        }
+        return Money::normalize(is_string($v) ? trim($v) : $v);
+    }
+
+    /**
+     * Fee model Phase 3 — the fee/fill-price columns for a fill reported by
+     * the exchange, via FeeModel::fillFields (actual fee classified, else
+     * estimated). Shared by handleFilledOrder / handlePartialFill /
+     * handleCanceledOrder, i.e. by BOTH the minute poller and the W4
+     * single-order path. average_fill_price (DECIMAL(20,0)) carries the exact
+     * average rounded to a whole rial; avg_fill_price keeps it exact.
+     *
+     * @param \App\DTOs\OrderStatusDto $statusDto
+     */
+    private function fillFieldsFromStatus(GridOrder $order, BotConfig $bot, $statusDto, string $filled): array
+    {
+        $limitPrice = self::dec($statusDto->priceIRT ?? $order->price);
+
+        $fields = app(FeeModel::class)->fillFields(
+            $bot,
+            (string) $order->type,
+            (string) ($bot->symbol ?? 'BTCIRT'),
+            $filled,
+            $limitPrice,
+            $statusDto->averagePrice ?? null,
+            $statusDto->fee ?? null,
+            $statusDto->totalPrice ?? null,
+        );
+
+        $fields['average_fill_price'] = FeeModel::roundHalfUp($fields['avg_fill_price'] ?? $limitPrice, 0);
+
+        return $fields;
+    }
+
+    /**
      * پردازش وضعیت یک سفارش بر اساس پاسخ API
      *
      * @param GridOrder $order سفارش محلی
@@ -479,10 +539,12 @@ class CheckTradesJob implements ShouldQueue
         // filledBase). This check MUST run before the status-unchanged early
         // return below, because ACTIVE maps to 'placed' and a placed order
         // with a growing partial fill would otherwise be silently skipped.
-        $originalAmount = (float) ($order->original_amount ?? $order->amount);
-        $filledBase     = (float) $statusDto->filledBase;
+        $originalAmount = self::dec($order->original_amount ?? $order->amount);
+        $filledBase     = self::dec($statusDto->filledBase);
 
-        if ($apiStatus === 'ACTIVE' && $filledBase > 0 && $filledBase < $originalAmount) {
+        if ($apiStatus === 'ACTIVE'
+            && Money::isPositive($filledBase)
+            && Money::compare($filledBase, $originalAmount) < 0) {
             $this->handlePartialFill($order, $statusDto, $bot);
             return;
         }
@@ -547,16 +609,16 @@ class CheckTradesJob implements ShouldQueue
             // the API row arrived as '0' and zeroed the order). The requested
             // amount now stays in 'amount' / 'original_amount' and the actual
             // executed quantity goes to 'filled_amount'.
-            $originalAmount = $order->original_amount ?? $order->amount;
+            $originalAmount = self::dec($order->original_amount ?? $order->amount);
 
             // filledBase of '0' on a DONE order means the API row lacked
             // matchedAmount — fall back to the requested amount rather than
             // recording a zero-quantity fill.
-            $filledBase = ((float) $statusDto->filledBase > 0)
-                ? $statusDto->filledBase
-                : (string) $order->amount;
+            $filledBase = Money::isPositive(self::dec($statusDto->filledBase))
+                ? self::dec($statusDto->filledBase)
+                : self::dec($order->amount);
 
-            if ((float) $filledBase < (float) $originalAmount) {
+            if (Money::compare($filledBase, $originalAmount) < 0) {
                 // Unusual: Nobitex reports the order DONE but matched less
                 // than requested. Keep the original amount intact and make
                 // the divergence loud.
@@ -569,17 +631,17 @@ class CheckTradesJob implements ShouldQueue
                 ]);
             }
 
+            // Fee model Phase 3: persist the exchange's actual cumulative fee
+            // (classified base/quote) or a FeeModel estimate, the exact
+            // average fill price, and the net base change.
             $order->update([
                 'status'             => 'filled',
                 'filled_at'          => now(),
                 'original_amount'    => $originalAmount,
                 'filled_amount'      => $filledBase,
-                'remaining_amount'   => number_format(max(0, (float) $originalAmount - (float) $filledBase), 8, '.', ''),
-                // DTO has no true average-fill-price field; for our limit
-                // orders the API's priceIRT (or our own price) is the fill price.
-                'average_fill_price' => $statusDto->priceIRT ?? $order->price,
+                'remaining_amount'   => Money::max('0', Money::sub($originalAmount, $filledBase)),
                 'last_fill_at'       => now(),
-            ]);
+            ] + $this->fillFieldsFromStatus($order, $bot, $statusDto, $filledBase));
 
             Log::info("CheckTradesJob: Order {$order->id} marked as filled - Price: {$order->price}, Amount: {$order->amount}, Filled: {$order->filled_amount}, Type: {$order->type}");
 
@@ -622,32 +684,30 @@ class CheckTradesJob implements ShouldQueue
     {
         // Backfill original_amount on first detection so the requested
         // quantity survives even for rows created before Phase 9, Step 1.
-        $originalAmount = $order->original_amount ?? $order->amount;
-        $filledBase     = (float) $statusDto->filledBase;
+        $originalAmount = self::dec($order->original_amount ?? $order->amount);
+        $filledBase     = self::dec($statusDto->filledBase);
 
         // Idempotence: repeated polls with an unchanged matched amount must
         // not rewrite the row (and must not bump last_fill_at).
         if ($order->status === 'partially_filled'
-            && (float) $order->filled_amount === $filledBase) {
+            && $order->filled_amount !== null
+            && Money::compare(self::dec($order->filled_amount), $filledBase) === 0) {
             Log::debug("CheckTradesJob: Order {$order->id} partial fill unchanged at {$statusDto->filledBase} — nothing to update");
             return;
         }
 
-        $remaining = number_format(max(0, (float) $originalAmount - $filledBase), 8, '.', '');
+        $remaining = Money::max('0', Money::sub($originalAmount, $filledBase));
 
         $order->update([
             'status'             => 'partially_filled',
             // 'amount' is intentionally NOT touched — it stays the originally
             // requested quantity; the executed part lives in filled_amount.
             'original_amount'    => $originalAmount,
-            'filled_amount'      => $statusDto->filledBase,
+            'filled_amount'      => $filledBase,
             'remaining_amount'   => $remaining,
-            // DTO has no true average-fill-price field; for our limit orders
-            // matches happen at the limit price, so priceIRT / order price is
-            // the correct fill price.
-            'average_fill_price' => $statusDto->priceIRT ?? $order->price,
             'last_fill_at'       => now(),
-        ]);
+            // Fee model Phase 3: cumulative fee so far + exact average price.
+        ] + $this->fillFieldsFromStatus($order, $bot, $statusDto, $filledBase));
 
         Log::channel('trading')->info('PARTIAL_FILL_DETECTED', [
             'order_id'           => $order->id,
@@ -693,30 +753,22 @@ class CheckTradesJob implements ShouldQueue
     {
         // Compare with BCMath discipline (Money), never a naive float == 0:
         // a tiny-but-real matched amount must count as a partial execution.
-        $filledBase = Money::normalize($statusDto->filledBase);
+        $filledBase = self::dec($statusDto->filledBase);
 
         if (Money::isPositive($filledBase)) {
-            $originalAmount = $order->original_amount ?? $order->amount;
-            $remaining      = number_format(
-                max(0, (float) $originalAmount - (float) $statusDto->filledBase),
-                8,
-                '.',
-                ''
-            );
+            $originalAmount = self::dec($order->original_amount ?? $order->amount);
+            $remaining      = Money::max('0', Money::sub($originalAmount, $filledBase));
 
             $order->update([
                 'status'             => 'cancelled', // terminal — NOT 'partially_filled'
                 // 'amount' is intentionally left as the originally requested
                 // quantity; the executed part lives in filled_amount.
                 'original_amount'    => $originalAmount,
-                'filled_amount'      => $statusDto->filledBase,
+                'filled_amount'      => $filledBase,
                 'remaining_amount'   => $remaining,
-                // DTO has no true average-fill-price field; for our limit orders
-                // matches happen at the limit price, so priceIRT / order price
-                // is the correct fill price.
-                'average_fill_price' => $statusDto->priceIRT ?? $order->price,
                 'last_fill_at'       => now(),
-            ]);
+                // Fee model Phase 3: the executed part's fee + exact avg price.
+            ] + $this->fillFieldsFromStatus($order, $bot, $statusDto, $filledBase));
 
             Log::channel('trading')->info('CANCELED_WITH_PARTIAL_FILL', [
                 'order_id'         => $order->id,

@@ -182,6 +182,19 @@ trait BuildsGridSchema
             $table->unsignedInteger('reconcile_attempts')->default(0);
             $table->unsignedInteger('reconcile_not_found_count')->default(0);
             $table->timestamp('reconcile_last_attempt_at')->nullable();
+
+            // Fee model Phase 3 (2026_10_02_000002_add_fee_capture_columns_to_grid_orders_table).
+            // DECIMAL(36,18) in production (exact). Declared as plain strings
+            // here ON PURPOSE: sqlite's NUMERIC affinity would store a 10-12 dp
+            // fee as a REAL (double) and lose exactness, whereas TEXT keeps the
+            // exact decimal string — i.e. the same semantics MySQL DECIMAL has.
+            $table->string('fee_amount', 40)->nullable();
+            $table->string('fee_currency', 8)->nullable();
+            $table->string('fee_asset', 8)->nullable();
+            $table->string('fee_source', 16)->nullable();
+            $table->string('fee_quote', 40)->nullable();
+            $table->string('avg_fill_price', 40)->nullable();
+            $table->string('net_base_delta', 40)->nullable();
             $table->timestamps();
         });
 
