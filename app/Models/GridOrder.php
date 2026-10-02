@@ -19,6 +19,8 @@ class GridOrder extends Model
         'reconcile_attempts','reconcile_not_found_count','reconcile_last_attempt_at',
         // Fee model Phase 3 — per-order fee capture (see FeeModel::fillFields).
         'fee_amount','fee_currency','fee_asset','fee_source','fee_quote','avg_fill_price','net_base_delta',
+        // Fee model Phase 4 — base_dust change caused by this exit row (ExitSizer).
+        'exit_dust_delta',
     ];
 
     protected $casts = [
@@ -47,6 +49,7 @@ class GridOrder extends Model
         'fee_quote'          => 'decimal:18',
         'avg_fill_price'     => 'decimal:18',
         'net_base_delta'     => 'decimal:18',
+        'exit_dust_delta'    => 'decimal:18',
     ];
 
     /**

@@ -133,6 +133,11 @@ trait BuildsGridSchema
             // NULL = use config('trading.fees.*_fee_bps') via FeeModel.
             $table->decimal('buy_fee_bps', 8, 4)->nullable();
             $table->decimal('sell_fee_bps', 8, 4)->nullable();
+
+            // Fee model Phase 4 (2026_10_02_000003_add_base_dust_ledger):
+            // DECIMAL(36,18) default 0 in production; a string here for the
+            // same exactness reason as the grid_orders fee columns.
+            $table->string('base_dust', 40)->default('0');
             // total_capital & center_price are decimal(20,0) in production — same
             // sqlite precision caveat as capital_locked_irt above.
             $table->decimal('total_capital', 20, 0)->default(100000000);
@@ -195,6 +200,8 @@ trait BuildsGridSchema
             $table->string('fee_quote', 40)->nullable();
             $table->string('avg_fill_price', 40)->nullable();
             $table->string('net_base_delta', 40)->nullable();
+            // Fee model Phase 4 (2026_10_02_000003_add_base_dust_ledger).
+            $table->string('exit_dust_delta', 40)->nullable();
             $table->timestamps();
         });
 

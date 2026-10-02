@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Models\BotConfig;
 use App\Models\GridOrder;
 use App\Models\CompletedTrade;
+use App\Services\ExitSizer;
 use App\Services\FeeModel;
 use App\Services\NobitexService;
 use App\Services\TradingEngineService;
@@ -248,6 +249,8 @@ class CheckTradesJob implements ShouldQueue
                     ] + $simFields);
 
                     app(BotActivityLogger::class)->logOrderFilled($bot->id, $order);
+
+                    app(ExitSizer::class)->settleExitBuyFill($order, $bot);
 
                     $this->createCompletedTradeIfPaired($order, $bot);
 
@@ -648,6 +651,10 @@ class CheckTradesJob implements ShouldQueue
             // Log order filled
             $logger->logOrderFilled($bot->id, $order);
 
+            // Fee model Phase 4: a sell-first cycle closes here — book the exit
+            // buy's real remainder into the bot's base_dust ledger.
+            app(ExitSizer::class)->settleExitBuyFill($order, $bot);
+
             // ایجاد رکورد CompletedTrade (اگر سفارش جفتی دارد)
             $this->createCompletedTradeIfPaired($order, $bot);
 
@@ -967,26 +974,19 @@ class CheckTradesJob implements ShouldQueue
             ? Money::mul($filledOrder->price, Money::add('1', $spacingStr))
             : Money::mul($filledOrder->price, Money::sub('1', $spacingStr));
 
-        // IRT prices are whole-rial integers (DECIMAL(20,0)); preserve the
-        // existing rounding to the integer tick — only the raw multiplication
-        // moved to BCMath. At IRT magnitudes (~10^11) the value is far inside
-        // float's exact-integer range, so this final round stays exact.
-        $newPrice = (int) round((float) $rawPrice);
+        // IRT prices are whole-rial integers (DECIMAL(20,0)); round half-up
+        // to the integer rial on the decimal string (no float round-trip).
+        $newPrice = (int) FeeModel::roundHalfUp($rawPrice, 0);
 
         $symbol = $bot->symbol ?? 'BTCIRT';
 
-        // Phase 9, Step 7 (defensive): size the continuation order by what was
-        // actually executed, not what was requested. Today pairs are only
-        // created for fully-filled orders so the two are normally equal, but
-        // if a fill ever lands with filled_amount < amount (see
-        // FILLED_WITH_PARTIAL_QUANTITY in handleFilledOrder) the pair must
-        // reflect the real quantity. Combined with CompletedTrade's min()
-        // logic (Step 5), profit is then computed on the matched quantity.
-        $pairAmount = $filledOrder->filled_amount ?? $filledOrder->amount;
-
+        // Fee model Phase 4: the exit AMOUNT is decided by ExitSizer inside
+        // the pairing transaction below (fee-net sell / inventory-restoring
+        // buy + dust ledger). It is NOT the gross filled amount any more —
+        // that oversized every buy-first exit sell by the BTC buy fee (D1).
         $clientOrderId = GridOrder::buildClientOrderId($bot->id, $symbol, $newType, $newPrice);
 
-        Log::info("CheckTradesJob: Creating pair order - Type: {$newType}, Price: {$newPrice}, Amount: {$pairAmount} for filled order {$filledOrder->id}");
+        Log::info("CheckTradesJob: Creating pair order - Type: {$newType}, Price: {$newPrice} for filled order {$filledOrder->id}");
 
         // Dedup guard — abort before opening a transaction if this pair was
         // already placed. 'submission_unknown' is in the list because such a row
@@ -1032,10 +1032,27 @@ class CheckTradesJob implements ShouldQueue
                 return;
             }
 
+            // Size the exit (same function for live, W4 and simulation). Locks
+            // the bot row and moves base_dust inside THIS transaction, so the
+            // reservation commits or rolls back together with the intent row.
+            $sizing     = app(ExitSizer::class)->reserve($current, $bot, (string) $newPrice);
+            $pairAmount = $sizing['amount'];
+
+            if (! Money::isPositive($pairAmount)) {
+                // Nothing sellable (cannot happen for a real fill — credited is
+                // ~99.75% of it). Never place a zero/dust-only order.
+                DB::rollBack();
+                Log::channel('trading')->error('EXIT_SIZE_ZERO', [
+                    'bot_id' => $bot->id, 'filled_order_id' => $filledOrder->id, 'sizing' => $sizing,
+                ]);
+                return;
+            }
+
             Log::channel('trading')->info('PAIR_ORDER_PRE_CREATE', [
                 'bot_id'          => $bot->id,
                 'type'            => $newType,
                 'calculated_price'=> $newPrice,
+                'amount'          => $pairAmount,
                 'filled_order_id' => $filledOrder->id,
                 'client_order_id' => $clientOrderId,
                 'simulation'      => (bool) $bot->simulation,
@@ -1050,6 +1067,8 @@ class CheckTradesJob implements ShouldQueue
                 'client_order_id' => $clientOrderId,
                 'paired_order_id' => $filledOrder->id,
                 'role'            => 'cycle_exit',
+                // Lets a cancelled-and-unlinked intent undo its dust move once.
+                'exit_dust_delta' => $newType === 'sell' ? $sizing['dust_delta'] : null,
             ]);
 
             // Back-link BEFORE the exchange call. paired_order_id means "a
@@ -1169,9 +1188,11 @@ class CheckTradesJob implements ShouldQueue
             } else {
                 // The failure happened before anything left our process — no
                 // exchange order can exist. Cancel the row and unlink the fill
-                // so the next run may attempt pairing again.
+                // so the next run may attempt pairing again; undo the row's
+                // dust reservation so the re-pair does not count it twice.
                 $newOrder->update(['status' => 'cancelled']);
                 $filledOrder->update(['paired_order_id' => null]);
+                app(ExitSizer::class)->revertDust($newOrder);
             }
 
             $logger->logError($bot->id, 'خطا در ایجاد سفارش جفت: ' . $e->getMessage(), [
