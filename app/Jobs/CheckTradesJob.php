@@ -131,9 +131,9 @@ class CheckTradesJob implements ShouldQueue
             // ('blocked') or resolved by hand ('cleared') is not re-paired
             // automatically (Phase 5) — see `php artisan grid:exit-blocked`.
             $filledOrders = $bot->gridOrders()
-                ->where('status', 'filled')
                 ->whereNull('paired_order_id')
                 ->whereNull('exit_state')
+                ->where(fn ($q) => self::scopePairable($q))
                 ->get();
 
             Log::info("CheckTradesJob: Found {$filledOrders->count()} filled orders without pair for bot {$bot->name}");
@@ -406,6 +406,39 @@ class CheckTradesJob implements ShouldQueue
     }
 
     /**
+     * Which unpaired rows get an exit: every 'filled' order and — when
+     * trading.fees.exit_for_partial_cancels is on (default) — a non-exit order
+     * that was CANCELLED after a partial execution (audit D12). The latter is
+     * limited to rows whose fill was captured by the fee model (fee_source set,
+     * i.e. cancelled after this deploy), so historic rows are never re-paired
+     * by surprise. A partial too small to exit is absorbed into base_dust at
+     * pairing time (ExitSizer::absorbIntoDust).
+     */
+    private static function scopePairable($q): void
+    {
+        $q->where('status', 'filled');
+        if ((bool) config('trading.fees.exit_for_partial_cancels', true)) {
+            $q->orWhere(fn ($c) => $c->where('status', 'cancelled')
+                ->whereNotNull('fee_source')
+                ->where('filled_amount', '>', 0)
+                ->where(fn ($r) => $r->whereNull('role')->orWhere('role', '!=', 'cycle_exit')));
+        }
+    }
+
+    /** In-memory twin of scopePairable() for a single row. */
+    private static function isPairable(GridOrder $o): bool
+    {
+        if ($o->status === 'filled') {
+            return true;
+        }
+        return (bool) config('trading.fees.exit_for_partial_cancels', true)
+            && $o->status === 'cancelled'
+            && $o->fee_source !== null
+            && $o->role !== 'cycle_exit'
+            && Money::isPositive(self::dec($o->filled_amount));
+    }
+
+    /**
      * Single-order entry point (W4) — used by ProcessOrderEventJob when a
      * private WS order event arrives. It runs the SAME code the minute poller
      * runs for one order, nothing new:
@@ -474,7 +507,7 @@ class CheckTradesJob implements ShouldQueue
 
         // Same pairing step processBot() runs for filled-but-unpaired orders.
         $order->refresh();
-        if ($order->status === 'filled' && $order->paired_order_id === null && $order->exit_state === null) {
+        if ($order->paired_order_id === null && $order->exit_state === null && self::isPairable($order)) {
             $result['pair_attempted'] = true;
             $this->createPairOrder($order, $bot);
         }
@@ -795,7 +828,7 @@ class CheckTradesJob implements ShouldQueue
                 'nobitex_order_id' => $order->nobitex_order_id,
             ]);
 
-            Log::info("CheckTradesJob: Order {$order->id} cancelled after a partial fill of {$statusDto->filledBase} — executed portion recorded, no continuation pair created");
+            Log::info("CheckTradesJob: Order {$order->id} cancelled after a partial fill of {$statusDto->filledBase} — executed portion recorded; no continuation for the remainder (the executed part gets an exit or goes to base_dust when trading.fees.exit_for_partial_cancels is on)");
             return;
         }
 
@@ -882,7 +915,11 @@ class CheckTradesJob implements ShouldQueue
 
         // Only book when BOTH legs are filled. If the partner hasn't filled
         // yet, defer — it will book when the partner's own fill is processed.
-        if ($partner->status !== 'filled') {
+        // A cancelled-with-partial partner (D12) counts as filled for its
+        // executed part (its exit was sized from that part).
+        $partnerExecuted = $partner->status === 'filled'
+            || ($partner->status === 'cancelled' && Money::isPositive(self::dec($partner->filled_amount)));
+        if (! $partnerExecuted) {
             Log::info("CheckTradesJob: Partner #{$partner->id} of order #{$order->id} not filled yet (status: {$partner->status}) — deferring");
             return;
         }
@@ -1044,6 +1081,18 @@ class CheckTradesJob implements ShouldQueue
             // reservation commits or rolls back together with the intent row.
             $sizing     = app(ExitSizer::class)->reserve($current, $bot, (string) $newPrice);
             $pairAmount = $sizing['amount'];
+
+            if ($current->status === 'cancelled' && $sizing['below_min']) {
+                // D12: the executed part of a cancelled order is too small
+                // for its own exit — never place a below-minimum order; move
+                // it into the dust ledger instead (folded into a later exit).
+                DB::rollBack();
+                app(ExitSizer::class)->absorbIntoDust($current, $bot, sprintf(
+                    'partial of cancelled order: exit %s %s × %s = %s IRT < min',
+                    $newType, $pairAmount, $newPrice, $sizing['notional']
+                ));
+                return;
+            }
 
             if (! Money::isPositive($pairAmount)) {
                 // Nothing sellable (cannot happen for a real fill — credited is

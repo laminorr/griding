@@ -254,6 +254,54 @@ class ExitSizer
         });
     }
 
+    /**
+     * D12: a CANCELLED order's partial execution whose exit would be below
+     * min_order_value_irt cannot be exited on its own. Move its net base
+     * change into base_dust instead (buy: +credited BTC, folded into a later
+     * exit sell; sell: −sold BTC, recovered by later exits) and mark the fill
+     * exit_state = 'dusted' so it is never re-selected. Idempotent.
+     */
+    public function absorbIntoDust(GridOrder $fill, BotConfig $bot, string $reason): void
+    {
+        DB::transaction(function () use ($fill, $bot, $reason) {
+            $row = GridOrder::whereKey($fill->id)->lockForUpdate()->first();
+            if (! $row || $row->exit_state !== null || $row->paired_order_id !== null) {
+                return;
+            }
+
+            $delta = $row->net_base_delta !== null
+                ? self::dec($row->net_base_delta)
+                : $this->estimatedNetBaseDelta($row, $bot);
+
+            $botRow = BotConfig::whereKey($bot->id)->lockForUpdate()->first();
+            $before = self::dec($botRow?->getAttribute('base_dust'));
+            $after  = Money::add($before, $delta);
+            BotConfig::whereKey($bot->id)->update(['base_dust' => $after]);
+            $bot->setAttribute('base_dust', $after);
+            $bot->syncOriginalAttribute('base_dust');
+
+            $row->forceFill([
+                'exit_state'          => 'dusted',
+                'exit_blocked_reason' => mb_substr($reason, 0, 255),
+                'exit_blocked_at'     => now(),
+                'exit_dust_delta'     => $delta,
+            ])->save();
+
+            Log::channel('trading')->info('PARTIAL_FILL_DUSTED', [
+                'bot_id' => $bot->id, 'filled_order_id' => $row->id, 'side' => $row->type,
+                'filled' => (string) $row->filled_amount, 'delta' => $delta,
+                'dust_before' => $before, 'dust_after' => $after, 'reason' => $reason,
+            ]);
+        });
+    }
+
+    private function estimatedNetBaseDelta(GridOrder $o, BotConfig $bot): string
+    {
+        $f = $this->fees->fillFields($bot, (string) $o->type, (string) ($bot->symbol ?? 'BTCIRT'),
+            self::dec($o->filled_amount), self::dec($o->avg_fill_price ?? $o->price));
+        return $f['net_base_delta'] ?? '0';
+    }
+
     private function result(
         string $side, string $amount, string $gross, string $fee, string $feeCurrency, string $feeSource,
         string $net, string $dustBefore, string $dustAfter, string $mode, string $exitPrice, string $minIrt, bool $deferred,

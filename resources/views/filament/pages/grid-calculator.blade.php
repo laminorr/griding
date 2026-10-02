@@ -673,6 +673,27 @@
                     <span class="at-badge muted">کارمزد خرید: {{ $fa($bpsPct($buyFeeBps)) }}٪ · کارمزد فروش: {{ $fa($bpsPct($sellFeeBps)) }}٪</span>
                 </div>
                 <div class="panel-section__body">
+                    {{-- Break-even spacing (FeeModel::breakEvenSpacing, both cycle directions) --}}
+                    <div class="metric-grid" style="margin-block-end: var(--at-gap-md);">
+                        <div class="metric-card is-row">
+                            <span class="metric-label">سربه‌سر — چرخهٔ خرید‌اول</span>
+                            <span class="metric-value" style="direction:ltr;">{{ $fa($breakEvenBuyFirstPct) }}٪</span>
+                        </div>
+                        <div class="metric-card is-row">
+                            <span class="metric-label">سربه‌سر — چرخهٔ فروش‌اول</span>
+                            <span class="metric-value" style="direction:ltr;">{{ $fa($breakEvenSellFirstPct) }}٪</span>
+                        </div>
+                        <div class="metric-card is-row">
+                            <span class="metric-label">حداقل فاصلهٔ توصیه‌شده</span>
+                            <span class="metric-value {{ $spacingTooTight ? 'neg' : 'pos' }}" style="direction:ltr;">{{ $fa($minSpacingPct) }}٪</span>
+                        </div>
+                    </div>
+                    @if ($spacingTooTight)
+                        <div class="at-badge neg" style="margin-block-end: var(--at-gap-md);">
+                            <span class="at-dot neg"></span>
+                            فاصلهٔ {{ $fa($trim($gridSpacing)) }}٪ کمتر از حداقل سودآور ({{ $fa($minSpacingPct) }}٪) است — پس از کارمزد، چرخه‌ها زیان می‌دهند.
+                        </div>
+                    @endif
                     @if ($grossPerCycle !== null)
                         <div class="metric-grid">
                             <div class="metric-card is-row">

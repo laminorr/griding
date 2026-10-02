@@ -69,6 +69,10 @@ class GridCalculator extends Page
     public ?int $netPerCycle = null;         // gross - fee (IRT)
     public ?string $buyFeeBps = null;        // FeeModel buy rate (bps)
     public ?string $sellFeeBps = null;       // FeeModel sell rate (bps)
+    public ?string $breakEvenBuyFirstPct = null;  // FeeModel::breakEvenSpacing — buy-first (fee-net sell)
+    public ?string $breakEvenSellFirstPct = null; // FeeModel::breakEvenSpacing — sell-first (as configured)
+    public ?string $minSpacingPct = null;         // max break-even + trading.fees.spacing_margin_bps
+    public bool $spacingTooTight = false;         // gridSpacing < minSpacingPct
 
     // ---- Full-round total (sum over ALL priced levels, both sides) -------
     public ?int $roundCycles = null;         // number of priced levels summed (= N placed cycles, both sides)
@@ -128,7 +132,7 @@ class GridCalculator extends Page
      */
     public function calculate(): void
     {
-        $this->reset(['plan', 'risk', 'repNotional', 'grossPerCycle', 'feePerCycle', 'netPerCycle', 'buyFeeBps', 'sellFeeBps', 'calcError', 'roundCycles', 'roundGrossTotal', 'roundFeeTotal', 'roundNetTotal']);
+        $this->reset(['plan', 'risk', 'repNotional', 'grossPerCycle', 'feePerCycle', 'netPerCycle', 'buyFeeBps', 'sellFeeBps', 'breakEvenBuyFirstPct', 'breakEvenSellFirstPct', 'minSpacingPct', 'spacingTooTight', 'calcError', 'roundCycles', 'roundGrossTotal', 'roundFeeTotal', 'roundNetTotal']);
         $this->hasResults = false;
 
         // ---- Validate inputs (Persian, matches the engine's own guards) ----
@@ -202,6 +206,14 @@ class GridCalculator extends Page
         $feeModel         = app(FeeModel::class);
         $this->buyFeeBps  = $feeModel->rateFor(null, FeeModel::SIDE_BUY);
         $this->sellFeeBps = $feeModel->rateFor(null, FeeModel::SIDE_SELL);
+
+        // Minimum profitable spacing for these rates, both cycle directions
+        // (docs/fee-audit.md §C4), and a warning below max + margin.
+        $breakEven                   = $feeModel->breakEvenSpacing();
+        $this->breakEvenBuyFirstPct  = $breakEven['buy_first_pct'];
+        $this->breakEvenSellFirstPct = $breakEven['sell_first_effective_pct'];
+        $this->minSpacingPct         = $feeModel->minimumSpacingPct();
+        $this->spacingTooTight       = $feeModel->spacingBelowMinimum(Money::normalize($spacing));
 
         $items = $plan['items'] ?? [];
         $s     = Money::div(Money::normalize($spacing), '100'); // spacing as a fraction

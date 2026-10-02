@@ -377,6 +377,47 @@ class CompletedTrade extends Model
      */
     public static function createFromOrders(GridOrder $buyOrder, GridOrder $sellOrder): self
     {
+        $booking = self::computeBooking($buyOrder, $sellOrder);
+
+        // محاسبه زمان اجرا
+        $executionTime = $buyOrder->created_at->diffInSeconds($sellOrder->updated_at);
+
+        $columns = array_diff_key($booking, array_flip(['buy_fill_price', 'sell_fill_price']));
+
+        return self::create($columns + [
+            'bot_config_id' => $buyOrder->bot_config_id,
+            'buy_order_id' => $buyOrder->id,
+            'sell_order_id' => $sellOrder->id,
+            // DECIMAL(20,0): the fill prices to the whole rial (exact values
+            // stay on the orders' avg_fill_price).
+            'buy_price' => FeeModel::roundHalfUp($booking['buy_fill_price'], 0),
+            'sell_price' => FeeModel::roundHalfUp($booking['sell_fill_price'], 0),
+            'amount' => $booking['sell_filled_amount'],
+            'execution_time_seconds' => $executionTime,
+            'trade_type' => 'grid',
+            // grid_orders ستون grid_level ندارد (در فاز ۴ عمداً حذف شد) و هیچ
+            // بخشی از UI این مقادیر را نمایش نمی‌دهد؛ بنابراین صریحاً null می‌مانند.
+            'grid_level_buy' => null,
+            'grid_level_sell' => null,
+            'market_conditions' => [
+                'btc_price_at_trade' => cache('btc_price'),
+                'timestamp' => now()->toISOString(),
+                'trend' => self::detectMarketTrend()
+            ],
+        ]);
+    }
+
+    /**
+     * The fee-model booking of a buy/sell leg pair (no I/O except the
+     * residual warning): used by createFromOrders() for new trades and by
+     * `php artisan fees:backfill` to recompute legacy rows the same way.
+     *
+     * @return array<string,mixed> profit/fee/net columns + per-leg breakdown,
+     *         plus 'buy_fill_price' / 'sell_fill_price' (not columns; removed
+     *         by the callers before persisting where needed)
+     */
+    public static function computeBooking(GridOrder $buyOrder, GridOrder $sellOrder, bool $logResidual = true): array
+    {
         $feeModel = app(FeeModel::class);
         $bot      = $buyOrder->botConfig ?? $sellOrder->botConfig;
 
@@ -404,7 +445,7 @@ class CompletedTrade extends Model
         $source = $buyFee['source'] === $sellFee['source'] ? $buyFee['source'] : 'mixed';
 
         $symbol = (string) ($bot?->symbol ?? 'BTCIRT');
-        if (Money::compare(Money::abs($residual), QtyPrecision::step($symbol)) >= 0) {
+        if ($logResidual && Money::compare(Money::abs($residual), QtyPrecision::step($symbol)) >= 0) {
             Log::channel('trading')->warning('COMPLETED_TRADE_BASE_RESIDUAL', [
                 'buy_order_id'  => $buyOrder->id,
                 'sell_order_id' => $sellOrder->id,
@@ -423,35 +464,12 @@ class CompletedTrade extends Model
             ? '0'
             : Money::mul(Money::div($grossProfit, $buyNotional), '100');
 
-        // محاسبه زمان اجرا
-        $executionTime = $buyOrder->created_at->diffInSeconds($sellOrder->updated_at);
-
-        return self::create([
-            'bot_config_id' => $buyOrder->bot_config_id,
-            'buy_order_id' => $buyOrder->id,
-            'sell_order_id' => $sellOrder->id,
-            // DECIMAL(20,0): the fill prices to the whole rial (exact values
-            // stay on the orders' avg_fill_price).
-            'buy_price' => FeeModel::roundHalfUp($buyPx, 0),
-            'sell_price' => FeeModel::roundHalfUp($sellPx, 0),
-            'amount' => $amount,
-            'profit' => $netProfit,
-            'fee' => $totalFee,
-            'gross_profit' => $grossProfit,
-            'net_profit' => $netProfit,
-            'profit_percentage' => $profitPercentage,
-            'execution_time_seconds' => $executionTime,
-            'trade_type' => 'grid',
-            // grid_orders ستون grid_level ندارد (در فاز ۴ عمداً حذف شد) و هیچ
-            // بخشی از UI این مقادیر را نمایش نمی‌دهد؛ بنابراین صریحاً null می‌مانند.
-            'grid_level_buy' => null,
-            'grid_level_sell' => null,
-            'market_conditions' => [
-                'btc_price_at_trade' => cache('btc_price'),
-                'timestamp' => now()->toISOString(),
-                'trend' => self::detectMarketTrend()
-            ],
-            // Fee model Phase 6 breakdown.
+        return [
+            'profit'             => $netProfit,
+            'fee'                => $totalFee,
+            'gross_profit'       => $grossProfit,
+            'net_profit'         => $netProfit,
+            'profit_percentage'  => $profitPercentage,
             'buy_fee_amount'     => $buyFee['amount'],
             'buy_fee_currency'   => $buyFee['currency'],
             'buy_fee_quote'      => $buyFeeQuote,
@@ -463,7 +481,9 @@ class CompletedTrade extends Model
             'sell_filled_amount' => $sellQty,
             'base_residual'      => $residual,
             'fee_model_version'  => $feeModel->modelVersion(),
-        ]);
+            'buy_fill_price'     => $buyPx,
+            'sell_fill_price'    => $sellPx,
+        ];
     }
 
     /** A leg's matched quantity: filled_amount when positive, else amount. */

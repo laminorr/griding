@@ -107,6 +107,16 @@ return [
         // only if free BTC >= this ratio of the intended amount; the shortfall
         // is recorded in base_dust. Otherwise the fill is marked exit_blocked.
         'self_heal_min_ratio' => (string) env('TRADING_EXIT_SELF_HEAL_MIN_RATIO', '0.98'),
+
+        // A cancelled order with a partial fill (e.g. cancelled by a rebalance)
+        // gets an exit for the filled part via the normal exit sizing when that
+        // exit's notional >= min_order_value_irt; a smaller fill is absorbed
+        // into base_dust (folded into a later exit). false = the old behaviour
+        // (partial executions of cancelled orders are never paired).
+        'exit_for_partial_cancels' => (bool) env('TRADING_EXIT_FOR_PARTIAL_CANCELS', true),
+
+        // Calculator / bot form warn when grid_spacing < max break-even + this (bps).
+        'spacing_margin_bps' => (string) env('TRADING_SPACING_MARGIN_BPS', '10'),
     ],
 
     /*

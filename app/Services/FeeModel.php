@@ -403,6 +403,25 @@ class FeeModel
     }
 
     /**
+     * Smallest grid spacing (percent string, 4 dp, rounded UP) this bot
+     * should run at: the larger cycle-direction break-even plus
+     * trading.fees.spacing_margin_bps. Below it, some cycles lose money after
+     * fees. Used by the calculator and the bot form warnings.
+     */
+    public function minimumSpacingPct(?BotConfig $bot = null): string
+    {
+        $max    = $this->breakEvenSpacing($bot)['max'];
+        $margin = Money::div($this->configBps('spacing_margin_bps', '10'), '10000');
+        return Money::ceilToScale(Money::mul(Money::add($max, $margin), '100'), 4);
+    }
+
+    /** True when $spacingPct (e.g. "0.6") is below minimumSpacingPct(). */
+    public function spacingBelowMinimum(string $spacingPct, ?BotConfig $bot = null): bool
+    {
+        return Money::compare($spacingPct, $this->minimumSpacingPct($bot)) < 0;
+    }
+
+    /**
      * Fee of one complete cycle on a level of $notional (quote), in quote,
      * using the configured rates and the base fee valued at the buy price.
      *
