@@ -273,6 +273,18 @@ trait BuildsGridSchema
             $table->decimal('slippage', 10, 4)->nullable();
             $table->text('notes')->nullable();
 
+            // Fee model Phase 6 (2026_10_02_000005_add_fee_breakdown_to_completed_trades_table).
+            // DECIMAL(36,18) in production; strings here for exactness (see
+            // the grid_orders fee columns above).
+            foreach (['buy_fee_amount', 'buy_fee_quote', 'sell_fee_amount', 'sell_fee_quote',
+                      'buy_filled_amount', 'sell_filled_amount', 'base_residual', 'profit_v0', 'net_profit_v0'] as $c) {
+                $table->string($c, 40)->nullable();
+            }
+            $table->string('buy_fee_currency', 8)->nullable();
+            $table->string('sell_fee_currency', 8)->nullable();
+            $table->string('fee_source', 16)->nullable();
+            $table->unsignedSmallInteger('fee_model_version')->nullable();
+
             $table->timestamps();
         });
     }

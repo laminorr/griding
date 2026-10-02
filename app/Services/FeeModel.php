@@ -119,19 +119,24 @@ class FeeModel
      * expected currency, using the configured rate.
      *
      * Base-currency estimates are rounded UP to trading.fees.fee_scale digits
-     * so a sell sized as (filled − fee) can never exceed the BTC credited.
-     * Quote estimates are exact (they never drive a quantity).
+     * by default, so a sell sized as (filled − fee) can never exceed the BTC
+     * credited. Booking (CompletedTrade) passes $roundUp = false to get the
+     * exact best estimate instead. Quote estimates are always exact (they
+     * never drive a quantity).
      *
      * @return array{amount:string, currency:string, quote:string, rate_bps:string, source:string}
      */
-    public function estimate(string $side, string $amount, string $price, ?BotConfig $bot = null): array
+    public function estimate(string $side, string $amount, string $price, ?BotConfig $bot = null, bool $roundUp = true): array
     {
         $side     = $this->assertSide($side);
         $rate     = $this->rateFraction($bot, $side);
         $currency = $this->expectedCurrency($side);
 
         if ($currency === self::CURRENCY_BASE) {
-            $fee = Money::ceilToScale(Money::mul($amount, $rate), $this->feeScale());
+            $fee = Money::mul($amount, $rate);
+            if ($roundUp) {
+                $fee = Money::ceilToScale($fee, $this->feeScale());
+            }
         } else {
             $fee = Money::mul(Money::mul($amount, $price), $rate);
         }

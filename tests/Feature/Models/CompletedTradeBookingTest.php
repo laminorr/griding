@@ -201,8 +201,11 @@ final class CompletedTradeBookingTest extends TestCase
         $bot = BotConfigFactory::new()->create(['buy_fee_bps' => 20, 'sell_fee_bps' => 20]);
         [$buy, $sell] = $this->filledPair($bot->id, '98000000000', '99000000000', '0.00100000');
 
-        // No bot to read overrides from → FeeModel uses the config rates.
+        // No bot on either leg to read overrides from → FeeModel uses the
+        // config rates. (Booking falls back from the buy leg's bot to the
+        // sell leg's — both legs always belong to the same bot.)
         $buy->setRelation('botConfig', null);
+        $sell->setRelation('botConfig', null);
 
         $trade = CompletedTrade::createFromOrders($buy, $sell)->fresh();
 
@@ -419,14 +422,20 @@ final class CompletedTradeBookingTest extends TestCase
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // amount = min(both legs)
+    // amount = quantity round-tripped (sell leg); residual booked, not warned
     // ─────────────────────────────────────────────────────────────────────────
 
-    /** Equal legs: booked amount is exactly that shared quantity, and the
-     *  unequal-leg warning is NOT emitted. */
-    public function test_amount_for_equal_legs_is_that_quantity_and_does_not_warn(): void
+    /**
+     * Equal legs (the OLD gross exit sizing): the cycle sold 0.001 BTC but the
+     * buy only credited 0.001 − 0.0000035 (35 bps buy fee in BTC). The
+     * booking records that as base_residual = −0.0000035 and — since it is a
+     * whole step or more — logs COMPLETED_TRADE_BASE_RESIDUAL: this is the
+     * audit D1 shortfall made visible. (Fee model Phase 6: previously equal
+     * legs were silent; the shortfall was invisible.)
+     */
+    public function test_equal_legs_book_the_gross_sizing_shortfall_as_residual_and_warn(): void
     {
-        $bot = BotConfigFactory::new()->create(['fee_bps' => 35]);
+        $bot = BotConfigFactory::new()->create();
         [$buy, $sell] = $this->filledPair($bot->id, '98000000000', '99000000000', '0.00100000');
 
         $logger = \Mockery::spy(\Psr\Log\LoggerInterface::class);
@@ -435,33 +444,29 @@ final class CompletedTradeBookingTest extends TestCase
         $trade = CompletedTrade::createFromOrders($buy, $sell)->fresh();
 
         $this->assertSame('0.00100000', $trade->amount);
-        $logger->shouldNotHaveReceived('warning');
+        $this->assertSame('-0.000003500000000000', $trade->base_residual);
+        $logger->shouldHaveReceived('warning')
+            ->once()
+            ->withArgs(fn ($message, $context = []) => $message === 'COMPLETED_TRADE_BASE_RESIDUAL'
+                && ($context['residual'] ?? null) === '-0.0000035');
     }
 
     /**
-     * Unequal legs, constructed the way production actually produces them: the
-     * buy fills only partially (requested 0.001 BTC, filled_amount 0.0005), and
-     * CheckTradesJob then sizes the continuation SELL from that filled_amount, so
-     * the sell's `amount` is 0.0005.
-     *
-     * IMPLICIT COUPLING PINNED: CheckTradesJob sizes the pair from the parent's
-     * filled_amount, but createFromOrders books min() of the two orders' `amount`
-     * columns. With buy.amount = 0.001 and sell.amount = 0.0005, the min is
-     * 0.0005 — which equals the matched (filled) quantity. So the two independent
-     * sizing rules coincide, and the trade is booked on the real matched size.
-     * The unequal-leg warning path fires because buy.amount != sell.amount.
+     * Unequal legs as production now produces them (Phase 4 fee-net exit
+     * sell): buy 0.00578704 is charged 0.00578704 × 0.0035 = 0.00002025464
+     * BTC, crediting 0.00576678536; the exit sells floor8 = 0.00576678.
+     * amount = the sold quantity, base_residual = the sub-step dust
+     * 0.00000000536, no warning.
      */
-    public function test_amount_for_unequal_legs_is_the_smaller_and_warns(): void
+    public function test_fee_net_exit_books_the_sold_quantity_and_sub_step_residual_without_warning(): void
     {
-        $bot = BotConfigFactory::new()->create(['fee_bps' => 35]);
-        // buy requested 0.001, only 0.0005 filled; sell sized from filled_amount.
+        $bot = BotConfigFactory::new()->create();
         [$buy, $sell] = $this->filledPair(
             $bot->id,
             '98000000000',
-            '99000000000',
-            buyAmount: '0.00100000',
-            sellAmount: '0.00050000',
-            buyFilledAmount: '0.00050000',
+            '99470000000',
+            buyAmount: '0.00578704',
+            sellAmount: '0.00576678',
         );
 
         $logger = \Mockery::spy(\Psr\Log\LoggerInterface::class);
@@ -469,16 +474,11 @@ final class CompletedTradeBookingTest extends TestCase
 
         $trade = CompletedTrade::createFromOrders($buy, $sell)->fresh();
 
-        // Booked on the matched quantity = min(0.001, 0.0005) = 0.0005.
-        $this->assertSame('0.00050000', $trade->amount);
-
-        // The unequal-leg warning path was exercised.
-        $logger->shouldHaveReceived('warning')
-            ->once()
-            ->withArgs(function ($message, $context = []) {
-                return $message === 'COMPLETED_TRADE_UNEQUAL_LEG_AMOUNTS'
-                    && ($context['matched_amount'] ?? null) === '0.00050000';
-            });
+        $this->assertSame('0.00576678', $trade->amount);
+        $this->assertSame('0.005787040000000000', $trade->buy_filled_amount);
+        $this->assertSame('0.005766780000000000', $trade->sell_filled_amount);
+        $this->assertSame('0.000000005360000000', $trade->base_residual);
+        $logger->shouldNotHaveReceived('warning');
     }
 
     // ─────────────────────────────────────────────────────────────────────────

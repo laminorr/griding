@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Support\Facades\Log;
 use App\Services\FeeModel;
 use App\Support\Money;
+use App\Support\QtyPrecision;
 use Carbon\Carbon;
 
 // NOTE: declare(strict_types=1) intentionally omitted here. Money::normalize()
@@ -38,7 +39,12 @@ class CompletedTrade extends Model
         'grid_level_buy',
         'grid_level_sell',
         'slippage',
-        'notes'
+        'notes',
+        // Fee model Phase 6 — per-leg fee breakdown.
+        'buy_fee_amount', 'buy_fee_currency', 'buy_fee_quote',
+        'sell_fee_amount', 'sell_fee_currency', 'sell_fee_quote',
+        'fee_source', 'buy_filled_amount', 'sell_filled_amount', 'base_residual',
+        'fee_model_version', 'profit_v0', 'net_profit_v0',
     ];
 
     protected $casts = [
@@ -52,7 +58,18 @@ class CompletedTrade extends Model
         'profit_percentage' => 'decimal:4',
         'execution_time_seconds' => 'integer',
         'slippage' => 'decimal:4',
-        'market_conditions' => 'array'
+        'market_conditions' => 'array',
+        // Fee model Phase 6 — DECIMAL(36,18), read back as exact strings.
+        'buy_fee_amount'     => 'decimal:18',
+        'buy_fee_quote'      => 'decimal:18',
+        'sell_fee_amount'    => 'decimal:18',
+        'sell_fee_quote'     => 'decimal:18',
+        'buy_filled_amount'  => 'decimal:18',
+        'sell_filled_amount' => 'decimal:18',
+        'base_residual'      => 'decimal:18',
+        'profit_v0'          => 'decimal:18',
+        'net_profit_v0'      => 'decimal:18',
+        'fee_model_version'  => 'integer',
     ];
 
     protected $appends = [
@@ -329,81 +346,79 @@ class CompletedTrade extends Model
     
     /**
      * ایجاد معامله تکمیل شده
+     *
+     * Fee model Phase 6 — books the cycle from what actually happened on each
+     * leg, all in bcmath:
+     *
+     *   quantities  buyQty / sellQty = filled_amount (else amount)
+     *   prices      buyPx / sellPx   = avg_fill_price (else the limit price)
+     *   fees        each leg's stored fee (grid_orders.fee_*, Phase 3) — the
+     *               exchange's actual fee when captured — else a FeeModel
+     *               estimate (exact, not rounded up) at the leg's rate.
+     *
+     *   Every BASE-currency fee is valued at the BUY fill price (buyPx); every
+     *   QUOTE fee is taken as is:
+     *     fee   = Σ quote fees + Σ base fees × buyPx                (rial)
+     *     gross = (sellPx − buyPx) × sellQty
+     *     net   = gross − fee
+     *   which is exactly   rialΔ + baseΔ × buyPx   with
+     *     rialΔ = sellPx·sellQty − buyPx·buyQty − Σ quote fees
+     *     baseΔ = buyQty − buyBaseFee − sellQty − sellBaseFee  (= base_residual)
+     *   i.e. the cycle's real cash flow plus the BTC it left behind, valued at
+     *   the price that BTC was bought at (docs/fee-audit.md §C1/E5).
+     *   Alternative (documented, not used): valuing BTC at the sell price
+     *   changes net by ≈ buyBaseFee × (sellPx − buyPx) — ~47k IRT on a
+     *   1.25B-IRT 1.5% cycle.
+     *
+     * Unequal legs are now the NORMAL case (a buy-first exit sells the fee-net
+     * amount; a sell-first exit buy restores the fee): `amount` is the
+     * quantity round-tripped (sellQty) and the leftover is base_residual. A
+     * residual of a whole quantity step or more is unexpected and logged.
      */
     public static function createFromOrders(GridOrder $buyOrder, GridOrder $sellOrder): self
     {
-        // Phase 10, Step 2 — every monetary calculation below now runs through
-        // the bcmath Money helper on decimal strings instead of native float/int
-        // operators. IRT prices are ~20-digit integers (which truncate on some
-        // 32-bit PDO paths) and crypto amounts are decimal:8 (which accumulate
-        // IEEE-754 rounding error); doing the arithmetic as exact big-decimals
-        // removes both classes of error from these user-facing profit numbers.
-        //
-        // Phase 9, Step 5 — defensive handling of unequal leg amounts.
-        //
-        // Today's pairing flow (CheckTradesJob::createPairOrderLocked) creates
-        // the continuation order with 'amount' => $filledOrder->amount, so the
-        // two legs are always equal in the current codebase. This guard exists
-        // so that if a future partial-fill flow (or any precision drift) ever
-        // produces unequal legs, the booked trade's numbers are correct for the
-        // matched quantity (min of the two) instead of silently using the buy
-        // side's amount and mispricing the sell notional / gross profit.
-        //
-        // The residual (buy_amount - sell_amount) is intentionally NOT tracked
-        // here — inventory/residual management is a later concern. We just make
-        // the divergence loud via a warning log.
+        $feeModel = app(FeeModel::class);
+        $bot      = $buyOrder->botConfig ?? $sellOrder->botConfig;
 
-        // Extract raw values as canonical decimal strings. GridOrder->price is a
-        // large IRT integer and amount is decimal:8; Money::normalize() coerces
-        // either representation into a bcmath-safe string with no (float)/(int)
-        // cast, so no precision is lost before the arithmetic even begins.
-        $buyPrice   = Money::normalize($buyOrder->price);
-        $sellPrice  = Money::normalize($sellOrder->price);
-        $buyAmount  = Money::normalize($buyOrder->amount);
-        $sellAmount = Money::normalize($sellOrder->amount);
+        $buyQty  = self::legQty($buyOrder);
+        $sellQty = self::legQty($sellOrder);
+        $buyPx   = self::legPrice($buyOrder);
+        $sellPx  = self::legPrice($sellOrder);
 
-        // Book the trade on the matched quantity (min of the two legs).
-        $amount = Money::min($buyAmount, $sellAmount);
+        $buyFee  = self::legFee($feeModel, $bot, $buyOrder, FeeModel::SIDE_BUY, $buyQty, $buyPx);
+        $sellFee = self::legFee($feeModel, $bot, $sellOrder, FeeModel::SIDE_SELL, $sellQty, $sellPx);
 
-        if (Money::compare($buyAmount, $sellAmount) !== 0) {
-            Log::channel('trading')->warning('COMPLETED_TRADE_UNEQUAL_LEG_AMOUNTS', [
-                'buy_order_id'   => $buyOrder->id,
-                'sell_order_id'  => $sellOrder->id,
-                'buy_amount'     => $buyAmount,
-                'sell_amount'    => $sellAmount,
-                'matched_amount' => $amount,
-                'residual'       => Money::abs(Money::sub($buyAmount, $sellAmount)),
-                'note'           => 'Booking trade on matched quantity; residual is not tracked in this step.',
+        // Value each fee in rial — base fees at the BUY fill price.
+        $buyFeeQuote  = $buyFee['currency'] === FeeModel::CURRENCY_BASE ? Money::mul($buyFee['amount'], $buyPx) : $buyFee['amount'];
+        $sellFeeQuote = $sellFee['currency'] === FeeModel::CURRENCY_BASE ? Money::mul($sellFee['amount'], $buyPx) : $sellFee['amount'];
+        $totalFee     = Money::add($buyFeeQuote, $sellFeeQuote);
+
+        $buyBaseFee  = $buyFee['currency'] === FeeModel::CURRENCY_BASE ? $buyFee['amount'] : '0';
+        $sellBaseFee = $sellFee['currency'] === FeeModel::CURRENCY_BASE ? $sellFee['amount'] : '0';
+        $residual    = Money::sub(Money::sub(Money::sub($buyQty, $buyBaseFee), $sellQty), $sellBaseFee);
+
+        $amount      = $sellQty;
+        $grossProfit = Money::mul(Money::sub($sellPx, $buyPx), $amount);
+        $netProfit   = Money::sub($grossProfit, $totalFee);
+
+        $source = $buyFee['source'] === $sellFee['source'] ? $buyFee['source'] : 'mixed';
+
+        $symbol = (string) ($bot?->symbol ?? 'BTCIRT');
+        if (Money::compare(Money::abs($residual), QtyPrecision::step($symbol)) >= 0) {
+            Log::channel('trading')->warning('COMPLETED_TRADE_BASE_RESIDUAL', [
+                'buy_order_id'  => $buyOrder->id,
+                'sell_order_id' => $sellOrder->id,
+                'buy_qty'       => $buyQty,
+                'sell_qty'      => $sellQty,
+                'buy_base_fee'  => $buyBaseFee,
+                'sell_base_fee' => $sellBaseFee,
+                'residual'      => $residual,
+                'note'          => 'Cycle left >= one quantity step of base behind (expected: < 1 step). Booked at the buy price.',
             ]);
         }
 
-        // سود ناخالص (قبل از کسر کارمزد) = (sellPrice − buyPrice) × amount
-        $grossProfit = Money::mul(Money::sub($sellPrice, $buyPrice), $amount);
-
-        // کارمزد هر طرف با نرخ همان طرف — منبع واحد: FeeModel (override ربات
-        // buy_fee_bps / sell_fee_bps، سپس config('trading.fees.*')). ستون قدیمی
-        // fee_bps دیگر خوانده نمی‌شود.
-        //
-        //   fee = buyRate × buyNotional + sellRate × sellNotional
-        //
-        // The buy fee is charged in BTC (VERIFIED); buyRate × buyNotional is that
-        // BTC fee valued at the buy price, which docs/fee-audit.md §C1 proves is
-        // the exact economic cost. A rate of 0 (explicit override "0") is taken
-        // literally. A missing bot relation falls back to config rates.
-        $feeModel = app(FeeModel::class);
-        $bot      = $buyOrder->botConfig;
-        $buyRate  = $feeModel->rateFraction($bot, FeeModel::SIDE_BUY);
-        $sellRate = $feeModel->rateFraction($bot, FeeModel::SIDE_SELL);
-
-        $buyNotional  = Money::mul($buyPrice, $amount);
-        $sellNotional = Money::mul($sellPrice, $amount);
-        $totalFee     = Money::add(Money::mul($buyRate, $buyNotional), Money::mul($sellRate, $sellNotional));
-
-        // سود خالص = سود ناخالص − کارمزد دو طرف
-        $netProfit = Money::sub($grossProfit, $totalFee);
-
-        // درصد سود ناخالص نسبت به notional خرید. مخرج صفر (قیمت یا مقدار صفر)
-        // به‌جای پرتاب DivisionByZeroError، درصد را برابر "0" قرار می‌دهد.
+        // درصد سود ناخالص نسبت به ارزش خرید همان مقدار. مخرج صفر → "0".
+        $buyNotional      = Money::mul($buyPx, $amount);
         $profitPercentage = Money::isZero($buyNotional)
             ? '0'
             : Money::mul(Money::div($grossProfit, $buyNotional), '100');
@@ -415,8 +430,10 @@ class CompletedTrade extends Model
             'bot_config_id' => $buyOrder->bot_config_id,
             'buy_order_id' => $buyOrder->id,
             'sell_order_id' => $sellOrder->id,
-            'buy_price' => $buyPrice,
-            'sell_price' => $sellPrice,
+            // DECIMAL(20,0): the fill prices to the whole rial (exact values
+            // stay on the orders' avg_fill_price).
+            'buy_price' => FeeModel::roundHalfUp($buyPx, 0),
+            'sell_price' => FeeModel::roundHalfUp($sellPx, 0),
             'amount' => $amount,
             'profit' => $netProfit,
             'fee' => $totalFee,
@@ -433,8 +450,53 @@ class CompletedTrade extends Model
                 'btc_price_at_trade' => cache('btc_price'),
                 'timestamp' => now()->toISOString(),
                 'trend' => self::detectMarketTrend()
-            ]
+            ],
+            // Fee model Phase 6 breakdown.
+            'buy_fee_amount'     => $buyFee['amount'],
+            'buy_fee_currency'   => $buyFee['currency'],
+            'buy_fee_quote'      => $buyFeeQuote,
+            'sell_fee_amount'    => $sellFee['amount'],
+            'sell_fee_currency'  => $sellFee['currency'],
+            'sell_fee_quote'     => $sellFeeQuote,
+            'fee_source'         => $source,
+            'buy_filled_amount'  => $buyQty,
+            'sell_filled_amount' => $sellQty,
+            'base_residual'      => $residual,
+            'fee_model_version'  => $feeModel->modelVersion(),
         ]);
+    }
+
+    /** A leg's matched quantity: filled_amount when positive, else amount. */
+    private static function legQty(GridOrder $o): string
+    {
+        $filled = $o->filled_amount !== null ? Money::normalize($o->filled_amount) : '0';
+        return Money::isPositive($filled) ? Money::trimZeros($filled) : Money::trimZeros(Money::normalize($o->amount ?? '0'));
+    }
+
+    /** A leg's fill price: exact avg_fill_price when known, else the limit price. */
+    private static function legPrice(GridOrder $o): string
+    {
+        $avg = $o->avg_fill_price !== null ? Money::normalize($o->avg_fill_price) : '0';
+        return Money::isPositive($avg) ? Money::trimZeros($avg) : Money::trimZeros(Money::normalize($o->price));
+    }
+
+    /**
+     * A leg's fee: the stored per-order fee (Phase 3) when present, else an
+     * exact FeeModel estimate at that leg's rate.
+     *
+     * @return array{amount:string, currency:string, source:string}
+     */
+    private static function legFee(FeeModel $fm, ?BotConfig $bot, GridOrder $o, string $side, string $qty, string $px): array
+    {
+        if ($o->fee_amount !== null && in_array($o->fee_currency, [FeeModel::CURRENCY_BASE, FeeModel::CURRENCY_QUOTE], true)) {
+            return [
+                'amount'   => Money::trimZeros(Money::normalize($o->fee_amount)),
+                'currency' => (string) $o->fee_currency,
+                'source'   => $o->fee_source === FeeModel::SOURCE_ACTUAL ? FeeModel::SOURCE_ACTUAL : FeeModel::SOURCE_ESTIMATED,
+            ];
+        }
+        $est = $fm->estimate($side, $qty, $px, $bot, roundUp: false);
+        return ['amount' => $est['amount'], 'currency' => $est['currency'], 'source' => FeeModel::SOURCE_ESTIMATED];
     }
 
     /**
