@@ -5,6 +5,7 @@ namespace App\DTOs;
 
 use App\Enums\OrderSide;
 use App\Enums\ExecutionType;
+use App\Support\QtyPrecision;
 
 /**
  * DTO ورودی ثبت سفارش (Spot / Limit/Market).
@@ -45,20 +46,13 @@ public function toApiPayload(): array
     // Assuming srcCurrency + dstCurrency in uppercase forms the symbol
     $symbol = strtoupper($this->srcCurrency . $this->dstCurrency);
 
-    // Get precision from config (default 8 if not found)
-    $amountPrecision = (int) (config("trading.exchange.precision.{$symbol}.qty_decimals") ?? 8);
-
     // Ensure we're working with strings from the start
-    $amountStr = (string) $this->amountBase;
     $priceStr = (string) $this->priceIRT;
 
-    // Truncate amount to proper precision (DOWN, not ROUND)
-    if (str_contains($amountStr, '.')) {
-        [$integer, $decimal] = explode('.', $amountStr, 2);
-        $decimal = substr($decimal, 0, $amountPrecision);
-        $amountStr = $integer . '.' . rtrim($decimal, '0');
-        $amountStr = rtrim($amountStr, '.'); // Remove trailing dot if no decimals left
-    }
+    // Truncate amount DOWN to the market quantity step (never round up). The
+    // shared helper is the same one NobitexService::placeOrder uses, so grid
+    // orders and exit orders are fitted identically.
+    $amountStr = QtyPrecision::floor((string) $this->amountBase, $symbol);
 
     // Ensure price is integer string (remove any .0)
     if (str_contains($priceStr, '.')) {

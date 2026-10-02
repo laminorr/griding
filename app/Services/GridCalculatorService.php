@@ -7,6 +7,7 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Cache;
 use App\Services\NobitexService;
+use App\Support\Money;
 
 // NOTE: declare(strict_types=1) intentionally omitted here. Money::normalize()
 // coerces float/int inputs to safe decimal strings at all call sites, and
@@ -29,8 +30,10 @@ class GridCalculatorService
     
     // Nobitex Exchange Constants
     const NOBITEX_MIN_BTC_AMOUNT = 0.000001;
-    const NOBITEX_FEE_RATE = 0.25; // 0.25% per trade
-    const EXCHANGE_SLIPPAGE = 0.1; // 0.1% estimated slippage
+    // Fee rates are NOT constants here any more: they come from
+    // App\Services\FeeModel (per-side, per-bot, config-driven). The former
+    // NOBITEX_FEE_RATE = 0.25 / EXCHANGE_SLIPPAGE = 0.1 constants were removed
+    // (fee model Phase 1): grid orders are LIMIT orders, which do not slip.
     
     // Grid Trading Limits
     const MIN_GRID_LEVELS = 4;
@@ -258,10 +261,10 @@ $orderNotional = $centerPrice * $orderSizeCrypto;
 // سود ناخالص هر چرخه (بر اساس فاصلهٔ گرید)
 $grossProfitPerCycle = $orderNotional * ($gridSpacing / 100);
 
-// کارمزدها را روی «ارزش معامله» حساب کن (نه روی سود)
-$tradingFees = $this->calculateTradingFees($orderNotional);
+// کارمزدها را روی «ارزش معامله» هر طرف حساب کن (FeeModel؛ فروش روی ارزش فروش)
+$tradingFees = $this->calculateTradingFees($orderNotional, $gridSpacing);
 
-// سود خالص هر چرخه = سود ناخالص - (کارمزد خرید+فروش + اسلیپیج)
+// سود خالص هر چرخه = سود ناخالص - (کارمزد خرید + کارمزد فروش)
 $netProfitPerCycle = $grossProfitPerCycle - $tradingFees['total_cost'];
 
 $profitMargin = $grossProfitPerCycle > 0
@@ -588,11 +591,14 @@ $profitMargin = $grossProfitPerCycle > 0
      */
     private function calculateCryptoAmount(float $irtAmount, float $price, string $symbol): float
     {
-        $cryptoAmount = $irtAmount / $price;
-        
+        // Truncate (bcmath) to the market step — never round UP past what the
+        // IRT budget buys. The float return type is kept for the existing
+        // float-based callers; an 8-dp decimal round-trips through a double and
+        // back through sprintf('%.8f') unchanged.
         $precision = $this->qtyDecimals($symbol);
-        
-        return round($cryptoAmount, $precision);
+        $exact     = Money::div(Money::normalize($irtAmount), Money::normalize($price), $precision + 10);
+
+        return (float) Money::floorToScale($exact, $precision);
     }
 
     /**
@@ -674,7 +680,11 @@ $profitMargin = $grossProfitPerCycle > 0
             'exchange' => 'Nobitex',
             'min_order_check' => $optimizedSizes['irt_value'] >= $this->minOrderIrt(),
             'precision_check' => true,
-            'estimated_fee' => round($optimizedSizes['irt_value'] * (self::NOBITEX_FEE_RATE / 100), 0),
+            // One order's fee at the FeeModel buy rate, valued in IRT.
+            'estimated_fee' => (int) FeeModel::roundHalfUp(
+                Money::mul(Money::normalize($optimizedSizes['irt_value']), app(FeeModel::class)->rateFraction(null, FeeModel::SIDE_BUY)),
+                0
+            ),
             'execution_feasible' => true
         ];
     }
@@ -719,24 +729,30 @@ private function analyzeMarketConditions(float $gridSpacing): array
     /**
      * محاسبه کارمزدهای معاملاتی
      */
-private function calculateTradingFees(float $orderNotional): array
+private function calculateTradingFees(float $orderNotional, float $gridSpacing): array
 {
-    // کارمزد واقعی روی «ارزش معامله» اعمال می‌شود (برای هر لگ خرید و فروش)
-    $feeRate  = self::NOBITEX_FEE_RATE / 100;          // 0.25% = 0.0025
-    $buyFee   = $orderNotional * $feeRate;             // کارمزد خرید
-    $sellFee  = $orderNotional * $feeRate;             // کارمزد فروش
-    $totalFee = $buyFee + $sellFee;
-
-    // اسلیپیج هم روی ناتشنال منطقی‌تر است (نه روی سود)
-    $slippage = $orderNotional * (self::EXCHANGE_SLIPPAGE / 100); // 0.1% = 0.001
+    // Per-side fees from the single source of truth (FeeModel, config rates):
+    // a buy-first cycle on this notional pays buyRate × notional on the buy
+    // and sellRate × notional × (1 + spacing) on the (larger) sell notional.
+    // bcmath throughout; the integer rounding is only for display.
+    $feeModel = app(FeeModel::class);
+    $cycle    = $feeModel->cycleEstimate(
+        FeeModel::SIDE_BUY,
+        Money::normalize($orderNotional),
+        Money::div(Money::normalize($gridSpacing), '100')
+    );
 
     return [
-        'buy_fee'          => round($buyFee, 0),
-        'sell_fee'         => round($sellFee, 0),
-        'total_fee'        => round($totalFee, 0),
-        'slippage'         => round($slippage, 0),
-        'total_cost'       => round($totalFee + $slippage, 0),
-        'fee_rate_percent' => self::NOBITEX_FEE_RATE,
+        'buy_fee'           => (int) FeeModel::roundHalfUp($cycle['buy_fee'], 0),
+        'sell_fee'          => (int) FeeModel::roundHalfUp($cycle['sell_fee'], 0),
+        'total_fee'         => (int) FeeModel::roundHalfUp($cycle['fee'], 0),
+        // Explicit: LIMIT orders execute at their price or better — no
+        // slippage is modelled (the old hard-coded 0.1% was removed).
+        'slippage'          => 0,
+        'slippage_note'     => 'limit orders: no slippage modelled',
+        'total_cost'        => (int) FeeModel::roundHalfUp($cycle['fee'], 0),
+        'buy_fee_bps'       => $feeModel->rateFor(null, FeeModel::SIDE_BUY),
+        'sell_fee_bps'      => $feeModel->rateFor(null, FeeModel::SIDE_SELL),
     ];
 }
 

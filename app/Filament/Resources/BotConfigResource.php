@@ -4,9 +4,12 @@ namespace App\Filament\Resources;
 
 use App\Filament\Resources\BotConfigResource\Pages;
 use App\Models\BotConfig;
+use App\Services\FeeModel;
 use App\Services\TradingEngineService;
+use App\Support\Money;
 use Filament\Forms;
 use Filament\Forms\Form;
+use Filament\Forms\Get;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Toggle;
 use Filament\Forms\Components\Section;
@@ -51,6 +54,63 @@ class BotConfigResource extends Resource
     // Flat sidebar: no navigationGroup so this renders directly in the flat
     // list. navigationSort places it after the tools/pages.
     protected static ?int $navigationSort = 5;
+
+    /**
+     * "Profitable" table filter: bots whose booked trades sum to a profit.
+     * `profit` is already NET of fees (CompletedTrade books profit =
+     * net_profit); the old SUM(profit - fee) subtracted the fee twice
+     * (audit D8).
+     */
+    public static function applyProfitableFilter(Builder $query): Builder
+    {
+        return $query->whereHas('completedTrades', function ($q) {
+            $q->selectRaw('SUM(profit) as net_profit')
+              ->groupBy('bot_config_id')
+              ->havingRaw('SUM(profit) > 0');
+        });
+    }
+
+    /**
+     * Minimum profitable spacing (%) for the rates currently in the form
+     * (blank overrides → config), via FeeModel.
+     */
+    public static function minimumSpacingFor(Get $get): string
+    {
+        return app(FeeModel::class)->minimumSpacingPct(self::draftBot($get('buy_fee_bps'), $get('sell_fee_bps')));
+    }
+
+    /** Form hint: the warning for the form's current values, or null. */
+    public static function spacingWarningFor(Get $get): ?string
+    {
+        return self::spacingWarning($get('grid_spacing'), $get('buy_fee_bps'), $get('sell_fee_bps'));
+    }
+
+    /**
+     * Persian warning when $spacing (%) is below FeeModel's minimum
+     * profitable spacing for these (optional) fee overrides, else null.
+     */
+    public static function spacingWarning(mixed $spacing, mixed $buyBps = null, mixed $sellBps = null): ?string
+    {
+        $spacing = trim((string) ($spacing ?? ''));
+        if ($spacing === '' || ! is_numeric($spacing)) {
+            return null;
+        }
+        $fm  = app(FeeModel::class);
+        $bot = self::draftBot($buyBps, $sellBps);
+        return $fm->spacingBelowMinimum(Money::normalize($spacing), $bot)
+            ? '⚠ کمتر از حداقل سودآور (' . $fm->minimumSpacingPct($bot) . '٪) — چرخه‌ها پس از کارمزد زیان می‌دهند'
+            : null;
+    }
+
+    /** An unsaved BotConfig carrying the form's fee overrides (for FeeModel). */
+    private static function draftBot(mixed $buyBps, mixed $sellBps): BotConfig
+    {
+        $bot = new BotConfig();
+        foreach (['buy_fee_bps' => $buyBps, 'sell_fee_bps' => $sellBps] as $f => $v) {
+            $bot->setAttribute($f, ($v === null || $v === '' || ! is_numeric($v)) ? null : (string) $v);
+        }
+        return $bot;
+    }
 
     public static function form(Form $form): Form
     {
@@ -134,7 +194,11 @@ class BotConfigResource extends Resource
                             ->minValue(0.5)
                             ->maxValue(5.0)
                             ->step(0.1)
-                            ->helperText('توصیه: 1.5% برای شروع'),
+                            ->live(onBlur: true)
+                            ->helperText(fn (Get $get) => 'توصیه: 1.5% برای شروع. حداقل فاصلهٔ سودآور پس از کارمزد: '
+                                . self::minimumSpacingFor($get) . '٪')
+                            ->hint(fn (Get $get) => self::spacingWarningFor($get))
+                            ->hintColor('danger'),
                         
                         Select::make('grid_levels')
                             ->label('تعداد سطوح')
@@ -180,6 +244,34 @@ class BotConfigResource extends Resource
                             ->minValue(5)
                             ->maxValue(50)
                             ->helperText('برای توقف اضطراری'),
+
+                        // Fee model: optional per-side overrides. Blank = NULL =
+                        // use config('trading.fees.*') via FeeModel.
+                        TextInput::make('buy_fee_bps')
+                            ->label('کارمزد خرید (bps) — اختیاری')
+                            ->numeric()
+                            ->nullable()
+                            ->minValue(0)
+                            ->maxValue(1000)
+                            ->step(0.01)
+                            ->suffix('bps')
+                            ->live(onBlur: true)
+                            ->placeholder(fn () => app(FeeModel::class)->rateFor(null, FeeModel::SIDE_BUY))
+                            ->helperText(fn () => 'خالی = پیش‌فرض (' . app(FeeModel::class)->rateFor(null, FeeModel::SIDE_BUY)
+                                . ' bps). ۲۵ bps = ۰٫۲۵٪. کارمزد خرید از BTC دریافتی کسر می‌شود.'),
+
+                        TextInput::make('sell_fee_bps')
+                            ->label('کارمزد فروش (bps) — اختیاری')
+                            ->numeric()
+                            ->nullable()
+                            ->minValue(0)
+                            ->maxValue(1000)
+                            ->step(0.01)
+                            ->suffix('bps')
+                            ->live(onBlur: true)
+                            ->placeholder(fn () => app(FeeModel::class)->rateFor(null, FeeModel::SIDE_SELL))
+                            ->helperText(fn () => 'خالی = پیش‌فرض (' . app(FeeModel::class)->rateFor(null, FeeModel::SIDE_SELL)
+                                . ' bps). فقط وقتی نرخ واقعی حساب شما متفاوت است پر کنید (هشدار FEE_RATE_DRIFT).'),
                     ]),
                     
                     Textarea::make('notes')
@@ -428,13 +520,7 @@ class BotConfigResource extends Resource
 
                 Filter::make('profitable')
                     ->label('سودآور')
-                    ->query(fn (Builder $query): Builder =>
-                        $query->whereHas('completedTrades', function ($q) {
-                            $q->selectRaw('SUM(profit - COALESCE(fee, 0)) as net_profit')
-                              ->groupBy('bot_config_id')
-                              ->havingRaw('SUM(profit - COALESCE(fee, 0)) > 0');
-                        })
-                    )
+                    ->query(fn (Builder $query): Builder => self::applyProfitableFilter($query))
                     ->toggle(),
 
                 SelectFilter::make('grid_levels')

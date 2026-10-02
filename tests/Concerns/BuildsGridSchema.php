@@ -127,7 +127,17 @@ trait BuildsGridSchema
             // Legacy / risk-management columns.
             //   (2025_07_24_214742_create_bot_configs_table
             //    + 2025_10_23_000001_add_missing_columns_to_bot_configs_table)
-            $table->unsignedSmallInteger('fee_bps')->default(35);       // 35 = 0.35%
+            $table->unsignedSmallInteger('fee_bps')->default(35);       // 35 = 0.35% (legacy, unread)
+
+            // Fee model Phase 1 (2026_10_02_000001_add_side_fee_bps_to_bot_configs_table):
+            // NULL = use config('trading.fees.*_fee_bps') via FeeModel.
+            $table->decimal('buy_fee_bps', 8, 4)->nullable();
+            $table->decimal('sell_fee_bps', 8, 4)->nullable();
+
+            // Fee model Phase 4 (2026_10_02_000003_add_base_dust_ledger):
+            // DECIMAL(36,18) default 0 in production; a string here for the
+            // same exactness reason as the grid_orders fee columns.
+            $table->string('base_dust', 40)->default('0');
             // total_capital & center_price are decimal(20,0) in production — same
             // sqlite precision caveat as capital_locked_irt above.
             $table->decimal('total_capital', 20, 0)->default(100000000);
@@ -177,6 +187,27 @@ trait BuildsGridSchema
             $table->unsignedInteger('reconcile_attempts')->default(0);
             $table->unsignedInteger('reconcile_not_found_count')->default(0);
             $table->timestamp('reconcile_last_attempt_at')->nullable();
+
+            // Fee model Phase 3 (2026_10_02_000002_add_fee_capture_columns_to_grid_orders_table).
+            // DECIMAL(36,18) in production (exact). Declared as plain strings
+            // here ON PURPOSE: sqlite's NUMERIC affinity would store a 10-12 dp
+            // fee as a REAL (double) and lose exactness, whereas TEXT keeps the
+            // exact decimal string — i.e. the same semantics MySQL DECIMAL has.
+            $table->string('fee_amount', 40)->nullable();
+            $table->string('fee_currency', 8)->nullable();
+            $table->string('fee_asset', 8)->nullable();
+            $table->string('fee_source', 16)->nullable();
+            $table->string('fee_quote', 40)->nullable();
+            $table->string('avg_fill_price', 40)->nullable();
+            $table->string('net_base_delta', 40)->nullable();
+            // Fee model Phase 4 (2026_10_02_000003_add_base_dust_ledger).
+            $table->string('exit_dust_delta', 40)->nullable();
+            // Fee model Phase 5 (2026_10_02_000004_add_rejection_and_exit_block_columns_to_grid_orders).
+            $table->string('last_error_code', 64)->nullable();
+            $table->string('last_error_message', 255)->nullable();
+            $table->string('exit_state', 16)->nullable();
+            $table->string('exit_blocked_reason', 255)->nullable();
+            $table->timestamp('exit_blocked_at')->nullable();
             $table->timestamps();
         });
 
@@ -241,6 +272,18 @@ trait BuildsGridSchema
             $table->integer('grid_level_sell')->nullable();
             $table->decimal('slippage', 10, 4)->nullable();
             $table->text('notes')->nullable();
+
+            // Fee model Phase 6 (2026_10_02_000005_add_fee_breakdown_to_completed_trades_table).
+            // DECIMAL(36,18) in production; strings here for exactness (see
+            // the grid_orders fee columns above).
+            foreach (['buy_fee_amount', 'buy_fee_quote', 'sell_fee_amount', 'sell_fee_quote',
+                      'buy_filled_amount', 'sell_filled_amount', 'base_residual', 'profit_v0', 'net_profit_v0'] as $c) {
+                $table->string($c, 40)->nullable();
+            }
+            $table->string('buy_fee_currency', 8)->nullable();
+            $table->string('sell_fee_currency', 8)->nullable();
+            $table->string('fee_source', 16)->nullable();
+            $table->unsignedSmallInteger('fee_model_version')->nullable();
 
             $table->timestamps();
         });

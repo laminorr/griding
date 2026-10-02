@@ -438,21 +438,25 @@ class TradingEngineService
                 );
             }
 
-            $feeBps = (int) ($botConfig->fee_bps ?? config('trading.fee_bps', 35));
-            // fee_rate = fee_bps / 10000 (e.g. 35 bps -> "0.0035"); the buffer is
-            // notional * fee_rate, added on top of the raw notional requirement.
-            $feeRate = Money::div((string) $feeBps, '10000');
-            $required = Money::add($requiredNotional, Money::mul($requiredNotional, $feeRate));
+            // Fee buffer from FeeModel (the old code read the non-existent key
+            // 'trading.fee_bps' and the legacy column). A buy's fee only costs
+            // QUOTE when it is charged in quote; Nobitex charges it in BASE
+            // (VERIFIED), in which case the IRT needed is exactly the notional.
+            $feeModel  = app(FeeModel::class);
+            $bufferBps = $feeModel->expectedCurrency(FeeModel::SIDE_BUY) === FeeModel::CURRENCY_QUOTE
+                ? $feeModel->rateFor($botConfig, FeeModel::SIDE_BUY)
+                : '0';
+            $required = Money::add($requiredNotional, Money::mul($requiredNotional, Money::div($bufferBps, '10000')));
 
             if (Money::compare($available, $required) < 0) {
                 return [
                     'success' => false,
                     'error' => sprintf(
-                        'Insufficient %s balance for planned buy orders: required %s (incl. %d bps fee buffer), available %s',
+                        'Insufficient %s balance for planned buy orders: required %s (incl. %s bps fee buffer), available %s',
                         strtoupper($quoteCurrency),
-                        Money::round($required, 0),
-                        $feeBps,
-                        Money::round($available, 0)
+                        Money::ceilToScale($required, 0),
+                        $bufferBps,
+                        Money::floorToScale($available, 0)
                     ),
                 ];
             }

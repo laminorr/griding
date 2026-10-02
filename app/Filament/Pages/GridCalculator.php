@@ -2,8 +2,10 @@
 
 namespace App\Filament\Pages;
 
+use App\Services\FeeModel;
 use App\Services\GridPlanner;
 use App\Services\GridCalculatorService;
+use App\Support\Money;
 use App\Services\NobitexService;
 use Filament\Pages\Page;
 use Filament\Notifications\Notification;
@@ -18,8 +20,8 @@ use Filament\Notifications\Notification;
  * honest sources ONLY:
  *
  *   • grid levels / prices / quantities / notionals  →  GridPlanner::plan()
- *   • fees + gross-profit-per-cycle                   →  the real fee_bps
- *     (config('trading.exchange.fee_bps') = 35 → 0.35%)
+ *   • fees + gross-profit-per-cycle                   →  App\Services\FeeModel
+ *     (per-side rates; buy-first vs sell-first cycle per level)
  *   • risk assessment                                 →  the PURE
  *     GridCalculatorService::assessGridRisk()
  *
@@ -63,9 +65,14 @@ class GridCalculator extends Page
     public ?array $risk = null;              // assessGridRisk() output
     public ?int $repNotional = null;         // representative per-order notional (IRT)
     public ?int $grossPerCycle = null;       // notional * spacing/100 (IRT)
-    public ?int $feePerCycle = null;         // engine fee: feeRate * notional * (2 + spacing/100) (IRT)
+    public ?int $feePerCycle = null;         // FeeModel::cycleEstimate fee for that level (IRT)
     public ?int $netPerCycle = null;         // gross - fee (IRT)
-    public ?int $feeBps = null;              // the real fee driving the numbers
+    public ?string $buyFeeBps = null;        // FeeModel buy rate (bps)
+    public ?string $sellFeeBps = null;       // FeeModel sell rate (bps)
+    public ?string $breakEvenBuyFirstPct = null;  // FeeModel::breakEvenSpacing — buy-first (fee-net sell)
+    public ?string $breakEvenSellFirstPct = null; // FeeModel::breakEvenSpacing — sell-first (as configured)
+    public ?string $minSpacingPct = null;         // max break-even + trading.fees.spacing_margin_bps
+    public bool $spacingTooTight = false;         // gridSpacing < minSpacingPct
 
     // ---- Full-round total (sum over ALL priced levels, both sides) -------
     public ?int $roundCycles = null;         // number of priced levels summed (= N placed cycles, both sides)
@@ -125,7 +132,7 @@ class GridCalculator extends Page
      */
     public function calculate(): void
     {
-        $this->reset(['plan', 'risk', 'repNotional', 'grossPerCycle', 'feePerCycle', 'netPerCycle', 'feeBps', 'calcError', 'roundCycles', 'roundGrossTotal', 'roundFeeTotal', 'roundNetTotal']);
+        $this->reset(['plan', 'risk', 'repNotional', 'grossPerCycle', 'feePerCycle', 'netPerCycle', 'buyFeeBps', 'sellFeeBps', 'breakEvenBuyFirstPct', 'breakEvenSellFirstPct', 'minSpacingPct', 'spacingTooTight', 'calcError', 'roundCycles', 'roundGrossTotal', 'roundFeeTotal', 'roundNetTotal']);
         $this->hasResults = false;
 
         // ---- Validate inputs (Persian, matches the engine's own guards) ----
@@ -188,53 +195,51 @@ class GridCalculator extends Page
         }
 
         $this->plan   = $plan;
-        $this->feeBps = (int) ($plan['fee_bps'] ?? config('trading.exchange.fee_bps'));
+        // ---- Per-cycle & full-round profit — FeeModel, per level side ------
+        // FeeModel::cycleEstimate is the same per-leg model the engine books
+        // (CompletedTrade): fee = buyRate·buyNotional + sellRate·sellNotional.
+        //   buy level  (buy-first cycle):  buyN = n,        sellN = n(1+s)
+        //   sell level (sell-first cycle): buyN = n(1−s),   sellN = n
+        //   gross = n·s, net = gross − fee.
+        // The old page used one 35-bps rate and the buy-first multiplier for
+        // every level. All arithmetic is bcmath; ints only for display.
+        $feeModel         = app(FeeModel::class);
+        $this->buyFeeBps  = $feeModel->rateFor(null, FeeModel::SIDE_BUY);
+        $this->sellFeeBps = $feeModel->rateFor(null, FeeModel::SIDE_SELL);
 
-        // ---- Per-cycle & full-round profit — the EXACT engine formula ------
-        // For ONE completed cycle on a level (CompletedTrade::createFromOrders),
-        // with buyNotional = that level's notional, paired
-        // sellNotional = buyNotional × (1 + spacing/100), the same qty on both
-        // legs, and feeRate = fee_bps/10000:
-        //     gross = buyNotional × (spacing/100)                       (= (sell−buy)×qty)
-        //     fee   = feeRate × (buyNotional + sellNotional)            ← BOTH legs, own notional
-        //           = feeRate × buyNotional × (2 + spacing/100)
-        //     net   = gross − fee
-        // The sell leg's fee is on the LARGER sell notional; the earlier
-        // 2×notional×feeRate form charged both legs on the buy notional and so
-        // overstated net by feeRate×gross per cycle. See docs/profit-accounting-audit.md.
+        // Minimum profitable spacing for these rates, both cycle directions
+        // (docs/fee-audit.md §C4), and a warning below max + margin.
+        $breakEven                   = $feeModel->breakEvenSpacing();
+        $this->breakEvenBuyFirstPct  = $breakEven['buy_first_pct'];
+        $this->breakEvenSellFirstPct = $breakEven['sell_first_effective_pct'];
+        $this->minSpacingPct         = $feeModel->minimumSpacingPct();
+        $this->spacingTooTight       = $feeModel->spacingBelowMinimum(Money::normalize($spacing));
+
         $items = $plan['items'] ?? [];
-        $s = $spacing / 100;                       // spacing as a fraction
-        $f = $this->feeBps / 10000;                // fee rate as a fraction
+        $s     = Money::div(Money::normalize($spacing), '100'); // spacing as a fraction
 
-        // Representative per-cycle figure: the first priced level's notional. In
-        // budget mode every level shares the same notional (budgetIrt / count,
-        // truncated), so this is representative; the box keeps showing ONE cycle.
-        $repNotional = 0;
+        $cycleInts = function (array $it) use ($feeModel, $s): array {
+            $c     = $feeModel->cycleEstimate((string) ($it['side'] ?? 'buy'), (string) (int) $it['notional'], $s);
+            $gross = (int) FeeModel::roundHalfUp($c['gross'], 0);
+            $fee   = (int) FeeModel::roundHalfUp($c['fee'], 0);
+            return [$gross, $fee, $gross - $fee];
+        };
+
+        // Representative per-cycle figure: the first priced level. In budget
+        // mode every level shares the same notional (budgetIrt / count).
         foreach ($items as $it) {
             if ((int) ($it['notional'] ?? 0) > 0) {
-                $repNotional = (int) $it['notional'];
+                $this->repNotional = (int) $it['notional'];
+                [$this->grossPerCycle, $this->feePerCycle, $this->netPerCycle] = $cycleInts($it);
                 break;
             }
         }
 
-        if ($repNotional > 0) {
-            $this->repNotional   = $repNotional;
-            $this->grossPerCycle = (int) round($repNotional * $s);
-            $this->feePerCycle   = (int) round($repNotional * $f * (2 + $s));
-            $this->netPerCycle   = $this->grossPerCycle - $this->feePerCycle;
-        }
-
         // Full-round total: a "full round" is EVERY placed level round-tripping
-        // its cycle exactly once, so the total = Σ (engine net) over ALL priced
-        // levels on BOTH sides — not per_side. The read-only audit
-        // (docs/both-sides-cycle-audit.md) plus real data from bot 46 confirmed
-        // that in «both» mode the bot places all N levels on init (buy + sell)
-        // and sell-initiated cycles book profit identically to buy-initiated
-        // ones. So a full round = N cycles (all placed levels). Below-min /
-        // zero-notional levels don't place orders, so they don't count, and the
-        // count is DERIVED from the levels actually summed — never hard-coded,
-        // never per_side. This is a deterministic sum of already-present
-        // notionals, NOT a projection to any time horizon.
+        // its cycle exactly once (all N levels, both sides — not per_side).
+        // Below-min / zero-notional levels place no order and are excluded.
+        // Each level is rounded to whole rial FIRST (the engine books one row
+        // per cycle), so net == gross − fee exactly.
         $cycleItems = array_values(array_filter(
             $items,
             fn ($it) => ((int) ($it['notional'] ?? 0)) > 0 && ! ($it['below_min'] ?? false),
@@ -244,18 +249,11 @@ class GridCalculator extends Page
             $grossTotal = 0;
             $feeTotal   = 0;
             $netTotal   = 0;
-            // Round each level's gross/fee to integers FIRST — the engine books
-            // an integer profit per completed trade (CompletedTrade), so a full
-            // round is the sum of those integer per-cycle records. This is the
-            // SAME per-cycle rounding the representative box above uses, applied
-            // once per priced level, and it keeps net == gross − fee exactly.
             foreach ($cycleItems as $it) {
-                $n     = (int) $it['notional'];
-                $gross = (int) round($n * $s);
-                $fee   = (int) round($n * $f * (2 + $s));
+                [$gross, $fee, $net] = $cycleInts($it);
                 $grossTotal += $gross;
                 $feeTotal   += $fee;
-                $netTotal   += $gross - $fee;
+                $netTotal   += $net;
             }
             $this->roundCycles     = count($cycleItems);
             $this->roundGrossTotal = $grossTotal;

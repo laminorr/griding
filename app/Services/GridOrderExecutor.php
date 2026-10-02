@@ -6,6 +6,7 @@ namespace App\Services;
 use App\DTOs\CreateOrderDto;
 use App\Enums\ExecutionType;
 use App\Enums\OrderSide;
+use App\Exceptions\DefinitiveOrderRejection;
 use App\Models\GridOrder;
 use App\Support\Money;
 use App\Support\OrderRegistry;
@@ -297,11 +298,31 @@ class GridOrderExecutor
                     // 'submission_unknown' and require manual or automated reconciliation
                     // (checking directly with Nobitex) before being treated as cancelled
                     // or active. Building that reconciliation job is out of scope here.
-                    $gridOrder->update([
-                        'status' => $apiCallAttempted ? 'submission_unknown' : 'cancelled',
-                    ]);
+                    //
+                    // Fee model Phase 5: a DefinitiveOrderRejection (Nobitex
+                    // answered status "failed" with InsufficientBalance,
+                    // SmallOrder, BadPrice, … or the request was refused before
+                    // sending) means the order certainly does NOT exist, so it is
+                    // 'cancelled' with last_error_code — never parked as
+                    // submission_unknown.
+                    if ($e instanceof DefinitiveOrderRejection) {
+                        $gridOrder->update([
+                            'status'             => 'cancelled',
+                            'last_error_code'    => $e->errorCode(),
+                            'last_error_message' => mb_substr($e->getMessage(), 0, 255),
+                        ]);
+                    } else {
+                        $gridOrder->update([
+                            'status' => $apiCallAttempted ? 'submission_unknown' : 'cancelled',
+                        ]);
+                    }
                 }
-                Log::channel('trading')->error('EXEC_PLACE_ERR', ['symbol'=>$symbol,'err'=>$e->getMessage(),'plan'=>$p,'api_call_attempted'=>$apiCallAttempted]);
+                Log::channel('trading')->error('EXEC_PLACE_ERR', [
+                    'symbol' => $symbol, 'err' => $e->getMessage(), 'plan' => $p,
+                    'api_call_attempted' => $apiCallAttempted,
+                    'definitive' => $e instanceof DefinitiveOrderRejection,
+                    'code' => $e instanceof DefinitiveOrderRejection ? $e->errorCode() : null,
+                ]);
             }
         }
 

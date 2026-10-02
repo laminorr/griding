@@ -23,6 +23,9 @@ final readonly class OrderStatusDto
      * @param int|null $priceIRT قیمت سفارش (IRT) — برای MARKET ممکن است null باشد
      * @param int $createdAtTs زمان ایجاد (epoch ms)
      * @param int|null $updatedAtTs آخرین بروزرسانی (epoch ms)
+     * @param string|null $fee          کارمزد تجمعی گزارش‌شده توسط صرافی (decimal string) — null اگر در پاسخ نبود
+     * @param string|null $averagePrice میانگین قیمت اجرا (decimal string) — null اگر در پاسخ نبود
+     * @param string|null $totalPrice   ارزش ریالی بخش اجراشده (decimal string) — null اگر در پاسخ نبود
      */
     public function __construct(
         public string $orderId,
@@ -34,6 +37,9 @@ final readonly class OrderStatusDto
         public ?int $priceIRT,
         public int $createdAtTs,
         public ?int $updatedAtTs = null,
+        public ?string $fee = null,
+        public ?string $averagePrice = null,
+        public ?string $totalPrice = null,
     ) {}
 
     /**
@@ -53,7 +59,30 @@ final readonly class OrderStatusDto
         $createdAt = isset($row['createdAt']) ? self::normalizeTs($row['createdAt']) : (int) round(microtime(true) * 1000);
         $updatedAt = isset($row['updatedAt']) ? self::normalizeTs($row['updatedAt']) : null;
 
-        return new self($orderId, $status, $side, $execution, $amount, $filled, $price, $createdAt, $updatedAt);
+        // Fee model Phase 3: POST /market/orders/status carries `fee` (cumulative,
+        // in the currency the exchange charged), `averagePrice` and `totalPrice`
+        // (host check V2). Absent or non-numeric values stay null — callers then
+        // fall back to FeeModel estimates / the limit price.
+        $fee          = self::decimalOrNull($row['fee'] ?? null);
+        $averagePrice = self::decimalOrNull($row['averagePrice'] ?? null);
+        $totalPrice   = self::decimalOrNull($row['totalPrice'] ?? null);
+
+        return new self($orderId, $status, $side, $execution, $amount, $filled, $price, $createdAt, $updatedAt, $fee, $averagePrice, $totalPrice);
+    }
+
+    /** A plain non-negative decimal string, or null (no floats, no exponents). */
+    private static function decimalOrNull(mixed $v): ?string
+    {
+        if (is_int($v)) {
+            return $v >= 0 ? (string) $v : null;
+        }
+        if (is_float($v)) {
+            return is_finite($v) && $v >= 0 ? \App\Support\Money::normalize($v) : null;
+        }
+        if (is_string($v) && preg_match('/^\d+(\.\d+)?$/', trim($v))) {
+            return trim($v);
+        }
+        return null;
     }
 
     private static function normalizeTs(int|string $ts): int
@@ -84,6 +113,9 @@ final readonly class OrderStatusDto
             'priceIRT'     => $this->priceIRT,
             'createdAtTs'  => $this->createdAtTs,
             'updatedAtTs'  => $this->updatedAtTs,
+            'fee'          => $this->fee,
+            'averagePrice' => $this->averagePrice,
+            'totalPrice'   => $this->totalPrice,
         ];
     }
 }

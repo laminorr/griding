@@ -73,7 +73,8 @@ final class GridPlannerTest extends TestCase
         config([
             'trading.min_order_value_irt'          => 3_000_000,
             'trading.ticks.BTCIRT'                 => 10,
-            'trading.exchange.fee_bps'             => 35,
+            'trading.fees.buy_fee_bps'             => '25',
+            'trading.fees.sell_fee_bps'            => '25',
             'trading.exchange.precision.BTCIRT.qty_decimals' => 8,
         ]);
     }
@@ -586,24 +587,28 @@ final class GridPlannerTest extends TestCase
     public function test_estimated_notional_and_fee_are_consistent_with_the_items(): void
     {
         // Compute the expectation INDEPENDENTLY from the returned items, not by
-        // re-calling GridPlanner:
+        // re-calling GridPlanner. Fee model Phase 1: each side is charged at its
+        // OWN FeeModel rate (distinct values here prove the per-side split):
         //   estimated_notional = sum(item.notional)
-        //   estimated_fee_irt  = ceil(sum * fee_bps / 10000)
-        //                      = intdiv(sum * fee_bps + 9999, 10000)
-        config(['trading.exchange.fee_bps' => 35]);
+        //   estimated_fee_irt  = ceil((Σbuy·buy_bps + Σsell·sell_bps) / 10000)
+        config(['trading.fees.buy_fee_bps' => '25', 'trading.fees.sell_fee_bps' => '35']);
 
         $plan = $this->planner()->plan(self::SYMBOL, 100_000, 6, 1.0, 'both', 60_000_000, tick: 10);
 
         $sumNotional = array_sum(array_column($plan['items'], 'notional'));
         $this->assertSame($sumNotional, $plan['estimated_notional'], 'estimated_notional is the item notional sum');
 
-        $feeBps      = (int) config('trading.exchange.fee_bps');
-        $expectedFee = intdiv($sumNotional * $feeBps + 9999, 10000);
-        $this->assertSame($expectedFee, $plan['estimated_fee_irt'], 'fee is ceil(sum * fee_bps / 10000)');
+        $buySum  = array_sum(array_column($this->side($plan, 'buy'), 'notional'));
+        $sellSum = array_sum(array_column($this->side($plan, 'sell'), 'notional'));
+        $expectedFee = intdiv($buySum * 25 + $sellSum * 35 + 9999, 10000);
+        $this->assertSame($expectedFee, $plan['estimated_fee_irt'], 'fee is ceil((Σbuy·25 + Σsell·35) / 10000)');
+        $this->assertSame('25', $plan['buy_fee_bps']);
+        $this->assertSame('35', $plan['sell_fee_bps']);
 
-        // Sanity anchor for this specific scenario (6 * 10_000_000 = 60_000_000):
+        // Sanity anchor for this specific scenario (3 buys + 3 sells × 10_000_000):
+        //   30_000_000 × 25/10000 + 30_000_000 × 35/10000 = 75_000 + 105_000
         $this->assertSame(60_000_000, $plan['estimated_notional']);
-        $this->assertSame(210_000, $plan['estimated_fee_irt']);
+        $this->assertSame(180_000, $plan['estimated_fee_irt']);
     }
 
     // =====================================================================

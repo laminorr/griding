@@ -179,24 +179,25 @@ class TestNobitexApi extends Command
             foreach ($majorCurrencies as $currency) {
                 $cur = strtoupper($currency);
                 if (isset($balances[$currency])) {
-                    $available = $balances[$currency]['available'] ?? '0';
-                    $locked = $balances[$currency]['locked'] ?? '0';
+                    $available = (string) ($balances[$currency]['available'] ?? '0');
+                    $locked    = (string) ($balances[$currency]['locked'] ?? '0');
+                    $total     = (string) ($balances[$currency]['total'] ?? $available);
 
                     if ($this->option('verbose')) {
-                        $this->line("   {$cur}: {$available} (available), {$locked} (locked)");
+                        $this->line("   {$cur}: {$available} (available/free), {$locked} (locked), {$total} (total)");
                     } else {
                         // Only show if non-zero
-                        if ((float)$available > 0 || (float)$locked > 0) {
-                            $this->line("   {$cur}: {$available}");
+                        if (\App\Support\Money::isPositive($total)) {
+                            $this->line("   {$cur}: {$available} free / {$total} total");
                         }
                     }
                 }
             }
 
             // Check for trading balance (IRT/RLS)
-            $irtBalance = (float)($balances['rls']['available'] ?? $balances['irt']['available'] ?? 0);
-            if ($irtBalance < 10_000_000) { // Less than 10M IRT
-                $this->warn("   ⚠️  Low IRT balance for trading: " . number_format($irtBalance));
+            $irtBalance = (string) ($balances['rls']['available'] ?? $balances['irt']['available'] ?? '0');
+            if (\App\Support\Money::compare($irtBalance, '10000000') < 0) { // Less than 10M IRT free
+                $this->warn("   ⚠️  Low free IRT balance for trading: " . $irtBalance);
             }
 
             $this->info("   ✅ Wallets retrieved successfully\n");
@@ -321,11 +322,13 @@ class TestNobitexApi extends Command
         try {
             $minOrderValue = Config::get('trading.exchange.min_order_value_irt', 0);
             $allowedSymbols = Config::get('trading.exchange.allowed_symbols', []);
-            $feeBps = Config::get('trading.exchange.fee_bps', 35);
-            $feePercent = $feeBps / 100.0;
+            // Fee rates come only from FeeModel (config rates; per side).
+            $feeModel   = app(\App\Services\FeeModel::class);
+            $buyFeePct  = \App\Support\Money::div($feeModel->rateFor(null, 'buy'), '100');
+            $sellFeePct = \App\Support\Money::div($feeModel->rateFor(null, 'sell'), '100');
 
             $this->line("   💰 Min Order Value (IRT): " . number_format($minOrderValue));
-            $this->line("   💸 Exchange Fee: {$feePercent}%");
+            $this->line("   💸 Exchange Fee: buy {$buyFeePct}% (" . $feeModel->expectedCurrency('buy') . "), sell {$sellFeePct}% (" . $feeModel->expectedCurrency('sell') . ")");
             $this->line("   📊 Allowed Symbols: " . implode(', ', $allowedSymbols));
 
             if ($this->option('verbose')) {

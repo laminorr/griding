@@ -5,7 +5,12 @@ namespace App\Jobs;
 use App\Models\BotConfig;
 use App\Models\GridOrder;
 use App\Models\CompletedTrade;
+use App\Exceptions\DefinitiveOrderRejection;
+use App\Services\ExitRejectionHandler;
+use App\Services\ExitSizer;
+use App\Services\FeeModel;
 use App\Services\NobitexService;
+use App\Services\SimulatedBasePosition;
 use App\Services\TradingEngineService;
 use App\Services\BotActivityLogger;
 use App\Services\MarketDataLayer;
@@ -122,9 +127,13 @@ class CheckTradesJob implements ShouldQueue
             }
 
             // اگر سفارشی پر شده، سفارش جدید در طرف مقابل ایجاد کن
+            // exit_state IS NULL: a fill whose exit was definitively rejected
+            // ('blocked') or resolved by hand ('cleared') is not re-paired
+            // automatically (Phase 5) — see `php artisan grid:exit-blocked`.
             $filledOrders = $bot->gridOrders()
-                ->where('status', 'filled')
                 ->whereNull('paired_order_id')
+                ->whereNull('exit_state')
+                ->where(fn ($q) => self::scopePairable($q))
                 ->get();
 
             Log::info("CheckTradesJob: Found {$filledOrders->count()} filled orders without pair for bot {$bot->name}");
@@ -227,12 +236,28 @@ class CheckTradesJob implements ShouldQueue
 
                 DB::beginTransaction();
                 try {
+                    // Fee model Phase 3 — a simulated limit order fills in full
+                    // at its own price. Record the same ledger + fee columns a
+                    // live fill gets, with a FeeModel ESTIMATE as the fee
+                    // (fee_source 'estimated'), so simulation exits are sized by
+                    // the same fee-aware path as live (Phase 4).
+                    $simFilled = self::dec($order->original_amount ?? $order->amount);
+                    $simPrice  = self::dec($order->price);
+                    $simFields = app(FeeModel::class)->fillFields($bot, (string) $order->type, $symbol, $simFilled, $simPrice);
+
                     $order->update([
-                        'status' => 'filled',
-                        'filled_at' => now(),
-                    ]);
+                        'status'             => 'filled',
+                        'filled_at'          => now(),
+                        'original_amount'    => $simFilled,
+                        'filled_amount'      => $simFilled,
+                        'remaining_amount'   => '0',
+                        'average_fill_price' => $simPrice,
+                        'last_fill_at'       => now(),
+                    ] + $simFields);
 
                     app(BotActivityLogger::class)->logOrderFilled($bot->id, $order);
+
+                    app(ExitSizer::class)->settleExitBuyFill($order, $bot);
 
                     $this->createCompletedTradeIfPaired($order, $bot);
 
@@ -381,6 +406,39 @@ class CheckTradesJob implements ShouldQueue
     }
 
     /**
+     * Which unpaired rows get an exit: every 'filled' order and — when
+     * trading.fees.exit_for_partial_cancels is on (default) — a non-exit order
+     * that was CANCELLED after a partial execution (audit D12). The latter is
+     * limited to rows whose fill was captured by the fee model (fee_source set,
+     * i.e. cancelled after this deploy), so historic rows are never re-paired
+     * by surprise. A partial too small to exit is absorbed into base_dust at
+     * pairing time (ExitSizer::absorbIntoDust).
+     */
+    private static function scopePairable($q): void
+    {
+        $q->where('status', 'filled');
+        if ((bool) config('trading.fees.exit_for_partial_cancels', true)) {
+            $q->orWhere(fn ($c) => $c->where('status', 'cancelled')
+                ->whereNotNull('fee_source')
+                ->where('filled_amount', '>', 0)
+                ->where(fn ($r) => $r->whereNull('role')->orWhere('role', '!=', 'cycle_exit')));
+        }
+    }
+
+    /** In-memory twin of scopePairable() for a single row. */
+    private static function isPairable(GridOrder $o): bool
+    {
+        if ($o->status === 'filled') {
+            return true;
+        }
+        return (bool) config('trading.fees.exit_for_partial_cancels', true)
+            && $o->status === 'cancelled'
+            && $o->fee_source !== null
+            && $o->role !== 'cycle_exit'
+            && Money::isPositive(self::dec($o->filled_amount));
+    }
+
+    /**
      * Single-order entry point (W4) — used by ProcessOrderEventJob when a
      * private WS order event arrives. It runs the SAME code the minute poller
      * runs for one order, nothing new:
@@ -449,12 +507,57 @@ class CheckTradesJob implements ShouldQueue
 
         // Same pairing step processBot() runs for filled-but-unpaired orders.
         $order->refresh();
-        if ($order->status === 'filled' && $order->paired_order_id === null) {
+        if ($order->paired_order_id === null && $order->exit_state === null && self::isPairable($order)) {
             $result['pair_attempted'] = true;
             $this->createPairOrder($order, $bot);
         }
 
         return $result;
+    }
+
+    /**
+     * A decimal string for an exchange/DB quantity; anything non-numeric → '0'.
+     * Keeps bcmath from throwing on a malformed payload value.
+     */
+    private static function dec(mixed $v): string
+    {
+        if ($v === null || $v === '' || is_bool($v) || is_array($v) || is_object($v)) {
+            return '0';
+        }
+        if (is_string($v) && !is_numeric($v)) {
+            return '0';
+        }
+        return Money::normalize(is_string($v) ? trim($v) : $v);
+    }
+
+    /**
+     * Fee model Phase 3 — the fee/fill-price columns for a fill reported by
+     * the exchange, via FeeModel::fillFields (actual fee classified, else
+     * estimated). Shared by handleFilledOrder / handlePartialFill /
+     * handleCanceledOrder, i.e. by BOTH the minute poller and the W4
+     * single-order path. average_fill_price (DECIMAL(20,0)) carries the exact
+     * average rounded to a whole rial; avg_fill_price keeps it exact.
+     *
+     * @param \App\DTOs\OrderStatusDto $statusDto
+     */
+    private function fillFieldsFromStatus(GridOrder $order, BotConfig $bot, $statusDto, string $filled): array
+    {
+        $limitPrice = self::dec($statusDto->priceIRT ?? $order->price);
+
+        $fields = app(FeeModel::class)->fillFields(
+            $bot,
+            (string) $order->type,
+            (string) ($bot->symbol ?? 'BTCIRT'),
+            $filled,
+            $limitPrice,
+            $statusDto->averagePrice ?? null,
+            $statusDto->fee ?? null,
+            $statusDto->totalPrice ?? null,
+        );
+
+        $fields['average_fill_price'] = FeeModel::roundHalfUp($fields['avg_fill_price'] ?? $limitPrice, 0);
+
+        return $fields;
     }
 
     /**
@@ -479,10 +582,12 @@ class CheckTradesJob implements ShouldQueue
         // filledBase). This check MUST run before the status-unchanged early
         // return below, because ACTIVE maps to 'placed' and a placed order
         // with a growing partial fill would otherwise be silently skipped.
-        $originalAmount = (float) ($order->original_amount ?? $order->amount);
-        $filledBase     = (float) $statusDto->filledBase;
+        $originalAmount = self::dec($order->original_amount ?? $order->amount);
+        $filledBase     = self::dec($statusDto->filledBase);
 
-        if ($apiStatus === 'ACTIVE' && $filledBase > 0 && $filledBase < $originalAmount) {
+        if ($apiStatus === 'ACTIVE'
+            && Money::isPositive($filledBase)
+            && Money::compare($filledBase, $originalAmount) < 0) {
             $this->handlePartialFill($order, $statusDto, $bot);
             return;
         }
@@ -547,16 +652,16 @@ class CheckTradesJob implements ShouldQueue
             // the API row arrived as '0' and zeroed the order). The requested
             // amount now stays in 'amount' / 'original_amount' and the actual
             // executed quantity goes to 'filled_amount'.
-            $originalAmount = $order->original_amount ?? $order->amount;
+            $originalAmount = self::dec($order->original_amount ?? $order->amount);
 
             // filledBase of '0' on a DONE order means the API row lacked
             // matchedAmount — fall back to the requested amount rather than
             // recording a zero-quantity fill.
-            $filledBase = ((float) $statusDto->filledBase > 0)
-                ? $statusDto->filledBase
-                : (string) $order->amount;
+            $filledBase = Money::isPositive(self::dec($statusDto->filledBase))
+                ? self::dec($statusDto->filledBase)
+                : self::dec($order->amount);
 
-            if ((float) $filledBase < (float) $originalAmount) {
+            if (Money::compare($filledBase, $originalAmount) < 0) {
                 // Unusual: Nobitex reports the order DONE but matched less
                 // than requested. Keep the original amount intact and make
                 // the divergence loud.
@@ -569,22 +674,26 @@ class CheckTradesJob implements ShouldQueue
                 ]);
             }
 
+            // Fee model Phase 3: persist the exchange's actual cumulative fee
+            // (classified base/quote) or a FeeModel estimate, the exact
+            // average fill price, and the net base change.
             $order->update([
                 'status'             => 'filled',
                 'filled_at'          => now(),
                 'original_amount'    => $originalAmount,
                 'filled_amount'      => $filledBase,
-                'remaining_amount'   => number_format(max(0, (float) $originalAmount - (float) $filledBase), 8, '.', ''),
-                // DTO has no true average-fill-price field; for our limit
-                // orders the API's priceIRT (or our own price) is the fill price.
-                'average_fill_price' => $statusDto->priceIRT ?? $order->price,
+                'remaining_amount'   => Money::max('0', Money::sub($originalAmount, $filledBase)),
                 'last_fill_at'       => now(),
-            ]);
+            ] + $this->fillFieldsFromStatus($order, $bot, $statusDto, $filledBase));
 
             Log::info("CheckTradesJob: Order {$order->id} marked as filled - Price: {$order->price}, Amount: {$order->amount}, Filled: {$order->filled_amount}, Type: {$order->type}");
 
             // Log order filled
             $logger->logOrderFilled($bot->id, $order);
+
+            // Fee model Phase 4: a sell-first cycle closes here — book the exit
+            // buy's real remainder into the bot's base_dust ledger.
+            app(ExitSizer::class)->settleExitBuyFill($order, $bot);
 
             // ایجاد رکورد CompletedTrade (اگر سفارش جفتی دارد)
             $this->createCompletedTradeIfPaired($order, $bot);
@@ -622,32 +731,30 @@ class CheckTradesJob implements ShouldQueue
     {
         // Backfill original_amount on first detection so the requested
         // quantity survives even for rows created before Phase 9, Step 1.
-        $originalAmount = $order->original_amount ?? $order->amount;
-        $filledBase     = (float) $statusDto->filledBase;
+        $originalAmount = self::dec($order->original_amount ?? $order->amount);
+        $filledBase     = self::dec($statusDto->filledBase);
 
         // Idempotence: repeated polls with an unchanged matched amount must
         // not rewrite the row (and must not bump last_fill_at).
         if ($order->status === 'partially_filled'
-            && (float) $order->filled_amount === $filledBase) {
+            && $order->filled_amount !== null
+            && Money::compare(self::dec($order->filled_amount), $filledBase) === 0) {
             Log::debug("CheckTradesJob: Order {$order->id} partial fill unchanged at {$statusDto->filledBase} — nothing to update");
             return;
         }
 
-        $remaining = number_format(max(0, (float) $originalAmount - $filledBase), 8, '.', '');
+        $remaining = Money::max('0', Money::sub($originalAmount, $filledBase));
 
         $order->update([
             'status'             => 'partially_filled',
             // 'amount' is intentionally NOT touched — it stays the originally
             // requested quantity; the executed part lives in filled_amount.
             'original_amount'    => $originalAmount,
-            'filled_amount'      => $statusDto->filledBase,
+            'filled_amount'      => $filledBase,
             'remaining_amount'   => $remaining,
-            // DTO has no true average-fill-price field; for our limit orders
-            // matches happen at the limit price, so priceIRT / order price is
-            // the correct fill price.
-            'average_fill_price' => $statusDto->priceIRT ?? $order->price,
             'last_fill_at'       => now(),
-        ]);
+            // Fee model Phase 3: cumulative fee so far + exact average price.
+        ] + $this->fillFieldsFromStatus($order, $bot, $statusDto, $filledBase));
 
         Log::channel('trading')->info('PARTIAL_FILL_DETECTED', [
             'order_id'           => $order->id,
@@ -693,30 +800,22 @@ class CheckTradesJob implements ShouldQueue
     {
         // Compare with BCMath discipline (Money), never a naive float == 0:
         // a tiny-but-real matched amount must count as a partial execution.
-        $filledBase = Money::normalize($statusDto->filledBase);
+        $filledBase = self::dec($statusDto->filledBase);
 
         if (Money::isPositive($filledBase)) {
-            $originalAmount = $order->original_amount ?? $order->amount;
-            $remaining      = number_format(
-                max(0, (float) $originalAmount - (float) $statusDto->filledBase),
-                8,
-                '.',
-                ''
-            );
+            $originalAmount = self::dec($order->original_amount ?? $order->amount);
+            $remaining      = Money::max('0', Money::sub($originalAmount, $filledBase));
 
             $order->update([
                 'status'             => 'cancelled', // terminal — NOT 'partially_filled'
                 // 'amount' is intentionally left as the originally requested
                 // quantity; the executed part lives in filled_amount.
                 'original_amount'    => $originalAmount,
-                'filled_amount'      => $statusDto->filledBase,
+                'filled_amount'      => $filledBase,
                 'remaining_amount'   => $remaining,
-                // DTO has no true average-fill-price field; for our limit orders
-                // matches happen at the limit price, so priceIRT / order price
-                // is the correct fill price.
-                'average_fill_price' => $statusDto->priceIRT ?? $order->price,
                 'last_fill_at'       => now(),
-            ]);
+                // Fee model Phase 3: the executed part's fee + exact avg price.
+            ] + $this->fillFieldsFromStatus($order, $bot, $statusDto, $filledBase));
 
             Log::channel('trading')->info('CANCELED_WITH_PARTIAL_FILL', [
                 'order_id'         => $order->id,
@@ -729,7 +828,7 @@ class CheckTradesJob implements ShouldQueue
                 'nobitex_order_id' => $order->nobitex_order_id,
             ]);
 
-            Log::info("CheckTradesJob: Order {$order->id} cancelled after a partial fill of {$statusDto->filledBase} — executed portion recorded, no continuation pair created");
+            Log::info("CheckTradesJob: Order {$order->id} cancelled after a partial fill of {$statusDto->filledBase} — executed portion recorded; no continuation for the remainder (the executed part gets an exit or goes to base_dust when trading.fees.exit_for_partial_cancels is on)");
             return;
         }
 
@@ -816,7 +915,11 @@ class CheckTradesJob implements ShouldQueue
 
         // Only book when BOTH legs are filled. If the partner hasn't filled
         // yet, defer — it will book when the partner's own fill is processed.
-        if ($partner->status !== 'filled') {
+        // A cancelled-with-partial partner (D12) counts as filled for its
+        // executed part (its exit was sized from that part).
+        $partnerExecuted = $partner->status === 'filled'
+            || ($partner->status === 'cancelled' && Money::isPositive(self::dec($partner->filled_amount)));
+        if (! $partnerExecuted) {
             Log::info("CheckTradesJob: Partner #{$partner->id} of order #{$order->id} not filled yet (status: {$partner->status}) — deferring");
             return;
         }
@@ -843,16 +946,16 @@ class CheckTradesJob implements ShouldQueue
             return;
         }
 
-        $profit = ($sellOrder->price - $buyOrder->price) * $buyOrder->amount;
+        Log::info("CheckTradesJob: Booking completed trade via link — buy #{$buyOrder->id} <-> sell #{$sellOrder->id}");
 
-        Log::info("CheckTradesJob: Booking completed trade via link — buy #{$buyOrder->id} <-> sell #{$sellOrder->id}, gross profit: {$profit}");
-
-        // ایجاد CompletedTrade
-        $this->recordCompletedTrade($buyOrder, $sellOrder, $bot);
+        // ایجاد CompletedTrade — every figure (gross/fee/net) is computed once,
+        // in CompletedTrade::createFromOrders via FeeModel, and logged from the
+        // persisted row; nothing is recomputed here.
+        $trade = $this->recordCompletedTrade($buyOrder, $sellOrder, $bot);
 
         // Log pairing
         $logger = app(BotActivityLogger::class);
-        $logger->logOrderPaired($bot->id, $buyOrder->id, $sellOrder->id, $profit);
+        $logger->logOrderPaired($bot->id, $buyOrder->id, $sellOrder->id, (string) $trade->gross_profit);
 
         Log::info("CheckTradesJob: ✅ Created completed trade for buy order {$buyOrder->id} and sell order {$sellOrder->id}");
     }
@@ -915,26 +1018,19 @@ class CheckTradesJob implements ShouldQueue
             ? Money::mul($filledOrder->price, Money::add('1', $spacingStr))
             : Money::mul($filledOrder->price, Money::sub('1', $spacingStr));
 
-        // IRT prices are whole-rial integers (DECIMAL(20,0)); preserve the
-        // existing rounding to the integer tick — only the raw multiplication
-        // moved to BCMath. At IRT magnitudes (~10^11) the value is far inside
-        // float's exact-integer range, so this final round stays exact.
-        $newPrice = (int) round((float) $rawPrice);
+        // IRT prices are whole-rial integers (DECIMAL(20,0)); round half-up
+        // to the integer rial on the decimal string (no float round-trip).
+        $newPrice = (int) FeeModel::roundHalfUp($rawPrice, 0);
 
         $symbol = $bot->symbol ?? 'BTCIRT';
 
-        // Phase 9, Step 7 (defensive): size the continuation order by what was
-        // actually executed, not what was requested. Today pairs are only
-        // created for fully-filled orders so the two are normally equal, but
-        // if a fill ever lands with filled_amount < amount (see
-        // FILLED_WITH_PARTIAL_QUANTITY in handleFilledOrder) the pair must
-        // reflect the real quantity. Combined with CompletedTrade's min()
-        // logic (Step 5), profit is then computed on the matched quantity.
-        $pairAmount = $filledOrder->filled_amount ?? $filledOrder->amount;
-
+        // Fee model Phase 4: the exit AMOUNT is decided by ExitSizer inside
+        // the pairing transaction below (fee-net sell / inventory-restoring
+        // buy + dust ledger). It is NOT the gross filled amount any more —
+        // that oversized every buy-first exit sell by the BTC buy fee (D1).
         $clientOrderId = GridOrder::buildClientOrderId($bot->id, $symbol, $newType, $newPrice);
 
-        Log::info("CheckTradesJob: Creating pair order - Type: {$newType}, Price: {$newPrice}, Amount: {$pairAmount} for filled order {$filledOrder->id}");
+        Log::info("CheckTradesJob: Creating pair order - Type: {$newType}, Price: {$newPrice} for filled order {$filledOrder->id}");
 
         // Dedup guard — abort before opening a transaction if this pair was
         // already placed. 'submission_unknown' is in the list because such a row
@@ -971,7 +1067,7 @@ class CheckTradesJob implements ShouldQueue
             // order while we were waiting for the per-order Cache::lock above.
             $current = GridOrder::where('id', $filledOrder->id)->lockForUpdate()->first();
 
-            if (!$current || $current->paired_order_id !== null) {
+            if (!$current || $current->paired_order_id !== null || $current->exit_state !== null) {
                 Log::channel('trading')->info('PAIR_ORDER_ALREADY_PAIRED', [
                     'filled_order_id' => $filledOrder->id,
                     'bot_id'          => $bot->id,
@@ -980,10 +1076,39 @@ class CheckTradesJob implements ShouldQueue
                 return;
             }
 
+            // Size the exit (same function for live, W4 and simulation). Locks
+            // the bot row and moves base_dust inside THIS transaction, so the
+            // reservation commits or rolls back together with the intent row.
+            $sizing     = app(ExitSizer::class)->reserve($current, $bot, (string) $newPrice);
+            $pairAmount = $sizing['amount'];
+
+            if ($current->status === 'cancelled' && $sizing['below_min']) {
+                // D12: the executed part of a cancelled order is too small
+                // for its own exit — never place a below-minimum order; move
+                // it into the dust ledger instead (folded into a later exit).
+                DB::rollBack();
+                app(ExitSizer::class)->absorbIntoDust($current, $bot, sprintf(
+                    'partial of cancelled order: exit %s %s × %s = %s IRT < min',
+                    $newType, $pairAmount, $newPrice, $sizing['notional']
+                ));
+                return;
+            }
+
+            if (! Money::isPositive($pairAmount)) {
+                // Nothing sellable (cannot happen for a real fill — credited is
+                // ~99.75% of it). Never place a zero/dust-only order.
+                DB::rollBack();
+                Log::channel('trading')->error('EXIT_SIZE_ZERO', [
+                    'bot_id' => $bot->id, 'filled_order_id' => $filledOrder->id, 'sizing' => $sizing,
+                ]);
+                return;
+            }
+
             Log::channel('trading')->info('PAIR_ORDER_PRE_CREATE', [
                 'bot_id'          => $bot->id,
                 'type'            => $newType,
                 'calculated_price'=> $newPrice,
+                'amount'          => $pairAmount,
                 'filled_order_id' => $filledOrder->id,
                 'client_order_id' => $clientOrderId,
                 'simulation'      => (bool) $bot->simulation,
@@ -998,6 +1123,8 @@ class CheckTradesJob implements ShouldQueue
                 'client_order_id' => $clientOrderId,
                 'paired_order_id' => $filledOrder->id,
                 'role'            => 'cycle_exit',
+                // Lets a cancelled-and-unlinked intent undo its dust move once.
+                'exit_dust_delta' => $newType === 'sell' ? $sizing['dust_delta'] : null,
             ]);
 
             // Back-link BEFORE the exchange call. paired_order_id means "a
@@ -1037,6 +1164,14 @@ class CheckTradesJob implements ShouldQueue
         try {
             if ($bot->simulation) {
                 // SIMULATION MODE - never call the real exchange API.
+                //
+                // Fee model Phase 7: check the exit against the bot's simulated
+                // BTC position (fills net of fees) so simulation surfaces the
+                // InsufficientBalance a live bot would hit (warning only).
+                if ($newType === 'sell') {
+                    app(SimulatedBasePosition::class)->checkExitSell($bot, $newOrder, $filledOrder->id);
+                }
+
                 $nobitexOrderId = 'SIM-' . uniqid() . '-' . time();
 
                 $newOrder->update([
@@ -1107,6 +1242,23 @@ class CheckTradesJob implements ShouldQueue
             Log::info("CheckTradesJob: Successfully created pair order {$newOrder->id} (Nobitex ID: {$nobitexOrderId}) - Type: {$newType}, Price: {$newPrice} for filled order {$filledOrder->id}");
 
         } catch (\Exception $e) {
+            if ($e instanceof DefinitiveOrderRejection) {
+                // Fee model Phase 5: the exchange (or our own pre-send check)
+                // DEFINITELY did not create this order — never park it as
+                // submission_unknown (that fed a reconcile → unlink → re-pair
+                // loop). Self-heal an under-funded exit sell once, else block
+                // the fill so it is not re-selected every minute.
+                $outcome = app(ExitRejectionHandler::class)->handle($newOrder, $filledOrder, $bot, $e);
+
+                $logger->logError($bot->id, 'سفارش جفت توسط صرافی رد شد: ' . $e->getMessage(), [
+                    'filled_order_id' => $filledOrder->id,
+                    'pair_order_id'   => $newOrder->id,
+                    'code'            => $e->errorCode(),
+                    'outcome'         => $outcome,
+                ]);
+                return;
+            }
+
             if ($apiCallAttempted) {
                 // The exchange call was attempted (AmbiguousOrderSubmissionException,
                 // dropped response, unexpected reply shape, …) — Nobitex MAY hold
@@ -1117,9 +1269,11 @@ class CheckTradesJob implements ShouldQueue
             } else {
                 // The failure happened before anything left our process — no
                 // exchange order can exist. Cancel the row and unlink the fill
-                // so the next run may attempt pairing again.
+                // so the next run may attempt pairing again; undo the row's
+                // dust reservation so the re-pair does not count it twice.
                 $newOrder->update(['status' => 'cancelled']);
                 $filledOrder->update(['paired_order_id' => null]);
+                app(ExitSizer::class)->revertDust($newOrder);
             }
 
             $logger->logError($bot->id, 'خطا در ایجاد سفارش جفت: ' . $e->getMessage(), [
@@ -1141,33 +1295,18 @@ class CheckTradesJob implements ShouldQueue
     {
         $logger = app(BotActivityLogger::class);
 
-        $buyPrice = $buyOrder->price;
-        $sellPrice = $sellOrder->price;
-        $amount = $buyOrder->amount;
-
-        // محاسبه سود/زیان برای logging.
-        // نرخ کارمزد از همان منبع رسمی‌ای خوانده می‌شود که CompletedTrade::createFromOrders
-        // برای persist استفاده می‌کند (fee_bps ربات، fallback به config). این تضمین می‌کند
-        // مقدار log شده دقیقاً با مقدار ذخیره‌شده در رکورد معامله یکی باشد.
-        $feeBps = $bot->fee_bps ?? config('trading.exchange.fee_bps', 35);
-        $feeRate = $feeBps / 10000.0; // bps → نرخ (35 bps = 0.0035)
-        $grossProfit = ($sellPrice - $buyPrice) * $amount;
-        $totalFee = (($buyPrice * $amount) + ($sellPrice * $amount)) * $feeRate;
-        $netProfit = $grossProfit - $totalFee;
-
-        // ✅ DEBUG: Log before creating trade with all details
+        // Fee model Phase 1: this method used to recompute gross/fee/net in
+        // float with its own fee-rate lookup (and on buyOrder->amount rather
+        // than the booked quantity), so the logged numbers could differ from
+        // the stored row. The row is now the only source: book first, then
+        // log exactly what was persisted.
         Log::info("🔄 Attempting to create completed trade from orders", [
             'bot_id' => $bot->id,
             'bot_name' => $bot->name,
             'buy_order_id' => $buyOrder->id,
             'sell_order_id' => $sellOrder->id,
-            'buy_price' => $buyPrice,
-            'sell_price' => $sellPrice,
-            'amount' => $amount,
-            'gross_profit' => $grossProfit,
-            'net_profit' => $netProfit,
-            'total_fee' => $totalFee,
-            'execution_time' => $sellOrder->updated_at->diffInSeconds($buyOrder->created_at),
+            'buy_price' => (string) $buyOrder->price,
+            'sell_price' => (string) $sellOrder->price,
         ]);
 
         try {
@@ -1192,11 +1331,11 @@ class CheckTradesJob implements ShouldQueue
                 'trade_id' => $trade->id,
                 'buy_order_id' => $buyOrder->id,
                 'sell_order_id' => $sellOrder->id,
-                'buy_price' => $buyPrice,
-                'sell_price' => $sellPrice,
-                'amount' => $amount,
-                'profit' => $netProfit,
-                'fee' => $totalFee,
+                'buy_price' => (string) $trade->buy_price,
+                'sell_price' => (string) $trade->sell_price,
+                'amount' => (string) $trade->amount,
+                'profit' => (string) $trade->net_profit,
+                'fee' => (string) $trade->fee,
             ]);
 
             return $trade;

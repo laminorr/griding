@@ -17,6 +17,12 @@ class GridOrder extends Model
         'original_amount','filled_amount','remaining_amount','average_fill_price','last_fill_at',
         'role',
         'reconcile_attempts','reconcile_not_found_count','reconcile_last_attempt_at',
+        // Fee model Phase 3 — per-order fee capture (see FeeModel::fillFields).
+        'fee_amount','fee_currency','fee_asset','fee_source','fee_quote','avg_fill_price','net_base_delta',
+        // Fee model Phase 4 — base_dust change caused by this exit row (ExitSizer).
+        'exit_dust_delta',
+        // Fee model Phase 5 — definitive rejections / blocked exits.
+        'last_error_code','last_error_message','exit_state','exit_blocked_reason','exit_blocked_at',
     ];
 
     protected $casts = [
@@ -40,6 +46,13 @@ class GridOrder extends Model
         'reconcile_attempts'        => 'integer',
         'reconcile_not_found_count' => 'integer',
         'reconcile_last_attempt_at' => 'datetime',
+        // DECIMAL(36,18) — read back as exact decimal strings.
+        'fee_amount'         => 'decimal:18',
+        'fee_quote'          => 'decimal:18',
+        'avg_fill_price'     => 'decimal:18',
+        'net_base_delta'     => 'decimal:18',
+        'exit_dust_delta'    => 'decimal:18',
+        'exit_blocked_at'    => 'datetime',
     ];
 
     /**

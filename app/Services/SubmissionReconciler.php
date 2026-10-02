@@ -450,6 +450,9 @@ class SubmissionReconciler
             $parent = GridOrder::where('id', $parentFillId)->lockForUpdate()->first();
             if ($parent && (int) $parent->paired_order_id === (int) $row->id) {
                 $parent->forceFill(['paired_order_id' => null])->save();
+                // Fee model Phase 4: the fill will be re-sized when re-paired,
+                // so undo this exit row's base_dust reservation (idempotent).
+                app(ExitSizer::class)->revertDust($row);
             }
         });
     }
