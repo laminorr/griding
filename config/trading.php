@@ -238,6 +238,18 @@ return [
         'candle_symbols' => array_values(array_filter(array_map('trim', explode(',', (string) env('NOBITEX_WS_CANDLE_SYMBOLS', 'BTCIRT'))), fn ($v) => $v !== '')),
         'candle_resolutions' => array_values(array_filter(array_map('trim', explode(',', (string) env('NOBITEX_WS_CANDLE_RESOLUTIONS', '1,15,60,D'))), fn ($v) => $v !== '')),
 
+        // W4: when true, ExchangeWsEventRecorder dispatches ProcessOrderEventJob
+        // for actionable private:orders events (Done / Canceled / Inactive /
+        // Active with a fill) matched to a grid order, so the order is re-checked
+        // via REST right away instead of on the next CheckTradesJob minute. The
+        // event is only a trigger; the minute poller stays on as the safety net.
+        // false (default): events are recorded exactly as in W3, nothing is
+        // dispatched. Roll back (no deploy): set NOBITEX_WS_ACT_ON_EVENTS=false,
+        // run `php artisan config:clear`, then restart the long-running
+        // nobitex:ws-private process (it read config at boot), e.g.
+        // `pkill -f nobitex:ws-private` and let its keepalive cron restart it.
+        'act_on_private_events' => (bool) env('NOBITEX_WS_ACT_ON_EVENTS', false),
+
         // WsFeedHealthCheck thresholds (log-only).
         'health' => [
             // No frame at all (not even a {} ping) for this long -> CRITICAL WS_FEED_DEAD
