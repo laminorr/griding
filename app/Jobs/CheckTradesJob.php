@@ -10,6 +10,7 @@ use App\Services\ExitRejectionHandler;
 use App\Services\ExitSizer;
 use App\Services\FeeModel;
 use App\Services\NobitexService;
+use App\Services\SimulatedBasePosition;
 use App\Services\TradingEngineService;
 use App\Services\BotActivityLogger;
 use App\Services\MarketDataLayer;
@@ -1114,6 +1115,14 @@ class CheckTradesJob implements ShouldQueue
         try {
             if ($bot->simulation) {
                 // SIMULATION MODE - never call the real exchange API.
+                //
+                // Fee model Phase 7: check the exit against the bot's simulated
+                // BTC position (fills net of fees) so simulation surfaces the
+                // InsufficientBalance a live bot would hit (warning only).
+                if ($newType === 'sell') {
+                    app(SimulatedBasePosition::class)->checkExitSell($bot, $newOrder, $filledOrder->id);
+                }
+
                 $nobitexOrderId = 'SIM-' . uniqid() . '-' . time();
 
                 $newOrder->update([
