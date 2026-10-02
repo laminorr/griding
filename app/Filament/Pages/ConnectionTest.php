@@ -6,6 +6,7 @@ use Filament\Pages\Page;
 use Filament\Actions\Action;
 use Filament\Notifications\Notification;
 use App\Services\NobitexService;
+use App\Support\Money;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Exception;
@@ -209,17 +210,16 @@ class ConnectionTest extends Page
             $nobitex = app(NobitexService::class);
             $balance = $nobitex->getBalances();
 
-            if ($this->simulationMode) {
-                $this->accountBalance = [
-                    'btc' => $balance['btc']['available'] ?? 0,
-                    'irt' => number_format($balance['rls']['available'] ?? 0, 0)
-                ];
-            } else {
-                $this->accountBalance = [
-                    'btc' => $balance['btc']['available'] ?? 0,
-                    'irt' => number_format($balance['rls']['available'] ?? 0, 0)
-                ];
-            }
+            // getBalances(): available = FREE (activeBalance), total = balance.
+            // Show both so funds locked in open orders are visible. Strings only.
+            $btcFree  = (string) ($balance['btc']['available'] ?? '0');
+            $btcTotal = (string) ($balance['btc']['total'] ?? $btcFree);
+            $irtFree  = Money::floorToScale((string) ($balance['rls']['available'] ?? '0'), 0);
+            $irtTotal = Money::floorToScale((string) ($balance['rls']['total'] ?? $irtFree), 0);
+            $this->accountBalance = [
+                'btc' => "{$btcFree} آزاد / {$btcTotal} کل",
+                'irt' => number_format((int) $irtFree) . ' آزاد / ' . number_format((int) $irtTotal) . ' کل',
+            ];
             
             $mode = $this->simulationMode ? ' (شبیه‌سازی)' : '';
             

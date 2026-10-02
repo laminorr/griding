@@ -157,7 +157,7 @@ class GridPlanner
         $presetSellQty = null;
         if ($presetBaseQty !== null && Money::isPositive($presetBaseQty) && $sellCount > 0) {
             $perRaw        = Money::div($presetBaseQty, (string) $sellCount, $qtyDecimals + 10);
-            $presetSellQty = $this->formatQty((float) $perRaw, $qtyDecimals);
+            $presetSellQty = $this->formatQty($perRaw, $qtyDecimals);
             // A preset so small it rounds to zero per level is treated as "no
             // preset" rather than emitting zero-qty sells.
             if (!Money::isPositive($presetSellQty)) {
@@ -180,10 +180,10 @@ class GridPlanner
             } elseif ($budgetIrt > 0 && $count > 0) {
                 // scale 0 truncates == floor/intdiv for positive operands
                 $notional = (int) Money::div((string) $budgetIrt, (string) $count, 0);
-                // exact division on strings; formatQty applies the same number_format
-                // rounding + trailing-zero trim as before (10 guard digits keep the round stable).
+                // exact division on strings; formatQty TRUNCATES to the market
+                // step (never rounds up past the budget-derived quantity).
                 $qtyRaw   = Money::div((string) $notional, (string) max($price, 1), $qtyDecimals + 10);
-                $qty      = $this->formatQty((float) $qtyRaw, $qtyDecimals);
+                $qty      = $this->formatQty($qtyRaw, $qtyDecimals);
             } else {
                 $qty      = '0';
                 $notional = 0;
@@ -254,10 +254,16 @@ class GridPlanner
         return $hasRemainder ? ($q + 1) * $tick : $price;
     }
 
-    protected function formatQty(float $qty, int $dec = 6): string
+    /**
+     * Fit a quantity to $dec decimals by TRUNCATING (bcmath, no float).
+     *
+     * This used to be number_format() (round half-up), which could plan a
+     * level up to half a step ABOVE the exact budget/holdings share; the sum
+     * of preset sells could then exceed the BTC actually held (audit A.2).
+     */
+    protected function formatQty(string $qty, int $dec = 6): string
     {
-        $s = number_format($qty, $dec, '.', '');
-        $s = rtrim(rtrim($s, '0'), '.');
-        return $s === '' ? '0' : $s;
+        $s = Money::floorToScale($qty, $dec);
+        return $s === '' || $s === '-0' ? '0' : $s;
     }
 }

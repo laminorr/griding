@@ -14,6 +14,8 @@ use App\DTOs\CreateOrderResponse;
 use App\DTOs\OrderBookDto;
 use App\DTOs\OrderStatusDto;
 use App\DTOs\WalletsDto;
+use App\Support\Money;
+use App\Support\QtyPrecision;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\RequestException;
@@ -1194,6 +1196,22 @@ class NobitexService implements ExchangeClient
 
     /**
      * خلاصهٔ تمام موجودی‌ها (آرایه ساده) — برای نمایش سریع داشبورد/پنل
+     *
+     * Per currency (decimal strings, never floats):
+     *   available — FREE balance usable for a new order  = wallet activeBalance
+     *   locked    — balance held by open orders            = wallet blockedBalance
+     *   total     — available + locked                     = wallet balance
+     *
+     * VERIFIED on the host (POST /users/wallets/list): wallet keys are
+     * balance / blockedBalance / activeBalance — there is NO `blocked` key.
+     * The old code read `balance` as "available" and `blocked` (always absent →
+     * 0) as "locked", so every caller saw the TOTAL as free (audit D9).
+     *
+     * If activeBalance is ever missing, available falls back to
+     * balance − blockedBalance (or the legacy `blocked`), logged once per
+     * process so the shape change is visible without flooding the log.
+     *
+     * @return array<string, array{available:string, locked:string, total:string}>
      */
     public function getBalances(): array
     {
@@ -1207,12 +1225,49 @@ class NobitexService implements ExchangeClient
         foreach (($data['wallets'] ?? []) as $w) {
             $cur = $w['currency'] ?? null;
             if (!$cur) continue;
+
+            $total  = self::decimalOrZero($w['balance'] ?? null);
+            $locked = self::decimalOrZero($w['blockedBalance'] ?? $w['blocked'] ?? null);
+
+            if (isset($w['activeBalance']) && is_numeric($w['activeBalance'])) {
+                $available = self::decimalOrZero($w['activeBalance']);
+            } else {
+                $available = Money::max('0', Money::sub($total, $locked));
+                if (!self::$balanceFallbackLogged) {
+                    self::$balanceFallbackLogged = true;
+                    Log::channel('trading')->warning('BALANCE_ACTIVE_FIELD_MISSING', [
+                        'currency' => (string) $cur,
+                        'keys'     => array_keys((array) $w),
+                        'note'     => 'wallet has no activeBalance; using balance − blockedBalance as available',
+                    ]);
+                }
+            }
+
             $out[$cur] = [
-                'available' => (string) ($w['balance'] ?? '0'),
-                'locked'    => (string) ($w['blocked'] ?? '0'),
+                'available' => $available,
+                'locked'    => $locked,
+                'total'     => $total,
             ];
         }
         return $out;
+    }
+
+    /** Once-per-process guard for BALANCE_ACTIVE_FIELD_MISSING. */
+    private static bool $balanceFallbackLogged = false;
+
+    /** Exchange numeric (string|int) → decimal string; anything else → "0". */
+    private static function decimalOrZero(mixed $v): string
+    {
+        if (is_int($v)) {
+            return (string) $v;
+        }
+        if (is_float($v) && is_finite($v)) {
+            return Money::normalize($v); // fixed notation, never "1.0E-7"
+        }
+        if (is_string($v) && is_numeric($v) && !str_contains(strtolower($v), 'e')) {
+            return Money::trimZeros($v);
+        }
+        return '0';
     }
 
     /**
@@ -1232,12 +1287,26 @@ class NobitexService implements ExchangeClient
             throw new \InvalidArgumentException("Unsupported symbol for order: {$symbol}");
         }
 
+        // Fit the amount to the market quantity step, truncating DOWN (shared
+        // helper with CreateOrderDto::toApiPayload). Fee-adjusted exit amounts
+        // carry 10–12 decimals; they must never reach the API un-truncated, and
+        // must never be rounded up past the balance they were sized from.
+        $amount = QtyPrecision::floor((string) $quantity, $symbol);
+        if (! Money::isPositive($amount)) {
+            throw new \InvalidArgumentException("Order amount {$quantity} truncates to zero at the {$symbol} quantity step");
+        }
+        if (Money::compare($amount, (string) $quantity) !== 0) {
+            Log::channel('trading')->info('ORDER_AMOUNT_TRUNCATED', [
+                'symbol' => $symbol, 'side' => $side, 'requested' => (string) $quantity, 'sent' => $amount,
+            ]);
+        }
+
         $payload = [
             'type'        => strtolower($side) === 'buy' ? 'buy' : 'sell',
             'execution'   => 'limit',
             'srcCurrency' => $src,
             'dstCurrency' => $dst,
-            'amount'      => (string)$quantity,
+            'amount'      => $amount,
             'price'       => (string)$price,
         ];
 

@@ -49,17 +49,19 @@ final class NobitexSignedAuthTest extends TestCase
         Http::fake([
             '*/users/wallets/list' => Http::response([
                 'status' => 'ok',
+                // Verified wallet shape (host check V3): balance / blockedBalance /
+                // activeBalance — there is no `blocked` key.
                 'wallets' => [
-                    ['currency' => 'rls', 'balance' => '1000000', 'blocked' => '0'],
-                    ['currency' => 'btc', 'balance' => '0.5', 'blocked' => '250'],
+                    ['currency' => 'rls', 'balance' => '1000000', 'blockedBalance' => '0', 'activeBalance' => '1000000'],
+                    ['currency' => 'btc', 'balance' => '0.5', 'blockedBalance' => '0.2', 'activeBalance' => '0.3'],
                 ],
             ], 200),
         ]);
 
         $balances = (new NobitexService)->getBalances();
 
-        $this->assertSame(['available' => '1000000', 'locked' => '0'], $balances['rls']);
-        $this->assertSame(['available' => '0.5', 'locked' => '250'], $balances['btc']);
+        $this->assertSame(['available' => '1000000', 'locked' => '0', 'total' => '1000000'], $balances['rls']);
+        $this->assertSame(['available' => '0.3', 'locked' => '0.2', 'total' => '0.5'], $balances['btc']);
 
         Http::assertSent(function ($request) {
             // POST, correct endpoint, EMPTY body (the proven /users/wallets/list shape).

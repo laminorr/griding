@@ -591,11 +591,14 @@ $profitMargin = $grossProfitPerCycle > 0
      */
     private function calculateCryptoAmount(float $irtAmount, float $price, string $symbol): float
     {
-        $cryptoAmount = $irtAmount / $price;
-        
+        // Truncate (bcmath) to the market step — never round UP past what the
+        // IRT budget buys. The float return type is kept for the existing
+        // float-based callers; an 8-dp decimal round-trips through a double and
+        // back through sprintf('%.8f') unchanged.
         $precision = $this->qtyDecimals($symbol);
-        
-        return round($cryptoAmount, $precision);
+        $exact     = Money::div(Money::normalize($irtAmount), Money::normalize($price), $precision + 10);
+
+        return (float) Money::floorToScale($exact, $precision);
     }
 
     /**

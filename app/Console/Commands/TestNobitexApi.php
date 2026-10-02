@@ -179,24 +179,25 @@ class TestNobitexApi extends Command
             foreach ($majorCurrencies as $currency) {
                 $cur = strtoupper($currency);
                 if (isset($balances[$currency])) {
-                    $available = $balances[$currency]['available'] ?? '0';
-                    $locked = $balances[$currency]['locked'] ?? '0';
+                    $available = (string) ($balances[$currency]['available'] ?? '0');
+                    $locked    = (string) ($balances[$currency]['locked'] ?? '0');
+                    $total     = (string) ($balances[$currency]['total'] ?? $available);
 
                     if ($this->option('verbose')) {
-                        $this->line("   {$cur}: {$available} (available), {$locked} (locked)");
+                        $this->line("   {$cur}: {$available} (available/free), {$locked} (locked), {$total} (total)");
                     } else {
                         // Only show if non-zero
-                        if ((float)$available > 0 || (float)$locked > 0) {
-                            $this->line("   {$cur}: {$available}");
+                        if (\App\Support\Money::isPositive($total)) {
+                            $this->line("   {$cur}: {$available} free / {$total} total");
                         }
                     }
                 }
             }
 
             // Check for trading balance (IRT/RLS)
-            $irtBalance = (float)($balances['rls']['available'] ?? $balances['irt']['available'] ?? 0);
-            if ($irtBalance < 10_000_000) { // Less than 10M IRT
-                $this->warn("   ⚠️  Low IRT balance for trading: " . number_format($irtBalance));
+            $irtBalance = (string) ($balances['rls']['available'] ?? $balances['irt']['available'] ?? '0');
+            if (\App\Support\Money::compare($irtBalance, '10000000') < 0) { // Less than 10M IRT free
+                $this->warn("   ⚠️  Low free IRT balance for trading: " . $irtBalance);
             }
 
             $this->info("   ✅ Wallets retrieved successfully\n");
