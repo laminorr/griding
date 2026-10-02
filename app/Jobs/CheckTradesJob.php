@@ -40,9 +40,10 @@ class CheckTradesJob implements ShouldQueue
      * pairing path, but a fill whose placement ended ambiguous now keeps its
      * committed intent row (status 'submission_unknown') and its
      * paired_order_id back-link, so processBot()'s whereNull(paired_order_id)
-     * filter skips it and — even on a direct re-entry — the client_order_id
-     * dedup guard in createPairOrderLocked() blocks a second send. Retries
-     * therefore only re-run genuinely safe work (status polling, other bots).
+     * filter skips it and — even on a direct re-entry — the lockForUpdate
+     * re-read of paired_order_id in createPairOrderLocked() blocks a second
+     * send. Retries therefore only re-run genuinely safe work (status polling,
+     * other bots).
      */
     public $tries = 3;
 
@@ -446,7 +447,7 @@ class CheckTradesJob implements ShouldQueue
      *      the exchange with the same NobitexService::getOrdersStatus() call
      *      checkOrdersStatus() uses, then route it through processOrderStatus();
      *   2. if the order is now filled and unpaired: createPairOrder() (with its
-     *      own pair-order lock, lockForUpdate re-read and client_order_id dedup).
+     *      own pair-order lock and lockForUpdate re-read of paired_order_id).
      * The exchange REST status is the only input; no event payload is used.
      * Simulation bots never reach the exchange here (returns 'simulation').
      *
@@ -1028,28 +1029,15 @@ class CheckTradesJob implements ShouldQueue
         // the pairing transaction below (fee-net sell / inventory-restoring
         // buy + dust ledger). It is NOT the gross filled amount any more —
         // that oversized every buy-first exit sell by the BTC buy fee (D1).
-        $clientOrderId = GridOrder::buildClientOrderId($bot->id, $symbol, $newType, $newPrice);
-
         Log::info("CheckTradesJob: Creating pair order - Type: {$newType}, Price: {$newPrice} for filled order {$filledOrder->id}");
 
-        // Dedup guard — abort before opening a transaction if this pair was
-        // already placed. 'submission_unknown' is in the list because such a row
-        // means a placement attempt already reached (or may have reached) the
-        // exchange; re-placing before reconciliation could duplicate the order.
-        $existingOrder = GridOrder::where('bot_config_id', $bot->id)
-            ->where('client_order_id', $clientOrderId)
-            ->whereIn('status', ['pending', 'placed', 'filled', 'partially_filled', 'submission_unknown'])
-            ->first();
-
-        if ($existingOrder) {
-            Log::channel('trading')->info('DEDUP_SKIP', [
-                'bot_id'            => $bot->id,
-                'client_order_id'   => $clientOrderId,
-                'existing_order_id' => $existingOrder->id,
-                'existing_status'   => $existingOrder->status,
-            ]);
-            return;
-        }
+        // One exit per fill. The duplicate guard is the fill itself, not a
+        // price-derived clientOrderId: the pair-order Cache::lock above, the
+        // lockForUpdate re-read of paired_order_id / exit_state below, and the
+        // back-link committed with the intent row. (The old lookup by
+        // 'grid:{bot}:{SYMBOL}:{side}:{price}' also matched FILLED rows, so a
+        // second fill whose exit landed on a previously used price was
+        // DEDUP_SKIPped forever — the cycle never closed.)
 
         // ------------------------------------------------------------------
         // Transaction boundary (Phase 12 Step 6): ONLY the pairing linkage is
@@ -1110,17 +1098,17 @@ class CheckTradesJob implements ShouldQueue
                 'calculated_price'=> $newPrice,
                 'amount'          => $pairAmount,
                 'filled_order_id' => $filledOrder->id,
-                'client_order_id' => $clientOrderId,
                 'simulation'      => (bool) $bot->simulation,
             ]);
 
-            $newOrder = GridOrder::create([
+            // Intent row first, its clientOrderId ("g{bot}-{row}") stamped in
+            // the same transaction; the exchange call comes after the commit.
+            $newOrder = GridOrder::createIntent([
                 'bot_config_id'   => $bot->id,
                 'price'           => $newPrice,
                 'amount'          => $pairAmount,
                 'type'            => $newType,
                 'status'          => 'pending',
-                'client_order_id' => $clientOrderId,
                 'paired_order_id' => $filledOrder->id,
                 'role'            => 'cycle_exit',
                 // Lets a cancelled-and-unlinked intent undo its dust move once.
@@ -1205,7 +1193,9 @@ class CheckTradesJob implements ShouldQueue
                     $newType,
                     $newPrice,
                     (string) $pairAmount,
-                    $clientOrderId
+                    // The intent row's own id — a retry of this intent
+                    // (ExitRejectionHandler self-heal) reuses this same row.
+                    (string) $newOrder->client_order_id
                 );
                 $executionTime = (int) ((microtime(true) - $startTime) * 1000);
 
@@ -1235,6 +1225,7 @@ class CheckTradesJob implements ShouldQueue
 
             Log::channel('trading')->info('PAIR_ORDER_POST_CREATE', [
                 'order_id'    => $newOrder->id,
+                'client_order_id' => $newOrder->client_order_id,
                 'stored_price'=> $newOrder->price,
                 'price_match' => ($newOrder->price == $newPrice) ? 'YES' : 'NO',
             ]);
@@ -1262,9 +1253,9 @@ class CheckTradesJob implements ShouldQueue
             if ($apiCallAttempted) {
                 // The exchange call was attempted (AmbiguousOrderSubmissionException,
                 // dropped response, unexpected reply shape, …) — Nobitex MAY hold
-                // this order. Park the row for reconciliation; the dedup guard
-                // above and the paired_order_id back-link both block any re-place
-                // until a reconciler (Step 7) resolves it.
+                // this order. Park the row for reconciliation; the committed
+                // paired_order_id back-link blocks any re-place until the
+                // reconciler (Step 7) resolves it by this row's clientOrderId.
                 $newOrder->update(['status' => 'submission_unknown']);
             } else {
                 // The failure happened before anything left our process — no

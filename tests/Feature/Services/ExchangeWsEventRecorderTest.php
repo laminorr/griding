@@ -302,6 +302,94 @@ final class ExchangeWsEventRecorderTest extends TestCase
         $this->assertSame([], array_values(array_filter($this->logs, fn ($l) => $l['message'] === 'WS_PRIVATE_EVENT')));
     }
 
+    /* ------------------------- secondary match by clientOrderId ------------------------- */
+
+    /** A live intent row as the placement paths leave it before the REST response is saved. */
+    private function seedIntentRow(?string $nobitexOrderId, string $clientOrderId, string $status = 'pending'): int
+    {
+        $botId = DB::table('bot_configs')->insertGetId([
+            'name' => 'b', 'symbol' => 'BTCIRT', 'created_at' => '2026-01-01 00:00:00', 'updated_at' => '2026-01-01 00:00:00',
+        ]);
+
+        return DB::table('grid_orders')->insertGetId([
+            'bot_config_id' => $botId,
+            'price' => '9800000000',
+            'amount' => '0.0001',
+            'type' => 'buy',
+            'status' => $status,
+            'nobitex_order_id' => $nobitexOrderId,
+            'client_order_id' => $clientOrderId,
+            'role' => 'cycle_exit',
+            'created_at' => '2026-01-01 00:00:00',
+            'updated_at' => '2026-01-01 00:00:00',
+        ]);
+    }
+
+    public function test_event_arriving_before_the_rest_response_is_matched_by_client_order_id_read_only(): void
+    {
+        $gridId = $this->seedIntentRow(null, 'g9-55');
+        $before = (array) DB::table('grid_orders')->where('id', $gridId)->first();
+
+        $this->eloquentEvents = [];
+        Event::listen('eloquent.*', function (string $name) {
+            $this->eloquentEvents[] = $name;
+        });
+
+        $this->recorder()->record('orders', self::orderEvent(['clientOrderId' => 'g9-55', 'status' => 'Active']));
+
+        $row = ExchangeWsEvent::query()->sole();
+        $this->assertSame($gridId, $row->matched_grid_order_id);
+        $this->assertSame('pending', $row->local_status_at_receipt);
+
+        // Read-only: the row is NOT given the exchange id here — that stays the
+        // job of the placement path / reconciler.
+        $this->assertSame($before, (array) DB::table('grid_orders')->where('id', $gridId)->first());
+        $this->assertSame([], array_values(array_filter(
+            $this->eloquentEvents,
+            fn ($e) => str_contains($e, 'GridOrder') || str_contains($e, 'BotConfig')
+        )));
+
+        $lines = array_values(array_filter($this->logs, fn ($l) => $l['message'] === 'WS_PRIVATE_EVENT'));
+        $this->assertCount(1, $lines);
+        $this->assertSame($gridId, $lines[0]['context']['grid_order_id']);
+    }
+
+    public function test_failed_variant_is_matched_by_client_order_id(): void
+    {
+        $gridId = $this->seedIntentRow(null, 'g9-56');
+
+        $this->recorder()->record('orders', ['status' => 'Failed', 'code' => 'OverValueOrder', 'message' => 'x', 'clientOrderId' => 'g9-56']);
+
+        $row = ExchangeWsEvent::query()->sole();
+        $this->assertNull($row->nobitex_order_id);
+        $this->assertSame($gridId, $row->matched_grid_order_id);
+    }
+
+    public function test_client_order_id_never_matches_a_row_that_already_has_an_exchange_id(): void
+    {
+        // The row's stored exchange id disagrees with the event's orderId: the
+        // clientOrderId must not override the primary key match.
+        $this->seedIntentRow('999', 'g9-57', 'placed');
+
+        $this->recorder()->record('orders', self::orderEvent(['clientOrderId' => 'g9-57']));
+
+        $row = ExchangeWsEvent::query()->sole();
+        $this->assertNull($row->matched_grid_order_id);
+        $this->assertNull($row->local_status_at_receipt);
+    }
+
+    public function test_nobitex_order_id_match_takes_precedence_over_client_order_id(): void
+    {
+        $primary   = $this->seedGridOrder('4567890123', 'placed');
+        $secondary = $this->seedIntentRow(null, 'g9-58');
+
+        $this->recorder()->record('orders', self::orderEvent(['clientOrderId' => 'g9-58']));
+
+        $row = ExchangeWsEvent::query()->sole();
+        $this->assertSame($primary, $row->matched_grid_order_id);
+        $this->assertNotSame($secondary, $row->matched_grid_order_id);
+    }
+
     /* ------------------------------------ prune ----------------------------------- */
 
     public function test_prune_deletes_only_rows_older_than_30_days(): void

@@ -22,7 +22,8 @@ use Tests\TestCase;
  * Covers three properties that later Phase 12 steps must preserve or change
  * deliberately:
  *   1. Simulation makes ZERO outbound HTTP calls.
- *   2. The client_order_id dedup guard blocks a duplicate live submission.
+ *   2. The intent dedup guard (bot+side+price, ACTIVE statuses) blocks a
+ *      duplicate live submission.
  *   3. A throw AFTER the API call was attempted leaves the intent row in
  *      'submission_unknown' — the Phase-9-era guard (:257-273).
  *
@@ -71,9 +72,10 @@ final class GridOrderExecutorTest extends TestCase
         ];
     }
 
-    private function expectedClientOrderId(): string
+    /** v2 id: "g{botId}-{rowId}" — derived from the intent row itself. */
+    private function expectedClientOrderId(GridOrder $order): string
     {
-        return GridOrder::buildClientOrderId(self::BOT_ID, self::SYMBOL, 'buy', self::PRICE);
+        return 'g' . self::BOT_ID . '-' . $order->id;
     }
 
     /** 1. Simulation places a SIM-* row and sends NOTHING over the wire. */
@@ -91,15 +93,16 @@ final class GridOrderExecutorTest extends TestCase
         $this->assertSame('placed', $order->status);
         $this->assertSame('buy', $order->type);
         $this->assertStringStartsWith('SIM-', (string) $order->nobitex_order_id);
-        $this->assertSame($this->expectedClientOrderId(), $order->client_order_id);
+        $this->assertSame($this->expectedClientOrderId($order), $order->client_order_id);
     }
 
     /**
-     * 2. A live submission whose client_order_id already matches an ACTIVE row
-     *    is dedup-skipped: the exchange createOrder() is never called and no
-     *    second row is written.
+     * 2. A live submission for a level that already has an ACTIVE order at the
+     *    same bot+side+price is dedup-skipped: the exchange createOrder() is
+     *    never called and no second row is written. (Was keyed on the
+     *    price-derived client_order_id; now keyed on the intent itself.)
      */
-    public function test_live_duplicate_client_order_id_is_dedup_skipped(): void
+    public function test_live_second_active_order_at_same_level_is_dedup_skipped(): void
     {
         GridOrder::create([
             'bot_config_id'   => self::BOT_ID,
@@ -107,7 +110,7 @@ final class GridOrderExecutorTest extends TestCase
             'amount'          => '0.001',
             'type'            => 'buy',
             'status'          => 'placed', // active → triggers the dedup guard
-            'client_order_id' => $this->expectedClientOrderId(),
+            'client_order_id' => 'g' . self::BOT_ID . '-999',
         ]);
 
         $svc = Mockery::mock(NobitexService::class);
@@ -139,7 +142,7 @@ final class GridOrderExecutorTest extends TestCase
         $this->assertSame(1, GridOrder::count());
         $order = GridOrder::first();
         $this->assertSame('submission_unknown', $order->status);
-        $this->assertSame($this->expectedClientOrderId(), $order->client_order_id);
+        $this->assertSame($this->expectedClientOrderId($order), $order->client_order_id);
     }
 
     /**
@@ -183,7 +186,7 @@ final class GridOrderExecutorTest extends TestCase
         $this->assertSame(1, GridOrder::count());
         $order = GridOrder::first();
         $this->assertSame('submission_unknown', $order->status);
-        $this->assertSame($this->expectedClientOrderId(), $order->client_order_id);
+        $this->assertSame($this->expectedClientOrderId($order), $order->client_order_id);
     }
 
     /**

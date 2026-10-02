@@ -172,7 +172,10 @@ trait BuildsGridSchema
             $table->string('type');
             $table->string('status');
             $table->string('nobitex_order_id')->nullable();
-            $table->string('client_order_id')->nullable();
+            // GLOBAL UNIQUE, nullable — same as production
+            // (2026_05_20_000001_add_idempotency_columns_to_grid_orders), so a
+            // clientOrderId collision fails here exactly as it would live.
+            $table->string('client_order_id')->nullable()->unique();
             $table->string('exchange_order_id')->nullable();
             $table->unsignedBigInteger('paired_order_id')->nullable();
             $table->timestamp('filled_at')->nullable();

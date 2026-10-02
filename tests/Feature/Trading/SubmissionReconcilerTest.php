@@ -102,13 +102,14 @@ final class SubmissionReconcilerTest extends TestCase
         int $ageSeconds = 3600,
         array $overrides = []
     ): GridOrder {
-        $row = GridOrder::create(array_merge([
+        // Created exactly as the placement paths create intent rows: the
+        // row first, its clientOrderId ("g{bot}-{row}") stamped second.
+        $row = GridOrder::createIntent(array_merge([
             'bot_config_id'   => $bot->id,
             'price'           => self::PRICE,
             'amount'          => self::AMOUNT,
             'type'            => 'sell',
             'status'          => $status,
-            'client_order_id' => GridOrder::buildClientOrderId($bot->id, self::SYMBOL, 'sell', self::PRICE),
         ], $overrides));
 
         DB::table('grid_orders')->where('id', $row->id)->update([

@@ -199,4 +199,36 @@ final class ExchangeWsEventRecorderDispatchTest extends TestCase
         $this->assertSame('warning', $failed[0]['level']);
         $this->assertSame([], $this->logged('WS_EVENT_DISPATCH_REQUESTED'));
     }
+
+    /**
+     * D7: a live order's Done event that beats the REST placement response is
+     * matched by clientOrderId (row has no nobitex_order_id yet) and goes
+     * through the SAME actionable/dispatch rules; a non-actionable one does not.
+     */
+    public function test_client_order_id_match_follows_the_same_dispatch_rules(): void
+    {
+        Queue::fake();
+        config(['trading.websocket.act_on_private_events' => true]);
+
+        $botId = DB::table('bot_configs')->insertGetId([
+            'name' => 'b', 'symbol' => 'BTCIRT', 'created_at' => '2026-01-01 00:00:00', 'updated_at' => '2026-01-01 00:00:00',
+        ]);
+        $gridId = DB::table('grid_orders')->insertGetId([
+            'bot_config_id' => $botId, 'price' => '9800000000', 'amount' => '0.0001', 'type' => 'buy',
+            'status' => 'pending', 'nobitex_order_id' => null, 'client_order_id' => 'g' . $botId . '-77',
+            'role' => 'cycle_exit', 'created_at' => '2026-01-01 00:00:00', 'updated_at' => '2026-01-01 00:00:00',
+        ]);
+
+        $r = new ExchangeWsEventRecorder();
+        $r->record('orders', self::orderEvent(['clientOrderId' => 'g' . $botId . '-77', 'status' => 'New', 'filledAmount' => '0', 'eventTime' => 1]));
+        Queue::assertNothingPushed();
+
+        $r->record('orders', self::orderEvent(['clientOrderId' => 'g' . $botId . '-77', 'eventTime' => 2]));
+        Queue::assertPushed(ProcessOrderEventJob::class, 1);
+        Queue::assertPushed(ProcessOrderEventJob::class, fn (ProcessOrderEventJob $j) => $j->gridOrderId === $gridId);
+
+        // Still read-only.
+        $this->assertNull(DB::table('grid_orders')->where('id', $gridId)->value('nobitex_order_id'));
+        $this->assertSame('pending', DB::table('grid_orders')->where('id', $gridId)->value('status'));
+    }
 }

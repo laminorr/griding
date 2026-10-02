@@ -10,6 +10,7 @@ use App\Exceptions\DefinitiveOrderRejection;
 use App\Models\GridOrder;
 use App\Support\Money;
 use App\Support\OrderRegistry;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -26,6 +27,12 @@ use Illuminate\Support\Facades\Log;
  */
 class GridOrderExecutor
 {
+    /**
+     * Statuses of an order that is (or may be) live on the exchange. A second
+     * order for the same bot+side+price is refused while one of these exists.
+     */
+    public const ACTIVE_STATUSES = ['pending', 'placed', 'partially_filled', 'submission_unknown'];
+
     public function __construct(
         protected NobitexService $svc,
         protected OrderRegistry  $reg,
@@ -39,8 +46,10 @@ class GridOrderExecutor
      */
     /**
      * Primary entry point — scoped to a specific bot.
-     * Creates GridOrder records, performs dedup checks, and uses a deterministic
-     * client_order_id so timeout-retries cannot produce duplicate exchange orders.
+     * Creates GridOrder intent rows (each with its own clientOrderId,
+     * GridOrder::clientOrderIdFor) before any exchange call, and skips a level
+     * that already has an ACTIVE order at the same bot+side+price, so
+     * timeout-retries cannot produce duplicate exchange orders.
      *
      * $role is stamped onto every GridOrder row created here: 'initial_grid'
      * when called from the initial setup path (TradingEngineService) and
@@ -168,161 +177,177 @@ class GridOrderExecutor
             $price = $this->roundToTick($price, $tick);
             [$src, $dst] = $this->splitSymbol($symbol);
 
-            // Deterministic identifier based on the grid level's stable identity
-            // (bot+symbol+side+price), not the transient $levelIdx loop index.
-            $clientOrderId = GridOrder::buildClientOrderId($botId, $symbol, $side, $price);
+            // Per-level lock around dedup + intent-row creation. Each intent
+            // now has its own clientOrderId, so the UNIQUE index no longer
+            // stops two concurrent runs (e.g. a double-clicked grid start
+            // racing a rebalance) from both inserting the same level; this
+            // lock does. Held only until the intent row is committed — never
+            // across the exchange call. Busy → another run is placing this
+            // exact level right now, so skipping is the correct outcome.
+            $levelLock = Cache::lock("grid-level:{$botId}:{$side}:{$price}", 10);
+            if (! $levelLock->get()) {
+                Log::channel('trading')->info('DEDUP_LOCK_BUSY', [
+                    'bot_id' => $botId, 'side' => $side, 'price' => $price, 'simulation' => $simulation,
+                ]);
+                continue;
+            }
+            $levelLockHeld = true;
 
-            if ($simulation) {
-                // Same dedup guard as the live path — skip if an active order
-                // with this id already exists, so simulation re-runs of the same
-                // plan don't pile up duplicate rows.
+            try {
+                // Intent dedup: never place a second ACTIVE order for the same
+                // bot+side+price. Only live states block — a level whose previous
+                // order is 'filled' or 'cancelled' may be placed again (the old
+                // clientOrderId-based guard also matched 'filled' rows and, because
+                // the id was price-derived, a re-placement then collided with the
+                // UNIQUE index). 'submission_unknown' blocks: that order may be live
+                // on the exchange until the reconciler says otherwise.
                 $existing = GridOrder::where('bot_config_id', $botId)
-                    ->where('client_order_id', $clientOrderId)
-                    ->whereIn('status', ['pending', 'placed', 'filled', 'partially_filled'])
+                    ->where('type', $side)
+                    ->where('price', (string) $price)
+                    ->whereIn('status', self::ACTIVE_STATUSES)
                     ->first();
 
                 if ($existing) {
                     Log::channel('trading')->info('DEDUP_SKIP', [
                         'bot_id'           => $botId,
-                        'client_order_id'  => $clientOrderId,
+                        'side'             => $side,
+                        'price'            => $price,
                         'existing_order_id'=> $existing->id,
                         'existing_status'  => $existing->status,
+                        'simulation'       => $simulation,
                     ]);
                     continue;
                 }
 
-                // Persist a GridOrder row for the simulated order. Status is set
-                // DIRECTLY to 'placed' (there is no real API call that would later
-                // flip it from 'pending'), making it visible to both
-                // CheckTradesJob::checkSimulatedOrders() and the Filament panels.
-                // nobitex_order_id uses a SIM-* sentinel so it is clearly
-                // distinguishable from real orders and never collides with a real
-                // Nobitex order id. No real exchange call is made.
-                GridOrder::create([
-                    'bot_config_id'    => $botId,
-                    'price'            => $price,
-                    'amount'           => $quantity,
-                    'type'             => $side,
-                    'status'           => 'placed',
-                    'client_order_id'  => $clientOrderId,
-                    'nobitex_order_id' => 'SIM-' . uniqid(),
-                    'role'             => $role,
-                ]);
-
-                Log::channel('trading')->info('EXEC_SIM_PLACE', [
-                    'symbol'=>$symbol,'side'=>$side,'price'=>$price,'quantity'=>$quantity,'notional'=>$notional,
-                    'src'=>$src,'dst'=>$dst,'client_order_id'=>$clientOrderId,
-                ]);
-                $placed++;
-                continue;
-            }
-
-            // Dedup guard — skip if an active order with this id already exists.
-            $existing = GridOrder::where('bot_config_id', $botId)
-                ->where('client_order_id', $clientOrderId)
-                ->whereIn('status', ['pending', 'placed', 'filled', 'partially_filled'])
-                ->first();
-
-            if ($existing) {
-                Log::channel('trading')->info('DEDUP_SKIP', [
-                    'bot_id'           => $botId,
-                    'client_order_id'  => $clientOrderId,
-                    'existing_order_id'=> $existing->id,
-                    'existing_status'  => $existing->status,
-                ]);
-                continue;
-            }
-
-            $gridOrder = null;
-            $apiCallAttempted = false;
-            try {
-                // Persist intent row BEFORE calling the exchange so a timeout retry
-                // will find this record and skip instead of creating a duplicate.
-                $gridOrder = GridOrder::create([
-                    'bot_config_id'   => $botId,
-                    'price'           => $price,
-                    'amount'          => $quantity,
-                    'type'            => $side,
-                    'status'          => 'pending',
-                    'client_order_id' => $clientOrderId,
-                    'role'            => $role,
-                ]);
-
-                $sideEnum = $side === 'buy' ? OrderSide::BUY : OrderSide::SELL;
-
-                $dto = new CreateOrderDto(
-                    side:        $sideEnum,
-                    execution:   ExecutionType::LIMIT,
-                    srcCurrency: $src,
-                    dstCurrency: $dst,
-                    amountBase:  $quantity,
-                    priceIRT:    $price,
-                    clientRef:   $clientOrderId,
-                );
-
-                $apiCallAttempted = true;
-                $resp    = $this->svc->createOrder($dto);
-                $orderId = $resp->orderId ?? null;
-
-                $gridOrder->update([
-                    'status'           => 'placed',
-                    'nobitex_order_id' => $orderId ? (string) $orderId : null,
-                ]);
-
-                if ($orderId) {
-                    $this->reg->remember($symbol, [
-                        'id'       => (string) $orderId,
-                        'side'     => $side,
-                        'price'    => $price,
-                        'quantity' => $quantity,
+                if ($simulation) {
+                    // Persist a GridOrder row for the simulated order. Status is set
+                    // DIRECTLY to 'placed' (there is no real API call that would later
+                    // flip it from 'pending'), making it visible to both
+                    // CheckTradesJob::checkSimulatedOrders() and the Filament panels.
+                    // nobitex_order_id uses a SIM-* sentinel so it is clearly
+                    // distinguishable from real orders and never collides with a real
+                    // Nobitex order id. No real exchange call is made.
+                    $simRow = GridOrder::createIntent([
+                        'bot_config_id'    => $botId,
+                        'price'            => $price,
+                        'amount'           => $quantity,
+                        'type'             => $side,
+                        'status'           => 'placed',
+                        'nobitex_order_id' => 'SIM-' . uniqid(),
+                        'role'             => $role,
                     ]);
+
+                    Log::channel('trading')->info('EXEC_SIM_PLACE', [
+                        'symbol'=>$symbol,'side'=>$side,'price'=>$price,'quantity'=>$quantity,'notional'=>$notional,
+                        'src'=>$src,'dst'=>$dst,'client_order_id'=>$simRow->client_order_id,
+                    ]);
+                    $placed++;
+                    continue;
                 }
 
-                $placed++;
-                Log::channel('trading')->info('EXEC_PLACE_OK', [
-                    'symbol'=>$symbol,'side'=>$side,'price'=>$price,'quantity'=>$quantity,
-                    'orderId'=>$orderId,'client_order_id'=>$clientOrderId,
-                ]);
-                usleep(300_000);
+                $gridOrder = null;
+                $clientOrderId = null;
+                $apiCallAttempted = false;
+                try {
+                    // Intent row FIRST (committed, with its clientOrderId stamped in
+                    // the same transaction), exchange call SECOND. A retry of this
+                    // intent finds this row (dedup above / reconciler) and its id —
+                    // a new id is never generated for an existing intent.
+                    $gridOrder = GridOrder::createIntent([
+                        'bot_config_id'   => $botId,
+                        'price'           => $price,
+                        'amount'          => $quantity,
+                        'type'            => $side,
+                        'status'          => 'pending',
+                        'role'            => $role,
+                    ]);
+                    $clientOrderId = (string) $gridOrder->client_order_id;
 
-            } catch (\Throwable $e) {
-                $errors++;
-                if ($gridOrder && $gridOrder->exists) {
-                    // If the exchange API call was never reached (e.g. DTO build failed,
-                    // or the order never left our process), it is safe to mark 'cancelled'.
-                    // If the call was attempted, we cannot tell whether Nobitex received
-                    // and placed the order before the exception (timeout, dropped
-                    // response, etc.), so the local record must NOT be marked 'cancelled' —
-                    // that would risk a duplicate order being placed later for what is
-                    // actually still a live exchange order. Such rows are left in
-                    // 'submission_unknown' and require manual or automated reconciliation
-                    // (checking directly with Nobitex) before being treated as cancelled
-                    // or active. Building that reconciliation job is out of scope here.
-                    //
-                    // Fee model Phase 5: a DefinitiveOrderRejection (Nobitex
-                    // answered status "failed" with InsufficientBalance,
-                    // SmallOrder, BadPrice, … or the request was refused before
-                    // sending) means the order certainly does NOT exist, so it is
-                    // 'cancelled' with last_error_code — never parked as
-                    // submission_unknown.
-                    if ($e instanceof DefinitiveOrderRejection) {
-                        $gridOrder->update([
-                            'status'             => 'cancelled',
-                            'last_error_code'    => $e->errorCode(),
-                            'last_error_message' => mb_substr($e->getMessage(), 0, 255),
-                        ]);
-                    } else {
-                        $gridOrder->update([
-                            'status' => $apiCallAttempted ? 'submission_unknown' : 'cancelled',
+                    // The committed row is now visible to any concurrent dedup.
+                    $levelLock->release();
+                    $levelLockHeld = false;
+
+                    $sideEnum = $side === 'buy' ? OrderSide::BUY : OrderSide::SELL;
+
+                    $dto = new CreateOrderDto(
+                        side:        $sideEnum,
+                        execution:   ExecutionType::LIMIT,
+                        srcCurrency: $src,
+                        dstCurrency: $dst,
+                        amountBase:  $quantity,
+                        priceIRT:    $price,
+                        clientRef:   $clientOrderId,
+                    );
+
+                    $apiCallAttempted = true;
+                    $resp    = $this->svc->createOrder($dto);
+                    $orderId = $resp->orderId ?? null;
+
+                    $gridOrder->update([
+                        'status'           => 'placed',
+                        'nobitex_order_id' => $orderId ? (string) $orderId : null,
+                    ]);
+
+                    if ($orderId) {
+                        $this->reg->remember($symbol, [
+                            'id'       => (string) $orderId,
+                            'side'     => $side,
+                            'price'    => $price,
+                            'quantity' => $quantity,
                         ]);
                     }
+
+                    $placed++;
+                    Log::channel('trading')->info('EXEC_PLACE_OK', [
+                        'symbol'=>$symbol,'side'=>$side,'price'=>$price,'quantity'=>$quantity,
+                        'orderId'=>$orderId,'client_order_id'=>$clientOrderId,
+                    ]);
+                    usleep(300_000);
+
+                } catch (\Throwable $e) {
+                    $errors++;
+                    if ($gridOrder && $gridOrder->exists) {
+                        // If the exchange API call was never reached (e.g. DTO build failed,
+                        // or the order never left our process), it is safe to mark 'cancelled'.
+                        // If the call was attempted, we cannot tell whether Nobitex received
+                        // and placed the order before the exception (timeout, dropped
+                        // response, etc.), so the local record must NOT be marked 'cancelled' —
+                        // that would risk a duplicate order being placed later for what is
+                        // actually still a live exchange order. Such rows are left in
+                        // 'submission_unknown' and require manual or automated reconciliation
+                        // (checking directly with Nobitex) before being treated as cancelled
+                        // or active. Building that reconciliation job is out of scope here.
+                        //
+                        // Fee model Phase 5: a DefinitiveOrderRejection (Nobitex
+                        // answered status "failed" with InsufficientBalance,
+                        // SmallOrder, BadPrice, … or the request was refused before
+                        // sending) means the order certainly does NOT exist, so it is
+                        // 'cancelled' with last_error_code — never parked as
+                        // submission_unknown.
+                        if ($e instanceof DefinitiveOrderRejection) {
+                            $gridOrder->update([
+                                'status'             => 'cancelled',
+                                'last_error_code'    => $e->errorCode(),
+                                'last_error_message' => mb_substr($e->getMessage(), 0, 255),
+                            ]);
+                        } else {
+                            $gridOrder->update([
+                                'status' => $apiCallAttempted ? 'submission_unknown' : 'cancelled',
+                            ]);
+                        }
+                    }
+                    Log::channel('trading')->error('EXEC_PLACE_ERR', [
+                        'symbol' => $symbol, 'err' => $e->getMessage(), 'plan' => $p,
+                        'client_order_id' => $clientOrderId,
+                        'api_call_attempted' => $apiCallAttempted,
+                        'definitive' => $e instanceof DefinitiveOrderRejection,
+                        'code' => $e instanceof DefinitiveOrderRejection ? $e->errorCode() : null,
+                    ]);
                 }
-                Log::channel('trading')->error('EXEC_PLACE_ERR', [
-                    'symbol' => $symbol, 'err' => $e->getMessage(), 'plan' => $p,
-                    'api_call_attempted' => $apiCallAttempted,
-                    'definitive' => $e instanceof DefinitiveOrderRejection,
-                    'code' => $e instanceof DefinitiveOrderRejection ? $e->errorCode() : null,
-                ]);
+            } finally {
+                if ($levelLockHeld) {
+                    $levelLock->release();
+                }
             }
         }
 
