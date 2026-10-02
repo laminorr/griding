@@ -102,6 +102,11 @@ return [
         // the shortfall is recorded in bot_configs.base_dust).
         'restore_inventory_on_buy_exit' => (bool) env('TRADING_RESTORE_INVENTORY_ON_BUY_EXIT', true),
 
+        // Exit-sell self-heal (App\Services\ExitRejectionHandler): on an
+        // InsufficientBalance rejection, retry ONCE with floor_qty(free BTC)
+        // only if free BTC >= this ratio of the intended amount; the shortfall
+        // is recorded in base_dust. Otherwise the fill is marked exit_blocked.
+        'self_heal_min_ratio' => (string) env('TRADING_EXIT_SELF_HEAL_MIN_RATIO', '0.98'),
     ],
 
     /*

@@ -5,6 +5,8 @@ namespace App\Jobs;
 use App\Models\BotConfig;
 use App\Models\GridOrder;
 use App\Models\CompletedTrade;
+use App\Exceptions\DefinitiveOrderRejection;
+use App\Services\ExitRejectionHandler;
 use App\Services\ExitSizer;
 use App\Services\FeeModel;
 use App\Services\NobitexService;
@@ -124,9 +126,13 @@ class CheckTradesJob implements ShouldQueue
             }
 
             // اگر سفارشی پر شده، سفارش جدید در طرف مقابل ایجاد کن
+            // exit_state IS NULL: a fill whose exit was definitively rejected
+            // ('blocked') or resolved by hand ('cleared') is not re-paired
+            // automatically (Phase 5) — see `php artisan grid:exit-blocked`.
             $filledOrders = $bot->gridOrders()
                 ->where('status', 'filled')
                 ->whereNull('paired_order_id')
+                ->whereNull('exit_state')
                 ->get();
 
             Log::info("CheckTradesJob: Found {$filledOrders->count()} filled orders without pair for bot {$bot->name}");
@@ -467,7 +473,7 @@ class CheckTradesJob implements ShouldQueue
 
         // Same pairing step processBot() runs for filled-but-unpaired orders.
         $order->refresh();
-        if ($order->status === 'filled' && $order->paired_order_id === null) {
+        if ($order->status === 'filled' && $order->paired_order_id === null && $order->exit_state === null) {
             $result['pair_attempted'] = true;
             $this->createPairOrder($order, $bot);
         }
@@ -1023,7 +1029,7 @@ class CheckTradesJob implements ShouldQueue
             // order while we were waiting for the per-order Cache::lock above.
             $current = GridOrder::where('id', $filledOrder->id)->lockForUpdate()->first();
 
-            if (!$current || $current->paired_order_id !== null) {
+            if (!$current || $current->paired_order_id !== null || $current->exit_state !== null) {
                 Log::channel('trading')->info('PAIR_ORDER_ALREADY_PAIRED', [
                     'filled_order_id' => $filledOrder->id,
                     'bot_id'          => $bot->id,
@@ -1178,6 +1184,23 @@ class CheckTradesJob implements ShouldQueue
             Log::info("CheckTradesJob: Successfully created pair order {$newOrder->id} (Nobitex ID: {$nobitexOrderId}) - Type: {$newType}, Price: {$newPrice} for filled order {$filledOrder->id}");
 
         } catch (\Exception $e) {
+            if ($e instanceof DefinitiveOrderRejection) {
+                // Fee model Phase 5: the exchange (or our own pre-send check)
+                // DEFINITELY did not create this order — never park it as
+                // submission_unknown (that fed a reconcile → unlink → re-pair
+                // loop). Self-heal an under-funded exit sell once, else block
+                // the fill so it is not re-selected every minute.
+                $outcome = app(ExitRejectionHandler::class)->handle($newOrder, $filledOrder, $bot, $e);
+
+                $logger->logError($bot->id, 'سفارش جفت توسط صرافی رد شد: ' . $e->getMessage(), [
+                    'filled_order_id' => $filledOrder->id,
+                    'pair_order_id'   => $newOrder->id,
+                    'code'            => $e->errorCode(),
+                    'outcome'         => $outcome,
+                ]);
+                return;
+            }
+
             if ($apiCallAttempted) {
                 // The exchange call was attempted (AmbiguousOrderSubmissionException,
                 // dropped response, unexpected reply shape, …) — Nobitex MAY hold

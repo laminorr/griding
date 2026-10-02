@@ -202,6 +202,12 @@ trait BuildsGridSchema
             $table->string('net_base_delta', 40)->nullable();
             // Fee model Phase 4 (2026_10_02_000003_add_base_dust_ledger).
             $table->string('exit_dust_delta', 40)->nullable();
+            // Fee model Phase 5 (2026_10_02_000004_add_rejection_and_exit_block_columns_to_grid_orders).
+            $table->string('last_error_code', 64)->nullable();
+            $table->string('last_error_message', 255)->nullable();
+            $table->string('exit_state', 16)->nullable();
+            $table->string('exit_blocked_reason', 255)->nullable();
+            $table->timestamp('exit_blocked_at')->nullable();
             $table->timestamps();
         });
 

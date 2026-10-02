@@ -21,6 +21,8 @@ class GridOrder extends Model
         'fee_amount','fee_currency','fee_asset','fee_source','fee_quote','avg_fill_price','net_base_delta',
         // Fee model Phase 4 — base_dust change caused by this exit row (ExitSizer).
         'exit_dust_delta',
+        // Fee model Phase 5 — definitive rejections / blocked exits.
+        'last_error_code','last_error_message','exit_state','exit_blocked_reason','exit_blocked_at',
     ];
 
     protected $casts = [
@@ -50,6 +52,7 @@ class GridOrder extends Model
         'avg_fill_price'     => 'decimal:18',
         'net_base_delta'     => 'decimal:18',
         'exit_dust_delta'    => 'decimal:18',
+        'exit_blocked_at'    => 'datetime',
     ];
 
     /**

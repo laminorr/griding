@@ -6,6 +6,10 @@ namespace App\Services;
 use App\Contracts\ExchangeClient;
 use App\Contracts\RateLimiter as RateLimiterContract;
 use App\Exceptions\AmbiguousOrderSubmissionException;
+use App\Exceptions\DefinitiveDomainRejection;
+use App\Exceptions\DefinitiveInvalidArgumentRejection;
+use App\Exceptions\DefinitiveRuntimeRejection;
+use App\Exceptions\InsufficientBalanceRejection;
 use App\Exceptions\OrderNotFoundException;
 use App\DTOs\ApiOkDto;
 use App\DTOs\BalanceDto;
@@ -454,23 +458,30 @@ class NobitexService implements ExchangeClient
         $code = (string)($data['code'] ?? 'Unknown');
         $msg  = (string)($data['message'] ?? '');
 
+        // Fee model Phase 5: codes after which Nobitex has certainly NOT
+        // created an order are raised as DefinitiveOrderRejection subtypes
+        // (same base class + message as before, so existing catches are
+        // unaffected). Order-placing callers then cancel the intent row with
+        // last_error_code instead of parking it as submission_unknown.
+        // 'DuplicateOrder' is deliberately NOT definitive: it means an
+        // identical order may already exist (possibly ours).
         $ex = match ($code) {
-            'ParseError'                  => new \InvalidArgumentException($msg ?: 'Bad request'),
-            'TradeLimitation'             => new \RuntimeException('User KYC level insufficient'),
-            'InvalidMarketPair'           => new \DomainException('Invalid market symbol pair'),
-            'MarketClosed'                => new \RuntimeException('Market closed'),
-            'TradingUnavailable'          => new \RuntimeException('Account trading restricted'),
+            'ParseError'                  => DefinitiveInvalidArgumentRejection::withCode($code, $msg ?: 'Bad request'),
+            'TradeLimitation'             => DefinitiveRuntimeRejection::withCode($code, 'User KYC level insufficient'),
+            'InvalidMarketPair'           => DefinitiveDomainRejection::withCode($code, 'Invalid market symbol pair'),
+            'MarketClosed'                => DefinitiveRuntimeRejection::withCode($code, 'Market closed'),
+            'TradingUnavailable'          => DefinitiveRuntimeRejection::withCode($code, 'Account trading restricted'),
             'UnsupportedMarginSrc'        => new \DomainException('Unsupported margin asset'),
             'MarginClosed'                => new \RuntimeException('Margin market closed'),
             'AmountUnavailable'           => new \RuntimeException('Delegation pool amount unavailable'),
             'ExceedDlegationLimit',
             'ExceedDelegationLimit'       => new \RuntimeException('Delegation limit exceeded'),
-            'InsufficientBalance'         => new \RuntimeException('Insufficient balance'),
+            'InsufficientBalance'         => InsufficientBalanceRejection::withCode($code, 'Insufficient balance'),
             'LeverageTooHigh'             => new \InvalidArgumentException('Leverage too high'),
             'LeverageUnavailable'         => new \RuntimeException('Leverage unavailable for user'),
-            'BadPrice'                    => new \InvalidArgumentException('Bad price'),
-            'SmallOrder'                  => new \InvalidArgumentException('Order below market minimum'),
-            'PriceConditionFailed'        => new \InvalidArgumentException('Price condition failed'),
+            'BadPrice'                    => DefinitiveInvalidArgumentRejection::withCode($code, 'Bad price'),
+            'SmallOrder'                  => DefinitiveInvalidArgumentRejection::withCode($code, 'Order below market minimum'),
+            'PriceConditionFailed'        => DefinitiveInvalidArgumentRejection::withCode($code, 'Price condition failed'),
             'DuplicateOrder'              => new \RuntimeException('Duplicate order in last 10s'),
             'NoOpenPosition'              => new \RuntimeException('No active position'),
             'ExceedLiability'             => new \InvalidArgumentException('Amount exceeds liability'),
@@ -1284,7 +1295,8 @@ class NobitexService implements ExchangeClient
         } elseif (strlen($s) === 6) {
             $src = substr($s, 0, 3); $dst = substr($s, 3);
         } else {
-            throw new \InvalidArgumentException("Unsupported symbol for order: {$symbol}");
+            // Refused locally — nothing is sent, so this is definitive.
+            throw DefinitiveInvalidArgumentRejection::withCode('LocalValidation', "Unsupported symbol for order: {$symbol}");
         }
 
         // Fit the amount to the market quantity step, truncating DOWN (shared
@@ -1293,7 +1305,7 @@ class NobitexService implements ExchangeClient
         // must never be rounded up past the balance they were sized from.
         $amount = QtyPrecision::floor((string) $quantity, $symbol);
         if (! Money::isPositive($amount)) {
-            throw new \InvalidArgumentException("Order amount {$quantity} truncates to zero at the {$symbol} quantity step");
+            throw DefinitiveInvalidArgumentRejection::withCode('LocalValidation', "Order amount {$quantity} truncates to zero at the {$symbol} quantity step");
         }
         if (Money::compare($amount, (string) $quantity) !== 0) {
             Log::channel('trading')->info('ORDER_AMOUNT_TRUNCATED', [
