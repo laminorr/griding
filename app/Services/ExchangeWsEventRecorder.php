@@ -20,7 +20,9 @@ use Throwable;
  *    variant too) with insertOrIgnore, so reconnect replays never duplicate;
  *  - the event is matched to a grid order by nobitex_order_id with a plain
  *    query-builder SELECT on grid_orders — no Eloquent model is loaded, so
- *    nothing is saved and GridOrderObserver can never fire;
+ *    nothing is saved and GridOrderObserver can never fire; failing that, by
+ *    client_order_id against a row whose nobitex_order_id is not stored yet
+ *    (event arrived before the REST placement response was saved);
  *  - a matched, newly stored event logs one WS_PRIVATE_EVENT line (the W4
  *    yardstick: what the exchange said vs. what the bot believed);
  *  - malformed events are logged (warning) and skipped; nothing here throws.
@@ -93,6 +95,12 @@ class ExchangeWsEventRecorder
         $match = $row['nobitex_order_id'] !== null
             ? $this->findGridOrder($row['nobitex_order_id'])
             : null;
+
+        // Secondary: a live order whose WS event beat the REST placement
+        // response — the row exists but its nobitex_order_id is not saved yet.
+        if ($match === null && $row['client_order_id'] !== null) {
+            $match = $this->findGridOrderByClientOrderId($row['client_order_id']);
+        }
 
         $row['channel']                 = $channel;
         $row['payload']                 = json_encode($event, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION);
@@ -244,6 +252,21 @@ class ExchangeWsEventRecorder
     {
         return DB::table('grid_orders')
             ->where('nobitex_order_id', (string) $nobitexOrderId)
+            ->orderByDesc('id')
+            ->first(['id', 'status']);
+    }
+
+    /**
+     * READ-ONLY secondary lookup by clientOrderId, ONLY for a row that has no
+     * nobitex_order_id yet. A row that already carries an exchange id is
+     * matched by that id alone (primary lookup); if the event's orderId did
+     * not match it, the clientOrderId must not override that.
+     */
+    private function findGridOrderByClientOrderId(string $clientOrderId): ?object
+    {
+        return DB::table('grid_orders')
+            ->where('client_order_id', $clientOrderId)
+            ->whereNull('nobitex_order_id')
             ->orderByDesc('id')
             ->first(['id', 'status']);
     }

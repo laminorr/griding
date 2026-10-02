@@ -91,8 +91,9 @@ final class GridRunOnceClientRefTest extends TestCase
             'apiv2.nobitex.ir/*' => Http::response(['status' => 'ok', 'order' => ['id' => 1000]], 200),
         ]);
 
-        // Mirror how GridOrderExecutor::applyForBot() builds its DTO.
-        $clientOrderId = 'grid:7:BTCIRT:sell:101000000';
+        // Mirror how GridOrderExecutor::applyForBot() builds its DTO
+        // (clientRef = GridOrder::clientOrderIdFor(row), format g{bot}-{row}).
+        $clientOrderId = 'g7-101';
         (new NobitexService())->createOrder(new CreateOrderDto(
             side:        OrderSide::SELL,
             execution:   ExecutionType::LIMIT,
@@ -115,10 +116,10 @@ final class GridRunOnceClientRefTest extends TestCase
             dstCurrency: 'irt',
             amountBase:  '0.002',
             priceIRT:    99_000_000,
-            clientRef:   'grid:1:BTCIRT:buy:99000000',
+            clientRef:   'g1-99',
         ))->toApiPayload();
 
-        $this->assertSame('grid:1:BTCIRT:buy:99000000', $payload['clientOrderId'] ?? null);
+        $this->assertSame('g1-99', $payload['clientOrderId'] ?? null);
         $this->assertArrayNotHasKey('client_ref', $payload);
     }
 }

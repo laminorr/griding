@@ -326,11 +326,11 @@ final class NobitexRequestRetryTest extends TestCase
 
         $threw = false;
         try {
-            $this->invokeNonIdempotent(json: ['clientOrderId' => 'grid:1:BTCIRT:buy:100']);
+            $this->invokeNonIdempotent(json: ['clientOrderId' => 'g1-100']);
         } catch (AmbiguousOrderSubmissionException $e) {
             $threw = true;
             $this->assertInstanceOf(ConnectionException::class, $e->getPrevious());
-            $this->assertSame('grid:1:BTCIRT:buy:100', $e->clientRef);
+            $this->assertSame('g1-100', $e->clientRef);
         }
 
         $this->assertTrue($threw, 'A ConnectionException on an order POST must surface as AmbiguousOrderSubmissionException.');

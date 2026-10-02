@@ -5,6 +5,8 @@ namespace App\DTOs;
 
 use App\Enums\OrderSide;
 use App\Enums\ExecutionType;
+use App\Exceptions\DefinitiveInvalidArgumentRejection;
+use App\Models\GridOrder;
 use App\Support\QtyPrecision;
 
 /**
@@ -77,7 +79,18 @@ public function toApiPayload(): array
         $payload['price'] = $priceStr;   // Clean integer string
     }
 
-    if ($this->clientRef) {
+    if ($this->clientRef !== null) {
+        // Send boundary: refuse an id Nobitex would reject (> 32 chars or
+        // outside [A-Za-z0-9-]) before anything leaves the process. Definitive
+        // — no order can exist — so callers cancel the intent row instead of
+        // parking it as submission_unknown.
+        if (! GridOrder::isValidNobitexClientOrderId($this->clientRef)) {
+            throw DefinitiveInvalidArgumentRejection::withCode(
+                'LocalValidation',
+                'Invalid clientOrderId for Nobitex (max 32 chars, [A-Za-z0-9-] only): ' . $this->clientRef
+            );
+        }
+
         // Official Nobitex field name for the client-supplied order tag.
         // (Documented as experimental — see NobitexService::getOrderByClientOrderId.)
         $payload['clientOrderId'] = $this->clientRef;

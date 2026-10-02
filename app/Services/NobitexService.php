@@ -9,6 +9,7 @@ use App\Exceptions\AmbiguousOrderSubmissionException;
 use App\Exceptions\DefinitiveDomainRejection;
 use App\Exceptions\DefinitiveInvalidArgumentRejection;
 use App\Exceptions\DefinitiveRuntimeRejection;
+use App\Exceptions\DuplicateClientOrderIdException;
 use App\Exceptions\InsufficientBalanceRejection;
 use App\Exceptions\OrderNotFoundException;
 use App\DTOs\ApiOkDto;
@@ -18,6 +19,7 @@ use App\DTOs\CreateOrderResponse;
 use App\DTOs\OrderBookDto;
 use App\DTOs\OrderStatusDto;
 use App\DTOs\WalletsDto;
+use App\Models\GridOrder;
 use App\Support\Money;
 use App\Support\QtyPrecision;
 use Illuminate\Http\Client\ConnectionException;
@@ -463,8 +465,9 @@ class NobitexService implements ExchangeClient
         // (same base class + message as before, so existing catches are
         // unaffected). Order-placing callers then cancel the intent row with
         // last_error_code instead of parking it as submission_unknown.
-        // 'DuplicateOrder' is deliberately NOT definitive: it means an
-        // identical order may already exist (possibly ours).
+        // 'DuplicateOrder' and 'DuplicateClientOrderId' are deliberately NOT
+        // definitive: an identical order / an open order under this very
+        // clientOrderId may already exist (ours) — the reconciler decides.
         $ex = match ($code) {
             'ParseError'                  => DefinitiveInvalidArgumentRejection::withCode($code, $msg ?: 'Bad request'),
             'TradeLimitation'             => DefinitiveRuntimeRejection::withCode($code, 'User KYC level insufficient'),
@@ -483,6 +486,10 @@ class NobitexService implements ExchangeClient
             'SmallOrder'                  => DefinitiveInvalidArgumentRejection::withCode($code, 'Order below market minimum'),
             'PriceConditionFailed'        => DefinitiveInvalidArgumentRejection::withCode($code, 'Price condition failed'),
             'DuplicateOrder'              => new \RuntimeException('Duplicate order in last 10s'),
+            // Same intent already accepted (ids are per intent row) — ambiguous,
+            // never definitive: route to submission_unknown → reconciler.
+            'DuplicateClientOrderId',
+            'duplicateClientOrderId'      => new DuplicateClientOrderIdException('Duplicate clientOrderId — an open order with this id already exists'),
             'NoOpenPosition'              => new \RuntimeException('No active position'),
             'ExceedLiability'             => new \InvalidArgumentException('Amount exceeds liability'),
             'ExceedTotalAsset'            => new \InvalidArgumentException('Total asset exceeded by order'),
@@ -1287,6 +1294,15 @@ class NobitexService implements ExchangeClient
      */
     public function placeOrder(string $symbol, string $side, int $price, string $quantity, ?string $clientRef = null): array
     {
+        // Send boundary (same rule as CreateOrderDto::toApiPayload): an id
+        // Nobitex would reject is refused locally, before any HTTP call.
+        if ($clientRef !== null && ! GridOrder::isValidNobitexClientOrderId($clientRef)) {
+            throw DefinitiveInvalidArgumentRejection::withCode(
+                'LocalValidation',
+                "Invalid clientOrderId for Nobitex (max 32 chars, [A-Za-z0-9-] only): {$clientRef}"
+            );
+        }
+
         $s = strtolower(str_replace('-', '', trim($symbol)));
         if (str_ends_with($s, 'irt')) {
             $src = substr($s, 0, -3); $dst = 'rls'; // برای endpoint خصوصی → rls

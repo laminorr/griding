@@ -102,8 +102,8 @@ Every sizing logs **`EXIT_SIZED`** with `gross`, `fee`, `fee_source`, `net`, `am
 
 | Outcome | Examples | What happens to the row |
 |---|---|---|
-| **Definitive**: the exchange certainly did not create the order | `InsufficientBalance`, `SmallOrder`, `BadPrice`, `InvalidMarketPair`, `MarketClosed`, `TradeLimitation`, `TradingUnavailable`, `ParseError`, `PriceConditionFailed`, or a local refusal (`LocalValidation`) | `cancelled` + `last_error_code`/`last_error_message`. **Never** `submission_unknown`. |
-| **Ambiguous**: the order may exist | timeout, 5xx, dropped response, `DuplicateOrder` | `submission_unknown` → reconciler (unchanged) |
+| **Definitive**: the exchange certainly did not create the order | `InsufficientBalance`, `SmallOrder`, `BadPrice`, `InvalidMarketPair`, `MarketClosed`, `TradeLimitation`, `TradingUnavailable`, `ParseError`, `PriceConditionFailed`, or a local refusal (`LocalValidation`, e.g. a clientOrderId Nobitex would reject) | `cancelled` + `last_error_code`/`last_error_message`. **Never** `submission_unknown`. |
+| **Ambiguous**: the order may exist | timeout, 5xx, dropped response, `DuplicateOrder`, `DuplicateClientOrderId` (see [client-order-id.md](client-order-id.md)) | `submission_unknown` → reconciler (unchanged) |
 
 Definitive codes raise `App\Exceptions\DefinitiveOrderRejection` subtypes. They keep the same base class (`RuntimeException`, `InvalidArgumentException` or `DomainException`) and the same message as before, so existing catches behave the same.
 

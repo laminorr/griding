@@ -96,9 +96,19 @@ final class CheckTradesPairOrderTest extends TestCase
         $ref->invoke($job, $filled, $bot);
     }
 
-    private function expectedPairClientOrderId(BotConfig $bot): string
+    /**
+     * The exit intent row(s) created for a fill. Located by the fill link,
+     * not by a price-derived id (the v2 id is per row: "g{bot}-{row}").
+     */
+    private function pairRowsFor(GridOrder $filled)
     {
-        return GridOrder::buildClientOrderId($bot->id, self::SYMBOL, 'sell', self::SELL_PRICE);
+        return GridOrder::where('paired_order_id', $filled->id)->where('role', 'cycle_exit');
+    }
+
+    private function assertV2ClientOrderId(BotConfig $bot, GridOrder $pair): void
+    {
+        $this->assertSame('g' . $bot->id . '-' . $pair->id, $pair->client_order_id);
+        $this->assertTrue(GridOrder::isValidNobitexClientOrderId((string) $pair->client_order_id));
     }
 
     /**
@@ -152,16 +162,23 @@ final class CheckTradesPairOrderTest extends TestCase
         $filled = $this->makeFilledBuy($bot);
 
         $svc = Mockery::mock(NobitexService::class);
+        $sentClientRef = null;
         $svc->shouldReceive('placeOrder')
             ->once()
-            ->andThrow(new RuntimeException('cURL error 28: Operation timed out'));
+            ->andReturnUsing(function ($symbol, $side, $price, $qty, $clientRef) use (&$sentClientRef) {
+                $sentClientRef = $clientRef;
+                throw new RuntimeException('cURL error 28: Operation timed out');
+            });
         $this->app->instance(NobitexService::class, $svc);
 
         $this->invokePairOrder($filled, $bot);
 
-        $pair = GridOrder::where('client_order_id', $this->expectedPairClientOrderId($bot))->first();
+        $pair = $this->pairRowsFor($filled)->first();
         $this->assertNotNull($pair, 'The pair intent row must survive an ambiguous placement failure.');
         $this->assertSame('submission_unknown', $pair->status);
+        $this->assertV2ClientOrderId($bot, $pair);
+        // The id sent is the committed row's id — the reconciler's lookup key.
+        $this->assertSame($pair->client_order_id, $sentClientRef);
         $this->assertNull($pair->nobitex_order_id);
         $this->assertSame($filled->id, $pair->paired_order_id);
         // The back-link stays: paired_order_id records "a continuation intent
@@ -189,7 +206,7 @@ final class CheckTradesPairOrderTest extends TestCase
 
         $this->assertSame(1, $attempts(), 'An ambiguous order POST must never be retried at the transport layer.');
 
-        $pair = GridOrder::where('client_order_id', $this->expectedPairClientOrderId($bot))->first();
+        $pair = $this->pairRowsFor($filled)->first();
         $this->assertNotNull($pair, 'The intent row must survive the ambiguous transport failure.');
         $this->assertSame('submission_unknown', $pair->status);
         $this->assertSame($pair->id, $filled->fresh()->paired_order_id);
@@ -199,9 +216,10 @@ final class CheckTradesPairOrderTest extends TestCase
      * 3. Re-entry guard — the $tries = 3 safety proof. After an ambiguous
      * failure, a queue retry (or the next scheduler tick) re-entering
      * createPairOrderLocked() for the SAME fill must NOT send a second order:
-     * the client_order_id dedup guard now matches the surviving
-     * 'submission_unknown' row (and the paired_order_id short-circuit backs
-     * it up), so the HTTP attempt count stays at 1 and no second row appears.
+     * the fill's committed paired_order_id back-link (re-read under
+     * lockForUpdate) short-circuits it, so the HTTP attempt count stays at 1
+     * and no second row appears. (The old price-derived client_order_id
+     * lookup is gone — it was the F3 bug — and is not needed for this.)
      */
     public function test_reentry_after_ambiguous_failure_does_not_place_a_second_order(): void
     {
@@ -219,10 +237,10 @@ final class CheckTradesPairOrderTest extends TestCase
         $this->assertSame(1, $attempts(), 'Re-entry must not re-send an order whose first submission is unresolved.');
         $this->assertSame(
             1,
-            GridOrder::where('client_order_id', $this->expectedPairClientOrderId($bot))->count(),
+            $this->pairRowsFor($filled)->count(),
             'Exactly one intent row must exist for the pair after re-entry.'
         );
-        $this->assertSame('submission_unknown', GridOrder::where('client_order_id', $this->expectedPairClientOrderId($bot))->value('status'));
+        $this->assertSame('submission_unknown', $this->pairRowsFor($filled)->value('status'));
     }
 
     /**
@@ -247,8 +265,9 @@ final class CheckTradesPairOrderTest extends TestCase
 
         Http::assertNothingSent();
 
-        $pair = GridOrder::where('client_order_id', $this->expectedPairClientOrderId($bot))->first();
+        $pair = $this->pairRowsFor($filled)->first();
         $this->assertNotNull($pair, 'The intent row is kept (as an audit trail) even for a pre-API failure.');
+        $this->assertV2ClientOrderId($bot, $pair);
         $this->assertSame('cancelled', $pair->status);
         $this->assertNull(
             $filled->fresh()->paired_order_id,
@@ -268,8 +287,9 @@ final class CheckTradesPairOrderTest extends TestCase
 
         Http::assertNothingSent();
 
-        $pair = GridOrder::where('client_order_id', $this->expectedPairClientOrderId($bot))->first();
+        $pair = $this->pairRowsFor($filled)->first();
         $this->assertNotNull($pair, 'Simulation must persist the pair order row.');
+        $this->assertV2ClientOrderId($bot, $pair);
         $this->assertSame('placed', $pair->status);
         $this->assertSame('sell', $pair->type);
         $this->assertStringStartsWith('SIM-', (string) $pair->nobitex_order_id);
@@ -289,9 +309,8 @@ final class CheckTradesPairOrderTest extends TestCase
         $bot    = $this->makeBot(simulation: false);
         $filled = $this->makeFilledBuy($bot);
 
-        // Another process already created a continuation and linked the fill.
-        // Its client_order_id deliberately differs from the deterministic one
-        // so the SECOND guard (paired_order_id re-read) is what must trip.
+        // Another process already created a continuation and linked the fill;
+        // the paired_order_id re-read under lockForUpdate is what must trip.
         $existingPair = GridOrder::create([
             'bot_config_id'   => $bot->id,
             'price'           => self::SELL_PRICE,
@@ -301,14 +320,16 @@ final class CheckTradesPairOrderTest extends TestCase
             'client_order_id' => 'other-process-pair',
             'nobitex_order_id'=> '424242',
             'paired_order_id' => $filled->id,
+            'role'            => 'cycle_exit',
         ]);
         $filled->update(['paired_order_id' => $existingPair->id]);
 
         $this->invokePairOrder($filled->fresh(), $bot);
 
         Http::assertNothingSent();
-        $this->assertFalse(
-            GridOrder::where('client_order_id', $this->expectedPairClientOrderId($bot))->exists(),
+        $this->assertSame(
+            1,
+            $this->pairRowsFor($filled)->count(),
             'An already-paired fill must not spawn another intent row.'
         );
         $this->assertSame($existingPair->id, $filled->fresh()->paired_order_id);

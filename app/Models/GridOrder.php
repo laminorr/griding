@@ -2,8 +2,10 @@
 
 namespace App\Models;
 
+use App\Exceptions\DefinitiveInvalidArgumentRejection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class GridOrder extends Model
@@ -129,51 +131,106 @@ class GridOrder extends Model
     }
 
     /**
-     * Build a deterministic client_order_id for a grid order.
-     * Format: grid:{botId}:{SYMBOL}:{side}:{priceIrt}
-     * Identity is bot+symbol+side+price — the stable properties of a grid
-     * level — not a transient array index, so retries/re-runs of the same
-     * level always produce the same id.
-     * Max length ≤ 64 chars to fit common exchange limits.
+     * The clientOrderId sent to Nobitex for an intent row — the ONE place the
+     * format lives.
+     *
+     * Format (v2): "g{botId}-{gridOrderRowId}", e.g. "g47-123456".
+     *
+     *  - Unique per order intent, forever: the row id is the primary key of
+     *    grid_orders, so two intents can never share an id — not even two
+     *    exits that land on the same price (the old price-derived
+     *    'grid:{bot}:{SYMBOL}:{side}:{price}' scheme collided there and either
+     *    DEDUP_SKIPped the second fill forever or hit the UNIQUE index).
+     *  - Stable across retries of the SAME intent: a retry reuses the same row,
+     *    so it sends the same id (idempotency / reconciler lookup).
+     *  - Always valid for Nobitex: 'g' + bot id (≤ 6 digits) + '-' + row id
+     *    (≤ 20 digits) is at most 28 chars of [A-Za-z0-9-]. Asserted below; a
+     *    violation is impossible for a persisted row and is refused locally.
+     *
+     * Rows created before v2 keep their legacy 'grid:…' ids untouched; those
+     * ids never start with 'g{digit}', so the two schemes cannot collide.
+     *
+     * @throws DefinitiveInvalidArgumentRejection 'LocalValidation' if the row is
+     *         not persisted or the result would violate the Nobitex rule.
      */
-    public static function buildClientOrderId(
-        int $botId,
-        string $symbol,
-        string $side,
-        int $priceIrt
-    ): string {
-        return sprintf(
-            'grid:%d:%s:%s:%d',
-            $botId,
-            strtoupper($symbol),
-            strtolower($side),
-            $priceIrt
-        );
+    public static function clientOrderIdFor(GridOrder $row): string
+    {
+        // Raw attributes, not the casts: the primary-key 'int' cast would
+        // silently saturate an out-of-range id instead of refusing it.
+        $raw   = $row->getAttributes();
+        $botId = $raw['bot_config_id'] ?? null;
+        $rowId = $raw[$row->getKeyName()] ?? null;
+
+        if (! self::isPositiveIntId($botId) || ! self::isPositiveIntId($rowId)) {
+            throw DefinitiveInvalidArgumentRejection::withCode('LocalValidation', sprintf(
+                'clientOrderIdFor: row must be persisted with a bot (bot_config_id=%s, id=%s)',
+                var_export($botId, true),
+                var_export($rowId, true)
+            ));
+        }
+
+        $id = 'g' . (string) $botId . '-' . (string) $rowId;
+
+        if (! self::isValidNobitexClientOrderId($id)) {
+            throw DefinitiveInvalidArgumentRejection::withCode(
+                'LocalValidation',
+                "clientOrderIdFor produced an id Nobitex would reject: {$id}"
+            );
+        }
+
+        return $id;
+    }
+
+    /**
+     * Intent row FIRST, id SECOND (send happens THIRD, in the caller, after
+     * this commits). Creates the row with client_order_id NULL, then stamps
+     * clientOrderIdFor(row) in the same transaction, so a committed intent row
+     * always carries its final id and no row ever exists with a different one.
+     * Nests safely (savepoint) inside a caller's open transaction.
+     *
+     * @param array<string,mixed> $attributes
+     */
+    public static function createIntent(array $attributes): self
+    {
+        return DB::transaction(function () use ($attributes): self {
+            $attributes['client_order_id'] = null;
+
+            /** @var self $row */
+            $row = static::create($attributes);
+            $row->forceFill(['client_order_id' => self::clientOrderIdFor($row)])->save();
+
+            return $row;
+        });
+    }
+
+    /** Digit-only positive integer id (int or numeric string from the driver). */
+    private static function isPositiveIntId(mixed $v): bool
+    {
+        if (is_int($v)) {
+            return $v > 0;
+        }
+
+        return is_string($v) && $v !== '' && ctype_digit($v) && ltrim($v, '0') !== '';
     }
 
     /**
      * Documented Nobitex constraint on the clientOrderId parameter
-     * (apidocs.nobitex.ir): at most 32 characters, and matching the character
-     * class ^[A-Za-z0-9-]+$ (ASCII letters, digits and the hyphen only).
+     * (apidocs.nobitex.ir, spot + margin order endpoints): at most 32
+     * characters, matching ^[A-Za-z0-9-]+$ (ASCII letters, digits and the
+     * hyphen only), unique among the user's OPEN orders.
      *
-     * This is a pure predicate — the single source of truth for "would Nobitex
-     * accept this clientOrderId?". It exists so any FUTURE change to the id
-     * scheme can be locked against both constraints in a test (or asserted at
-     * generation time) instead of silently producing ids the exchange rejects.
-     *
-     * NOTE: it is intentionally NOT wired as a throwing guard inside
-     * buildClientOrderId() today — the current 'grid:{bot}:{SYMBOL}:{side}:{price}'
-     * scheme uses ':' separators and an unbounded IRT price, so it does not yet
-     * satisfy these constraints, and that exact wire format is deliberately
-     * pinned by existing placement tests. Tightening the generator to be
-     * compliant changes the clientOrderId actually sent on placement, which is a
-     * deliberate, separately-reviewed change.
+     * Pure predicate — the single source of truth for "would Nobitex accept
+     * this clientOrderId?". Enforced at generation (clientOrderIdFor) and at
+     * the send boundary (CreateOrderDto::toApiPayload,
+     * NobitexService::placeOrder), which refuse an invalid id with
+     * DefinitiveInvalidArgumentRejection('LocalValidation') before any HTTP call.
      */
     public static function isValidNobitexClientOrderId(string $clientOrderId): bool
     {
+        // \A…\z rather than ^…$: '$' also matches before a trailing "\n".
         return $clientOrderId !== ''
             && strlen($clientOrderId) <= 32
-            && preg_match('/^[A-Za-z0-9-]+$/', $clientOrderId) === 1;
+            && preg_match('/\A[A-Za-z0-9-]+\z/', $clientOrderId) === 1;
     }
 
     public function botConfig(): BelongsTo
