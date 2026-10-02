@@ -321,11 +321,13 @@ class TestNobitexApi extends Command
         try {
             $minOrderValue = Config::get('trading.exchange.min_order_value_irt', 0);
             $allowedSymbols = Config::get('trading.exchange.allowed_symbols', []);
-            $feeBps = Config::get('trading.exchange.fee_bps', 35);
-            $feePercent = $feeBps / 100.0;
+            // Fee rates come only from FeeModel (config rates; per side).
+            $feeModel   = app(\App\Services\FeeModel::class);
+            $buyFeePct  = \App\Support\Money::div($feeModel->rateFor(null, 'buy'), '100');
+            $sellFeePct = \App\Support\Money::div($feeModel->rateFor(null, 'sell'), '100');
 
             $this->line("   💰 Min Order Value (IRT): " . number_format($minOrderValue));
-            $this->line("   💸 Exchange Fee: {$feePercent}%");
+            $this->line("   💸 Exchange Fee: buy {$buyFeePct}% (" . $feeModel->expectedCurrency('buy') . "), sell {$sellFeePct}% (" . $feeModel->expectedCurrency('sell') . ")");
             $this->line("   📊 Allowed Symbols: " . implode(', ', $allowedSymbols));
 
             if ($this->option('verbose')) {

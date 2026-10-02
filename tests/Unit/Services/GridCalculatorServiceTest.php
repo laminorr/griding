@@ -91,7 +91,8 @@ final class GridCalculatorServiceTest extends TestCase
         config([
             'trading.min_order_value_irt'                    => 3_000_000,
             'trading.ticks.BTCIRT'                           => 10,
-            'trading.exchange.fee_bps'                       => 35,
+            'trading.fees.buy_fee_bps'                       => '25',
+            'trading.fees.sell_fee_bps'                      => '25',
             'trading.exchange.precision.BTCIRT.qty_decimals' => 8,
         ]);
     }

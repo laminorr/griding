@@ -32,8 +32,11 @@ return [
     'exchange' => [
         'name' => 'nobitex',
 
-        'fee_bps' => (int) env('TRADING_EXCHANGE_FEE_BPS', 35), // 0.35%
-        'fee_rate_percent' => ((int) env('TRADING_EXCHANGE_FEE_BPS', 35)) / 100.0,
+        // DEPRECATED — no code reads this key any more. One rate for both legs
+        // cannot express a BTC-charged buy fee plus a rial-charged sell fee.
+        // Fee rates now live under 'fees' below and are only ever decided by
+        // App\Services\FeeModel. Kept so an old .env does not break config:cache.
+        'fee_bps' => (int) env('TRADING_EXCHANGE_FEE_BPS', 35),
 
         'slippage_bps' => (int) env('TRADING_SLIPPAGE_BPS', 10), // 0.10%
 
@@ -49,6 +52,56 @@ return [
             'LTCIRT'  => ['price_decimals' => 0, 'qty_decimals' => 6],
             'USDTIRT' => ['price_decimals' => 0, 'qty_decimals' => 2],
         ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Fees (single source of truth: App\Services\FeeModel)
+    |--------------------------------------------------------------------------
+    | Nothing outside FeeModel may read these keys. See docs/fees.md.
+    |
+    | Rates are basis points (25 = 0.25%), decimal strings so fractional
+    | tiers (e.g. 17.5) are expressible. Precedence for a bot:
+    |   bot_configs.buy_fee_bps / sell_fee_bps (non-NULL)  →  these values.
+    | bot_configs.fee_bps is legacy and is NOT read.
+    */
+    'fees' => [
+        // Verified on the live account: a BUY is charged 0.25% in BASE (BTC).
+        'buy_fee_bps'  => (string) env('TRADING_BUY_FEE_BPS', '25'),
+        // Nobitex docs: a SELL is charged in QUOTE (rial). Rate unverified.
+        'sell_fee_bps' => (string) env('TRADING_SELL_FEE_BPS', '25'),
+
+        // Which asset each side's fee is EXPECTED to be charged in: 'base' | 'quote'.
+        // The actual currency is detected from every real fill
+        // (FeeModel::classifyActualFee); a mismatch logs FEE_CURRENCY_UNEXPECTED.
+        'buy_fee_currency'  => env('TRADING_BUY_FEE_CURRENCY', 'base'),
+        'sell_fee_currency' => env('TRADING_SELL_FEE_CURRENCY', 'quote'),
+
+        // FEE_RATE_DRIFT is logged when an actual fill's effective rate differs
+        // from the configured rate by more than this many bps.
+        'drift_warn_bps' => (string) env('TRADING_FEE_DRIFT_WARN_BPS', '5'),
+
+        // An actual fee whose effective rate is above this (in either currency
+        // reading) is not classified at all (FEE_UNCLASSIFIABLE) — guards
+        // against garbage payloads being booked as a fee.
+        'classify_max_bps' => (string) env('TRADING_FEE_CLASSIFY_MAX_BPS', '100'),
+
+        // Fractional digits an ESTIMATED base-currency fee is rounded UP to.
+        // 10 matches the precision of the observed live BTC fees
+        // (e.g. 0.0000005575); rounding up keeps a fee-sized sell from ever
+        // exceeding the BTC actually credited.
+        'fee_scale' => (int) env('TRADING_FEE_SCALE', 10),
+
+        // Version stamped on completed_trades booked with this fee model
+        // (0 = legacy single-rate bookings, see fees:backfill).
+        'model_version' => 1,
+
+        // Sell-first cycles: size the exit BUY at ceil_qty(sold / (1 − buyRate))
+        // so the BTC inventory is restored after the BTC-denominated buy fee.
+        // false → exit buy = sold (inventory shrinks by the buy fee each cycle;
+        // the shortfall is recorded in bot_configs.base_dust).
+        'restore_inventory_on_buy_exit' => (bool) env('TRADING_RESTORE_INVENTORY_ON_BUY_EXIT', true),
+
     ],
 
     /*

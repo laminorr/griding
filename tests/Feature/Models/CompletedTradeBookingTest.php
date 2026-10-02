@@ -64,6 +64,13 @@ final class CompletedTradeBookingTest extends TestCase
 
         // Cold cache by default. Individual tests seed btc_price* explicitly.
         Cache::flush();
+
+        // Fee model Phase 1: rates come from FeeModel (bot buy_fee_bps /
+        // sell_fee_bps override → config trading.fees.*), never from the legacy
+        // fee_bps column. The characterization figures in this file were derived
+        // at 35 bps on both legs, so pin the config there; tests that need other
+        // rates override it.
+        config(['trading.fees.buy_fee_bps' => '35', 'trading.fees.sell_fee_bps' => '35']);
     }
 
     protected function tearDown(): void
@@ -125,9 +132,10 @@ final class CompletedTradeBookingTest extends TestCase
     // ─────────────────────────────────────────────────────────────────────────
 
     /**
-     * Clean winning round-trip with an EXPLICIT non-default fee_bps read straight
-     * off the buy order's bot (fee_bps = 20, distinguishable from the config
-     * default of 35). Hand-derived oracle:
+     * Clean winning round-trip with EXPLICIT per-side bot overrides read straight
+     * off the buy order's bot (buy_fee_bps = sell_fee_bps = 20, distinguishable
+     * from the pinned config of 35). The legacy fee_bps column is set to a
+     * different value (99) to prove it is NOT read. Hand-derived oracle:
      *
      *   buyPrice  = 98,000,000,000    sellPrice = 99,000,000,000
      *   amount    = 0.001 (both legs)
@@ -141,9 +149,9 @@ final class CompletedTradeBookingTest extends TestCase
      *   net_profit= net                                         =   606,000
      *   pct       = (1,000,000 / 98,000,000) × 100              = 1.020408163…%
      */
-    public function test_books_exact_values_for_a_clean_pair_with_explicit_fee_bps(): void
+    public function test_books_exact_values_for_a_clean_pair_with_explicit_bot_fee_override(): void
     {
-        $bot = BotConfigFactory::new()->live()->create(['fee_bps' => 20]);
+        $bot = BotConfigFactory::new()->live()->create(['fee_bps' => 99, 'buy_fee_bps' => 20, 'sell_fee_bps' => 20]);
         [$buy, $sell] = $this->filledPair($bot->id, '98000000000', '99000000000', '0.00100000');
 
         $trade = CompletedTrade::createFromOrders($buy, $sell)->fresh();
@@ -177,10 +185,10 @@ final class CompletedTradeBookingTest extends TestCase
     }
 
     /**
-     * The fee rate falls back to config('trading.exchange.fee_bps', 35) when the
-     * buy order has no bot to read fee_bps from. The config value is overridden
-     * to 50 (0.5%) here so the fallback is PROVABLE: a 50-bps fee is distinct
-     * from every other fee_bps this file uses.
+     * The fee rates fall back to config('trading.fees.*_fee_bps') when the buy
+     * order has no bot to read overrides from. The config values are set to 50
+     * (0.5%) here so the fallback is PROVABLE: a 50-bps fee is distinct from
+     * every other rate this file uses.
      *
      *   feeRate = 50/10000 = 0.005
      *   fee     = 0.005 × 197,000,000 = 985,000
@@ -188,15 +196,12 @@ final class CompletedTradeBookingTest extends TestCase
      */
     public function test_fee_rate_falls_back_to_config_when_bot_config_is_absent(): void
     {
-        config(['trading.exchange.fee_bps' => 50]);
+        config(['trading.fees.buy_fee_bps' => '50', 'trading.fees.sell_fee_bps' => '50']);
 
-        $bot = BotConfigFactory::new()->create(['fee_bps' => 20]);
+        $bot = BotConfigFactory::new()->create(['buy_fee_bps' => 20, 'sell_fee_bps' => 20]);
         [$buy, $sell] = $this->filledPair($bot->id, '98000000000', '99000000000', '0.00100000');
 
-        // No bot to read fee_bps from: `$buyOrder->botConfig?->fee_bps` is null,
-        // so `?? config(...)` engages. (In production this is the realistic
-        // trigger — the DECIMAL column is NOT NULL default 35, so an absent
-        // relation, not a null column, is what makes the coalesce fire.)
+        // No bot to read overrides from → FeeModel uses the config rates.
         $buy->setRelation('botConfig', null);
 
         $trade = CompletedTrade::createFromOrders($buy, $sell)->fresh();
@@ -207,28 +212,22 @@ final class CompletedTradeBookingTest extends TestCase
     }
 
     /**
-     * The `?? config()` fallback is a NULL-coalesce, so it distinguishes a null
-     * fee_bps from a zero fee_bps:
-     *   - fee_bps = null  → coalesce fires  → config (here 50 bps) is used.
-     *   - fee_bps = 0     → coalesce is skipped (0 is not null) → feeRate 0,
-     *                       zero fee, net == gross. Config is NOT consulted.
+     * FeeModel distinguishes a NULL override from a zero override:
+     *   - buy/sell_fee_bps = null → not overridden → config (here 50 bps).
+     *   - buy/sell_fee_bps = 0    → taken literally → zero fee, net == gross.
      *
-     * CHARACTERIZATION: a bot deliberately configured with fee_bps = 0 pays no
-     * fee and never falls back to the exchange default. At BTCIRT notionals of
-     * ~2e8 IRT the default 35-bps fee it silently skips is ~689,500 IRT per
-     * round-trip, so a mis-set 0 materially overstates booked profit — but it is
-     * the documented behaviour of the `??` operator, not a bug to fix here.
+     * A deliberate 0 override means a zero-fee bot; the bot form exposes the
+     * override fields with "blank = default" so NULL is the normal state.
      */
-    public function test_null_fee_bps_falls_back_but_zero_fee_bps_is_taken_literally(): void
+    public function test_null_override_falls_back_but_zero_override_is_taken_literally(): void
     {
-        config(['trading.exchange.fee_bps' => 50]);
+        config(['trading.fees.buy_fee_bps' => '50', 'trading.fees.sell_fee_bps' => '50']);
         $bot = BotConfigFactory::new()->create();
 
         // --- fee_bps = null (in-memory; the DECIMAL column is NOT NULL so this
         //     branch is only reachable via the relation object itself) ---------
         [$buyN, $sellN] = $this->filledPair($bot->id, '98000000000', '99000000000', '0.00100000');
-        $botNull = BotConfigFactory::new()->make();
-        $botNull->fee_bps = null;
+        $botNull = BotConfigFactory::new()->make(['buy_fee_bps' => null, 'sell_fee_bps' => null]);
         $buyN->setRelation('botConfig', $botNull);
 
         $tradeNull = CompletedTrade::createFromOrders($buyN, $sellN)->fresh();
@@ -237,11 +236,11 @@ final class CompletedTradeBookingTest extends TestCase
 
         // --- fee_bps = 0 -------------------------------------------------------
         [$buyZ, $sellZ] = $this->filledPair($bot->id, '98000000000', '99000000000', '0.00100000');
-        $botZero = BotConfigFactory::new()->make(['fee_bps' => 0]);
+        $botZero = BotConfigFactory::new()->make(['buy_fee_bps' => 0, 'sell_fee_bps' => 0]);
         $buyZ->setRelation('botConfig', $botZero);
 
         $tradeZero = CompletedTrade::createFromOrders($buyZ, $sellZ)->fresh();
-        // Zero fee — config (50) NOT consulted; net equals gross.
+        // Zero override — config (50) NOT consulted; net equals gross.
         $this->assertSame('0.00000000', $tradeZero->fee);
         $this->assertSame('1000000.00000000', $tradeZero->gross_profit);
         $this->assertSame('1000000.00000000', $tradeZero->net_profit);

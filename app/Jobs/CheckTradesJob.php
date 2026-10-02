@@ -843,16 +843,16 @@ class CheckTradesJob implements ShouldQueue
             return;
         }
 
-        $profit = ($sellOrder->price - $buyOrder->price) * $buyOrder->amount;
+        Log::info("CheckTradesJob: Booking completed trade via link — buy #{$buyOrder->id} <-> sell #{$sellOrder->id}");
 
-        Log::info("CheckTradesJob: Booking completed trade via link — buy #{$buyOrder->id} <-> sell #{$sellOrder->id}, gross profit: {$profit}");
-
-        // ایجاد CompletedTrade
-        $this->recordCompletedTrade($buyOrder, $sellOrder, $bot);
+        // ایجاد CompletedTrade — every figure (gross/fee/net) is computed once,
+        // in CompletedTrade::createFromOrders via FeeModel, and logged from the
+        // persisted row; nothing is recomputed here.
+        $trade = $this->recordCompletedTrade($buyOrder, $sellOrder, $bot);
 
         // Log pairing
         $logger = app(BotActivityLogger::class);
-        $logger->logOrderPaired($bot->id, $buyOrder->id, $sellOrder->id, $profit);
+        $logger->logOrderPaired($bot->id, $buyOrder->id, $sellOrder->id, (string) $trade->gross_profit);
 
         Log::info("CheckTradesJob: ✅ Created completed trade for buy order {$buyOrder->id} and sell order {$sellOrder->id}");
     }
@@ -1141,33 +1141,18 @@ class CheckTradesJob implements ShouldQueue
     {
         $logger = app(BotActivityLogger::class);
 
-        $buyPrice = $buyOrder->price;
-        $sellPrice = $sellOrder->price;
-        $amount = $buyOrder->amount;
-
-        // محاسبه سود/زیان برای logging.
-        // نرخ کارمزد از همان منبع رسمی‌ای خوانده می‌شود که CompletedTrade::createFromOrders
-        // برای persist استفاده می‌کند (fee_bps ربات، fallback به config). این تضمین می‌کند
-        // مقدار log شده دقیقاً با مقدار ذخیره‌شده در رکورد معامله یکی باشد.
-        $feeBps = $bot->fee_bps ?? config('trading.exchange.fee_bps', 35);
-        $feeRate = $feeBps / 10000.0; // bps → نرخ (35 bps = 0.0035)
-        $grossProfit = ($sellPrice - $buyPrice) * $amount;
-        $totalFee = (($buyPrice * $amount) + ($sellPrice * $amount)) * $feeRate;
-        $netProfit = $grossProfit - $totalFee;
-
-        // ✅ DEBUG: Log before creating trade with all details
+        // Fee model Phase 1: this method used to recompute gross/fee/net in
+        // float with its own fee-rate lookup (and on buyOrder->amount rather
+        // than the booked quantity), so the logged numbers could differ from
+        // the stored row. The row is now the only source: book first, then
+        // log exactly what was persisted.
         Log::info("🔄 Attempting to create completed trade from orders", [
             'bot_id' => $bot->id,
             'bot_name' => $bot->name,
             'buy_order_id' => $buyOrder->id,
             'sell_order_id' => $sellOrder->id,
-            'buy_price' => $buyPrice,
-            'sell_price' => $sellPrice,
-            'amount' => $amount,
-            'gross_profit' => $grossProfit,
-            'net_profit' => $netProfit,
-            'total_fee' => $totalFee,
-            'execution_time' => $sellOrder->updated_at->diffInSeconds($buyOrder->created_at),
+            'buy_price' => (string) $buyOrder->price,
+            'sell_price' => (string) $sellOrder->price,
         ]);
 
         try {
@@ -1192,11 +1177,11 @@ class CheckTradesJob implements ShouldQueue
                 'trade_id' => $trade->id,
                 'buy_order_id' => $buyOrder->id,
                 'sell_order_id' => $sellOrder->id,
-                'buy_price' => $buyPrice,
-                'sell_price' => $sellPrice,
-                'amount' => $amount,
-                'profit' => $netProfit,
-                'fee' => $totalFee,
+                'buy_price' => (string) $trade->buy_price,
+                'sell_price' => (string) $trade->sell_price,
+                'amount' => (string) $trade->amount,
+                'profit' => (string) $trade->net_profit,
+                'fee' => (string) $trade->fee,
             ]);
 
             return $trade;

@@ -32,7 +32,9 @@ class BotConfig extends Model
         'capital_locked_irt',   // سرمایهٔ قفل‌شده در چرخه‌های باز (IRT) — Phase 11 Step 1
         // 'status',            // Computed via getStatusAttribute() accessor, not fillable
         'min_order_value_irt',  // حداقل ارزش سفارش
-        'fee_bps',              // کارمزد به bps (مثلاً 35 = 0.35%)
+        'fee_bps',              // DEPRECATED — not read by any code; see FeeModel / buy_fee_bps, sell_fee_bps
+        'buy_fee_bps',          // override نرخ کارمزد خرید (bps)؛ NULL = مقدار config (FeeModel)
+        'sell_fee_bps',         // override نرخ کارمزد فروش (bps)؛ NULL = مقدار config (FeeModel)
         'qty_decimals',         // تعداد اعشار مقدار
         'tick',                 // سایز تیک قیمت
         'settings_json',        // تنظیمات اضافی (json)

@@ -340,6 +340,68 @@ final class Money
     }
 
     /**
+     * Round DOWN (toward −∞) to $scale fractional digits, using bcmath only.
+     *
+     * Unlike {@see self::round()} this never goes through a float, so it is
+     * exact at any magnitude. For a positive quantity it is plain truncation,
+     * which is what exchange quantity steps require: a sized order must never
+     * be larger than the value it was derived from.
+     *
+     * @param string $value Decimal string.
+     * @param int    $scale Fractional digits to keep (>= 0).
+     * @return string Trimmed decimal string, <= $value.
+     */
+    public static function floorToScale(string $value, int $scale): string
+    {
+        if ($scale < 0) {
+            throw new \InvalidArgumentException('Scale must be non-negative.');
+        }
+        $cmpScale  = max(self::DEFAULT_SCALE, self::fractionLength($value), $scale);
+        $truncated = bcadd($value, '0', $scale); // bcmath truncates toward zero
+        if (bccomp($value, $truncated, $cmpScale) < 0) {
+            // Negative value with a remainder: truncation moved it UP; step down one ulp.
+            $truncated = bcsub($truncated, self::ulp($scale), $scale);
+        }
+        return self::trimZeros($truncated);
+    }
+
+    /**
+     * Round UP (toward +∞) to $scale fractional digits, using bcmath only.
+     *
+     * Used wherever an over-estimate is the safe direction (an estimated fee
+     * deducted from a sell, an inventory-restoring buy quantity).
+     *
+     * @param string $value Decimal string.
+     * @param int    $scale Fractional digits to keep (>= 0).
+     * @return string Trimmed decimal string, >= $value.
+     */
+    public static function ceilToScale(string $value, int $scale): string
+    {
+        if ($scale < 0) {
+            throw new \InvalidArgumentException('Scale must be non-negative.');
+        }
+        $cmpScale  = max(self::DEFAULT_SCALE, self::fractionLength($value), $scale);
+        $truncated = bcadd($value, '0', $scale);
+        if (bccomp($value, $truncated, $cmpScale) > 0) {
+            $truncated = bcadd($truncated, self::ulp($scale), $scale);
+        }
+        return self::trimZeros($truncated);
+    }
+
+    /** Number of fractional digits written in a decimal string ("1.2300" → 4). */
+    private static function fractionLength(string $value): int
+    {
+        $dot = strpos($value, '.');
+        return $dot === false ? 0 : strlen($value) - $dot - 1;
+    }
+
+    /** One unit in the last place at $scale ("0.00000001" for 8). */
+    private static function ulp(int $scale): string
+    {
+        return $scale === 0 ? '1' : '0.' . str_repeat('0', $scale - 1) . '1';
+    }
+
+    /**
      * حذف صفرهای اضافه در انتهای رشته اعشاری.
      *
      * Trims insignificant trailing zeros (and a now-bare decimal point) without changing the

@@ -3,7 +3,7 @@
 
     Every number rendered here traces to exactly ONE honest source:
       • levels / prices / quantities / notionals  → GridPlanner::plan()
-      • fees + gross-profit-per-cycle              → the real fee_bps (0.35%)
+      • fees + gross-profit-per-cycle              → App\Services\FeeModel (per-side rates)
       • risk level + factors                       → assessGridRisk()
     No daily/monthly projections, no success probability, no USD, no efficiency
     — those were audited as fake/heuristic and are deliberately absent.
@@ -406,7 +406,8 @@
         @if ($hasResults && $plan)
             @php
                 $items   = $plan['items'] ?? [];
-                $feeRate = $feeBps !== null ? $feeBps / 100 : null; // bps → percent
+                // bps → percent, bcmath on strings (FeeModel rates)
+                $bpsPct  = fn ($bps) => $bps !== null ? \App\Support\Money::div((string) $bps, '100') : null;
             @endphp
 
             {{-- Plan summary (all straight from GridPlanner::plan) --}}
@@ -669,7 +670,7 @@
             <div class="panel-section">
                 <div class="panel-section__head">
                     <span class="panel-section__title">کارمزد و سود هر چرخه</span>
-                    <span class="at-badge muted">کارمزد: {{ $fa($trim($feeRate)) }}٪ (fee_bps = {{ $fa($feeBps) }})</span>
+                    <span class="at-badge muted">کارمزد خرید: {{ $fa($bpsPct($buyFeeBps)) }}٪ · کارمزد فروش: {{ $fa($bpsPct($sellFeeBps)) }}٪</span>
                 </div>
                 <div class="panel-section__body">
                     @if ($grossPerCycle !== null)
@@ -697,8 +698,9 @@
                         </div>
                         <p class="calc-note" style="margin-block-start: var(--at-gap-md);">
                             سود ناخالص هر چرخه = ارزش سفارش × (فاصله ÷ ۱۰۰) = {{ $fmt($repNotional) }} × {{ $fa($trim($gridSpacing)) }}٪.
-                            کارمزد هر دو طرف حساب می‌شود: (fee_bps ÷ ۱۰۰۰۰) × (ارزش خرید + ارزش فروش)، که ارزش فروش = ارزش خرید × (۱ + فاصله ÷ ۱۰۰)
-                            — یعنی همان فرمول موتور واقعی (کارمزد طرف فروش روی ارزش بزرگ‌تر). یک چرخه = یک خرید و یک فروش کامل روی یک پله.
+                            کارمزد هر طرف با نرخ همان طرف: نرخ خرید × ارزش خرید + نرخ فروش × ارزش فروش.
+                            پلهٔ خرید: ارزش فروش = ارزش خرید × (۱ + فاصله ÷ ۱۰۰)؛ پلهٔ فروش: ارزش خرید = ارزش فروش × (۱ − فاصله ÷ ۱۰۰)
+                            — همان مدلی که موتور واقعی ثبت می‌کند (FeeModel). یک چرخه = یک خرید و یک فروش کامل روی یک پله.
                             هیچ تعمیمی به روز/هفته/ماه انجام نمی‌شود.
                         </p>
                     @else
@@ -786,8 +788,8 @@
                  cycle uses the SAME formula the engine records
                  (CompletedTrade::createFromOrders) on that level's own notional:
                      gross = notional × (فاصله ÷ ۱۰۰)
-                     fee   = (fee_bps ÷ ۱۰۰۰۰) × (ارزش خرید + ارزش فروش)
-                           = (fee_bps ÷ ۱۰۰۰۰) × notional × (۲ + فاصله ÷ ۱۰۰)
+                     fee   = buyRate × buyNotional + sellRate × sellNotional
+                           (FeeModel::cycleEstimate, per level side)
                      net   = gross − fee
                  summed over ALL priced levels on BOTH sides (= N placed cycles,
                  not per_side). NOT a projection — no ×day/week/month. Every value

@@ -127,7 +127,12 @@ trait BuildsGridSchema
             // Legacy / risk-management columns.
             //   (2025_07_24_214742_create_bot_configs_table
             //    + 2025_10_23_000001_add_missing_columns_to_bot_configs_table)
-            $table->unsignedSmallInteger('fee_bps')->default(35);       // 35 = 0.35%
+            $table->unsignedSmallInteger('fee_bps')->default(35);       // 35 = 0.35% (legacy, unread)
+
+            // Fee model Phase 1 (2026_10_02_000001_add_side_fee_bps_to_bot_configs_table):
+            // NULL = use config('trading.fees.*_fee_bps') via FeeModel.
+            $table->decimal('buy_fee_bps', 8, 4)->nullable();
+            $table->decimal('sell_fee_bps', 8, 4)->nullable();
             // total_capital & center_price are decimal(20,0) in production — same
             // sqlite precision caveat as capital_locked_irt above.
             $table->decimal('total_capital', 20, 0)->default(100000000);

@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Support\Facades\Log;
+use App\Services\FeeModel;
 use App\Support\Money;
 use Carbon\Carbon;
 
@@ -379,24 +380,24 @@ class CompletedTrade extends Model
         // سود ناخالص (قبل از کسر کارمزد) = (sellPrice − buyPrice) × amount
         $grossProfit = Money::mul(Money::sub($sellPrice, $buyPrice), $amount);
 
-        // محاسبه کارمزد روی هر دو طرف معامله (خرید و فروش).
+        // کارمزد هر طرف با نرخ همان طرف — منبع واحد: FeeModel (override ربات
+        // buy_fee_bps / sell_fee_bps، سپس config('trading.fees.*')). ستون قدیمی
+        // fee_bps دیگر خوانده نمی‌شود.
         //
-        // grid_orders هیچ ستون `fee` ندارد، بنابراین نمی‌توان کارمزد را از روی
-        // سفارش‌ها خواند. منبع رسمی کارمزد، fee_bps خودِ ربات است (override در
-        // سطح هر ربات) و در صورت نبود، مقدار سراسری config('trading.exchange.fee_bps').
-        // fee_bps بر حسب basis point است (35 = 0.35% = 0.0035).
-        // A fee_bps of 0 is taken LITERALLY as a zero-fee configuration, not
-        // replaced by the config fallback — the ?? null-coalesce only fires on
-        // null, never on 0. Safe because the column is NOT NULL DEFAULT 35 and
-        // fee_bps is not exposed in any Filament form (Cleanup Phase 3), so an
-        // accidental 0 cannot enter via the admin UI; a deliberate 0 legitimately
-        // means zero fee.
-        $feeBps  = $buyOrder->botConfig?->fee_bps ?? config('trading.exchange.fee_bps', 35);
-        $feeRate = Money::div((string) $feeBps, '10000'); // bps → نرخ (35 bps = 0.0035)
+        //   fee = buyRate × buyNotional + sellRate × sellNotional
+        //
+        // The buy fee is charged in BTC (VERIFIED); buyRate × buyNotional is that
+        // BTC fee valued at the buy price, which docs/fee-audit.md §C1 proves is
+        // the exact economic cost. A rate of 0 (explicit override "0") is taken
+        // literally. A missing bot relation falls back to config rates.
+        $feeModel = app(FeeModel::class);
+        $bot      = $buyOrder->botConfig;
+        $buyRate  = $feeModel->rateFraction($bot, FeeModel::SIDE_BUY);
+        $sellRate = $feeModel->rateFraction($bot, FeeModel::SIDE_SELL);
 
         $buyNotional  = Money::mul($buyPrice, $amount);
         $sellNotional = Money::mul($sellPrice, $amount);
-        $totalFee     = Money::mul($feeRate, Money::add($buyNotional, $sellNotional));
+        $totalFee     = Money::add(Money::mul($buyRate, $buyNotional), Money::mul($sellRate, $sellNotional));
 
         // سود خالص = سود ناخالص − کارمزد دو طرف
         $netProfit = Money::sub($grossProfit, $totalFee);
