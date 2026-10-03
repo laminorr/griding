@@ -8,8 +8,10 @@ use App\Enums\ExecutionType;
 use App\Enums\OrderSide;
 use App\Exceptions\DefinitiveOrderRejection;
 use App\Models\GridOrder;
+use App\Support\MarketPrecision;
 use App\Support\Money;
 use App\Support\OrderRegistry;
+use App\Support\QtyPrecision;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
@@ -174,7 +176,18 @@ class GridOrderExecutor
                 continue;
             }
 
-            $price = $this->roundToTick($price, $tick);
+            // "The row is what was sent": fit price and amount to the market
+            // BEFORE the intent row is written, exactly as the send boundary
+            // (CreateOrderDto::toApiPayload) will, so grid_orders never
+            // diverges from the exchange. Price: side-safe (buy down, sell
+            // up) to the plan tick and the market tick. Amount: floored.
+            $price    = $this->roundToTick($price, $tick, $side, $symbol);
+            $quantity = QtyPrecision::floor($quantity, $symbol);
+            if (! Money::isPositive($quantity)) {
+                $errors++;
+                Log::channel('trading')->error('EXEC_PLACE_INVALID', ['symbol'=>$symbol,'plan'=>$p,'reason'=>'quantity truncates to zero at the market step']);
+                continue;
+            }
             [$src, $dst] = $this->splitSymbol($symbol);
 
             // Per-level lock around dedup + intent-row creation. Each intent
@@ -443,11 +456,16 @@ class GridOrderExecutor
         }
     }
 
-    /** رُند کردن قیمت روی مضارب tick (پیش‌فرض: کف تیک) */
-    protected function roundToTick(int $price, int $tick): int
+    /**
+     * رُند کردن قیمت روی مضارب tick — side-safe: buy → کف، sell → سقف.
+     * First the plan's tick, then the market tick (MarketPrecision), so the
+     * stored price is exactly what toApiPayload sends.
+     */
+    protected function roundToTick(int $price, int $tick, string $side, string $symbol): int
     {
-        $tick = max(1, $tick);
-        return (int) Money::alignToTick((string) $price, (string) $tick, 'floor');
+        $up    = $side === 'sell';
+        $price = MarketPrecision::alignToTick((string) $price, (string) max(1, $tick), $up);
+        return MarketPrecision::roundPrice($price, $symbol, $side);
     }
 
 }

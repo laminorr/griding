@@ -30,5 +30,8 @@
         <env name="PULSE_ENABLED" value="false"/>
         <env name="TELESCOPE_ENABLED" value="false"/>
         <env name="NIGHTWATCH_ENABLED" value="false"/>
+        <!-- Never resolve market precision over the network in tests; tests that
+             exercise the live path enable it explicitly with Http::fake(). -->
+        <env name="TRADING_PRECISION_LIVE" value="false" force="true"/>
     </php>
 </phpunit>

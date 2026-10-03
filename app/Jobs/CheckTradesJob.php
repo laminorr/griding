@@ -8,6 +8,7 @@ use App\Models\CompletedTrade;
 use App\Exceptions\DefinitiveOrderRejection;
 use App\Services\ExitRejectionHandler;
 use App\Services\ExitSizer;
+use App\Support\MarketPrecision;
 use App\Services\FeeModel;
 use App\Services\NobitexService;
 use App\Services\SimulatedBasePosition;
@@ -1019,11 +1020,17 @@ class CheckTradesJob implements ShouldQueue
             ? Money::mul($filledOrder->price, Money::add('1', $spacingStr))
             : Money::mul($filledOrder->price, Money::sub('1', $spacingStr));
 
-        // IRT prices are whole-rial integers (DECIMAL(20,0)); round half-up
-        // to the integer rial on the decimal string (no float round-trip).
-        $newPrice = (int) FeeModel::roundHalfUp($rawPrice, 0);
-
         $symbol = $bot->symbol ?? 'BTCIRT';
+
+        // Fit the exit price to the MARKET TICK (not just the whole rial) in
+        // the side-safe direction, so the realised spread is never below
+        // grid_spacing and the stored row equals what Nobitex keeps:
+        //   exit SELL → round UP, exit BUY → round DOWN.
+        // Bot 48: 225328984910 × 0.985 = 221949050136.35 → 221949050130
+        // (the old half-up-to-rial gave …136; Nobitex stored …140).
+        // Resolved before the pairing transaction — a cold precision cache
+        // must never hold row locks across an HTTP call.
+        $newPrice = MarketPrecision::roundPrice($rawPrice, $symbol, $newType);
 
         // Fee model Phase 4: the exit AMOUNT is decided by ExitSizer inside
         // the pairing transaction below (fee-net sell / inventory-restoring

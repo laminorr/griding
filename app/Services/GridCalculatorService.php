@@ -72,11 +72,12 @@ class GridCalculatorService
     }
 
     /**
-     * تعداد اعشار مقدار کریپتو برای هر symbol — منبع واحد: config/trading.php
+     * تعداد اعشار مقدار کریپتو برای هر symbol — منبع واحد: MarketPrecision
+     * (live /v2/options → last-known-good → config/trading.php)
      */
     private function qtyDecimals(string $symbol): int
     {
-        return (int) (config("trading.exchange.precision.{$symbol}.qty_decimals") ?? 8);
+        return \App\Support\QtyPrecision::decimalsFor($symbol);
     }
 
     /**

@@ -30,7 +30,7 @@ class GridOrderSync
 
         // تعیین tick و min IRT از پارامتر → plan → config
         $tick = (int) ($tick
-            ?? ($plan['tick'] ?? (int) config("trading.ticks.$symbol", 1)));
+            ?? ($plan['tick'] ?? \App\Support\MarketPrecision::priceTick($symbol)));
         if ($tick <= 0) { $tick = 1; }
 
         // Hard-coded fallback for min_order_value_irt to handle config loading issues

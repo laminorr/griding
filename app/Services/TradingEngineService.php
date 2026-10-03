@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\GridOrder;
 use App\Models\BotConfig;
 use App\Support\Money;
+use App\Support\QtyPrecision;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Collection;
 use Exception;
@@ -713,6 +714,10 @@ class TradingEngineService
         if ($fixedQty === '' || $fixedQty === '-0') {
             $fixedQty = '0';
         }
+        // Fit to the market quantity step (MarketPrecision; BTCIRT = 6 dp) so
+        // the planned, stored and sent amounts are identical — bot 48 sent
+        // 0.00004504 and Nobitex silently kept 0.000045.
+        $fixedQty = QtyPrecision::floor($fixedQty, $symbol);
 
         // Balance-aware SELL sizing (Phase 11 Step 5) — INITIAL PLACEMENT ONLY.
         // If the account already holds enough base currency (BTC for BTCIRT) to

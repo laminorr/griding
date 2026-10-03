@@ -7,6 +7,7 @@ use App\Enums\OrderSide;
 use App\Enums\ExecutionType;
 use App\Exceptions\DefinitiveInvalidArgumentRejection;
 use App\Models\GridOrder;
+use App\Support\MarketPrecision;
 use App\Support\QtyPrecision;
 
 /**
@@ -56,9 +57,11 @@ public function toApiPayload(): array
     // orders and exit orders are fitted identically.
     $amountStr = QtyPrecision::floor((string) $this->amountBase, $symbol);
 
-    // Ensure price is integer string (remove any .0)
-    if (str_contains($priceStr, '.')) {
-        $priceStr = explode('.', $priceStr, 2)[0];
+    // Price: whole rials on the market tick. An off-tick price is fitted
+    // side-safely (buy down, sell up) and logged ORDER_PRICE_ROUNDED — a
+    // safety net only; GridOrderExecutor aligns before writing the row.
+    if ($this->execution->isPriceRequired()) {
+        $priceStr = MarketPrecision::priceForSend($priceStr, $symbol, $this->side === OrderSide::BUY ? 'buy' : 'sell');
     }
 
     // CRITICAL FIX: For IRT markets (BTCIRT, ETHIRT, USDTIRT), API expects 'rls'
