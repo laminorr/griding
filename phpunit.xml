@@ -79,6 +79,10 @@
         <env name="TRADING_SCHEDULER_ALIGN" value="true" force="true"/>
         <env name="TRADING_SCHEDULER_JITTER" value="0" force="true"/>
         <env name="TRADING_QUEUE_DEPTH_ALERT" value="500" force="true"/>
+        <env name="NOBITEX_WS_READ_TIMEOUT_SECONDS" value="60" force="true"/>
+        <env name="NOBITEX_WS_PRIVATE_MAX_SILENCE_SECONDS" value="90" force="true"/>
+        <env name="NOBITEX_WS_PRIVATE_FLAP_RECONNECTS_PER_HOUR" value="10" force="true"/>
+        <env name="NOBITEX_WS_API_LAG_RECHECK_DELAYS" value="2,4,8" force="true"/>
         <!-- Same pins in $_SERVER: Laravel's env repository reads $_SERVER before $_ENV,
              so a variable exported in the shell (not just .env) would otherwise win. -->
         <server name="TRADING_PRECISION_LIVE" value="false"/>
@@ -124,5 +128,9 @@
         <server name="TRADING_SCHEDULER_ALIGN" value="true"/>
         <server name="TRADING_SCHEDULER_JITTER" value="0"/>
         <server name="TRADING_QUEUE_DEPTH_ALERT" value="500"/>
+        <server name="NOBITEX_WS_READ_TIMEOUT_SECONDS" value="60"/>
+        <server name="NOBITEX_WS_PRIVATE_MAX_SILENCE_SECONDS" value="90"/>
+        <server name="NOBITEX_WS_PRIVATE_FLAP_RECONNECTS_PER_HOUR" value="10"/>
+        <server name="NOBITEX_WS_API_LAG_RECHECK_DELAYS" value="2,4,8"/>
     </php>
 </phpunit>

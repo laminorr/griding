@@ -12,8 +12,15 @@ interface WsFrameClient
 {
     public function send(string $payload): void;
 
-    /** Next text frame; null/'' for an empty or close frame. */
+    /**
+     * Next text frame; null/'' for an empty or close frame.
+     *
+     * @throws \App\Exceptions\WsReadTimeoutException no frame within the read timeout
+     */
     public function receive(): ?string;
+
+    /** Socket read timeout for the next receive() calls, in seconds (>= 1). */
+    public function setReadTimeout(int $seconds): void;
 
     public function isConnected(): bool;
 

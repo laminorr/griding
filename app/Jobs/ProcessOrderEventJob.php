@@ -34,6 +34,22 @@ use Illuminate\Support\Facades\Log;
  * events for one order queues one job; an event arriving after that job has
  * started queues a new one (so a later fill is not lost).
  *
+ * API-lag re-check: REST can lag the WS. A terminal event (Done / Canceled)
+ * whose REST status is still non-terminal (ACTIVE, PENDING, ...) with nothing
+ * paired is re-checked after trading.websocket.api_lag_recheck_delays (2s, 4s,
+ * 8s) by DISPATCHING A NEW job carrying $recheck = attempt number, never by
+ * release(): release() would spend $tries (kept for real failures) and is not
+ * needed for uniqueness — ShouldBeUniqueUntilProcessing has already released
+ * the unique lock before handle() runs, so the re-dispatch takes a fresh lock
+ * (if a new event's job is already queued for this order, the re-dispatch is
+ * absorbed and that job does the REST check instead). The delay is honoured by
+ * the database queue (available_at = now + delay; `queue:work database
+ * --sleep=1` polls every second). After the last delay: WS_EVENT_API_LAGGING_
+ * GAVE_UP and the minute poller takes over. Each re-check goes through the
+ * same guards as the first run (bot active, not simulation, order not terminal
+ * locally) and the same order-status / pair-order locks, so one fill still
+ * yields exactly one exit even when a re-check and the poller race.
+ *
  * Safety net: the CheckTradesJob minute poller stays scheduled and enabled. If
  * this job is skipped, busy, delayed or fails, the next poll picks the order up
  * exactly as it did before W4.
@@ -60,10 +76,26 @@ class ProcessOrderEventJob implements ShouldQueue, ShouldBeUniqueUntilProcessing
      */
     public $uniqueFor = 120;
 
+    /**
+     * WS event statuses that mean "the order is finished on the exchange".
+     * ExchangeWsEventRecorder never dispatches the "Failed" placement variant
+     * (not actionable), so it is not listed. "Inactive" (an untriggered stop)
+     * is not terminal.
+     */
+    public const TERMINAL_EVENT_STATUSES = ['Done', 'Canceled'];
+
+    /** REST statuses (GridOrderStatus values; Nobitex Inactive maps to CANCELED) with nothing left to wait for. */
+    public const TERMINAL_API_STATUSES = ['FILLED', 'CANCELED', 'ERROR'];
+
+    /** Local statuses a re-check can still change (CheckTradesJob::POLLED_STATUSES). */
+    private const RECHECKABLE_LOCAL_STATUSES = ['placed', 'partially_filled'];
+
     public function __construct(
         public int $gridOrderId,
         public ?string $eventStatus = null,
         public ?int $eventTimeMs = null,
+        /** 0 = the event itself; n = the n-th API-lag re-check. */
+        public int $recheck = 0,
     ) {
     }
 
@@ -122,10 +154,83 @@ class ProcessOrderEventJob implements ShouldQueue, ShouldBeUniqueUntilProcessing
             'outcome'          => $result['outcome'],
             'local_status'     => $order->status,
             'pair_attempted'   => $result['pair_attempted'],
+            'recheck'          => $this->recheck,
             'latency_ms'       => $this->eventTimeMs !== null
                 ? (int) floor(microtime(true) * 1000) - $this->eventTimeMs
                 : null,
         ]);
+
+        if ($this->isApiLagging($result, $order)) {
+            $this->scheduleRecheck($order, $bot, (string) $result['api_status']);
+        }
+    }
+
+    /**
+     * The WS said the order is finished, REST still says it is live, and
+     * nothing was paired: the exchange's REST view is lagging its WS feed.
+     * Not lagging: a non-terminal event (Active/partial), a busy lock or
+     * missing status (api_status null: the poller has it), a terminal REST
+     * status, a pair attempt, or a row already terminal locally.
+     *
+     * @param array{outcome:string, api_status:?string, pair_attempted:bool} $result
+     */
+    private function isApiLagging(array $result, GridOrder $order): bool
+    {
+        return in_array($this->eventStatus, self::TERMINAL_EVENT_STATUSES, true)
+            && is_string($result['api_status'])
+            && !in_array($result['api_status'], self::TERMINAL_API_STATUSES, true)
+            && !$result['pair_attempted']
+            && in_array($order->status, self::RECHECKABLE_LOCAL_STATUSES, true);
+    }
+
+    private function scheduleRecheck(GridOrder $order, BotConfig $bot, string $apiStatus): void
+    {
+        $delays = self::recheckDelays();
+        if ($delays === []) {
+            return; // re-checks disabled
+        }
+
+        if ($this->recheck >= count($delays)) {
+            Log::channel('trading')->warning('WS_EVENT_API_LAGGING_GAVE_UP', [
+                'grid_order_id' => $order->id,
+                'bot_id'        => $bot->id,
+                'event_status'  => $this->eventStatus,
+                'api_status'    => $apiStatus,
+                'rechecks'      => $this->recheck,
+                'note'          => 'CheckTradesJob minute poller will pick this order up.',
+            ]);
+            return;
+        }
+
+        $attempt = $this->recheck + 1;
+        $delay   = $delays[$this->recheck];
+
+        // A NEW job (not release()): see the class docblock.
+        $pending = self::dispatch($this->gridOrderId, $this->eventStatus, $this->eventTimeMs, $attempt)->delay($delay);
+        unset($pending);
+
+        Log::channel('trading')->info('WS_EVENT_API_LAG_RECHECK', [
+            'grid_order_id' => $order->id,
+            'bot_id'        => $bot->id,
+            'event_status'  => $this->eventStatus,
+            'api_status'    => $apiStatus,
+            'attempt'       => $attempt,
+            'delay'         => $delay,
+        ]);
+    }
+
+    /** @return list<int> positive delays in seconds */
+    public static function recheckDelays(): array
+    {
+        $raw = config('trading.websocket.api_lag_recheck_delays', [2, 4, 8]);
+        if (is_string($raw)) {
+            $raw = explode(',', $raw);
+        }
+
+        return array_values(array_filter(
+            array_map(fn ($v) => (int) trim((string) $v), (array) $raw),
+            fn (int $v) => $v > 0
+        ));
     }
 
     public function failed(\Throwable $exception): void

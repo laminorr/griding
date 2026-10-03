@@ -6,6 +6,7 @@ namespace App\Support;
 
 use App\Services\NobitexService;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -28,6 +29,12 @@ use Illuminate\Support\Facades\Log;
  *
  * IRT prices are whole rials (DECIMAL(20,0)); a non-integer tick for an IRT
  * symbol is invalid and ignored (PRECISION_INVALID). See docs/market-precision.md.
+ *
+ * Log scope: every symbol is parsed, but PRECISION_INVALID and the
+ * symbol-missing PRECISION_FALLBACK are only logged for symbols this system
+ * trades (trading.exchange.allowed_symbols + any bot_configs.symbol). Invalid
+ * entries for other symbols (sub-rial meme-coin IRT ticks) are rolled into one
+ * debug line per parse.
  */
 final class MarketPrecision
 {
@@ -37,11 +44,17 @@ final class MarketPrecision
     public const LIVE_TTL_SECONDS    = 21600; // 6h
     public const FAIL_BACKOFF_SECONDS = 60;
 
+    /** How long the relevant-symbol set is reused before bot_configs is re-read. */
+    public const RELEVANT_SYMBOLS_TTL_SECONDS = 60;
+
     public const DEFAULT_QTY_DECIMALS = 8;
     public const DEFAULT_TICK         = 10;
 
     public const SIDE_BUY  = 'buy';
     public const SIDE_SELL = 'sell';
+
+    /** @var array{at:int, config:array, symbols:array<string,true>}|null */
+    private static ?array $relevant = null;
 
     /** Quantity decimals for a symbol (step 10^-n). */
     public static function qtyDecimals(string $symbol): int
@@ -179,12 +192,17 @@ final class MarketPrecision
     public static function parseOptions(array $nobitex): ?array
     {
         $out = ['qty' => [], 'tick' => []];
+        $skipped = 0;
 
         foreach ((array) ($nobitex['amountPrecisions'] ?? []) as $sym => $step) {
             $dec = self::parseQtyStep($step);
             $key = QtyPrecision::canonicalSymbol((string) $sym);
             if ($dec === null) {
-                self::logInvalid($key, 'amountPrecision', $step);
+                if (self::isRelevantSymbol($key)) {
+                    self::logInvalid($key, 'amountPrecision', $step);
+                } else {
+                    $skipped++;
+                }
                 continue;
             }
             $out['qty'][$key] = $dec;
@@ -198,11 +216,26 @@ final class MarketPrecision
                 // fractional tick on e.g. BTCUSDT is legitimate there but not
                 // usable here, so it is skipped quietly. On IRT it is invalid.
                 if (str_ends_with($key, 'IRT')) {
-                    self::logInvalid($key, 'pricePrecision', $tick);
+                    if (self::isRelevantSymbol($key)) {
+                        self::logInvalid($key, 'pricePrecision', $tick);
+                    } else {
+                        $skipped++;
+                    }
                 }
                 continue;
             }
             $out['tick'][$key] = $int;
+        }
+
+        if ($skipped > 0) {
+            try {
+                Log::channel('trading')->debug('PRECISION_INVALID_SKIPPED', [
+                    'count' => $skipped,
+                    'note'  => 'Invalid precision entries for symbols no bot trades; ignored.',
+                ]);
+            } catch (\Throwable) {
+                // never throw
+            }
         }
 
         return ($out['qty'] === [] && $out['tick'] === []) ? null : $out;
@@ -211,6 +244,7 @@ final class MarketPrecision
     /** Drop the cached live map (the last-known-good copy is kept). */
     public static function forgetLive(): void
     {
+        self::$relevant = null;
         try {
             Cache::forget(self::LIVE_CACHE_KEY);
             Cache::forget(self::FAIL_CACHE_KEY);
@@ -231,7 +265,7 @@ final class MarketPrecision
 
         $lkg = self::cacheGet(self::LKG_CACHE_KEY);
         if (is_array($lkg) && isset($lkg[$field][$sym]) && is_int($lkg[$field][$sym])) {
-            if ($live !== null) {
+            if ($live !== null && self::isRelevantSymbol($sym)) {
                 // The live map exists but lacks this symbol — say so once a day.
                 self::logOncePerDay("market_precision:missing:{$field}:{$sym}", 'PRECISION_FALLBACK', [
                     'symbol' => $sym, 'field' => $field, 'source' => 'last_known_good',
@@ -241,7 +275,7 @@ final class MarketPrecision
             return $lkg[$field][$sym];
         }
 
-        if ($live !== null) {
+        if ($live !== null && self::isRelevantSymbol($sym)) {
             self::logOncePerDay("market_precision:missing:{$field}:{$sym}", 'PRECISION_FALLBACK', [
                 'symbol' => $sym, 'field' => $field, 'source' => 'config',
                 'reason' => 'symbol missing from live options',
@@ -289,6 +323,38 @@ final class MarketPrecision
         }
 
         return $parsed;
+    }
+
+    /**
+     * A symbol this system trades: in trading.exchange.allowed_symbols or used
+     * by any bot_configs row. Only these get per-symbol precision warnings.
+     * The set is memoised for RELEVANT_SYMBOLS_TTL_SECONDS; a DB failure
+     * degrades to the config list alone.
+     */
+    public static function isRelevantSymbol(string $symbol): bool
+    {
+        $now = time();
+        $configured = (array) config('trading.exchange.allowed_symbols', []);
+        if (self::$relevant === null
+            || self::$relevant['config'] !== $configured
+            || ($now - self::$relevant['at']) >= self::RELEVANT_SYMBOLS_TTL_SECONDS) {
+            $symbols = [];
+            foreach ($configured as $s) {
+                $symbols[QtyPrecision::canonicalSymbol((string) $s)] = true;
+            }
+            try {
+                foreach (DB::table('bot_configs')->distinct()->pluck('symbol') as $s) {
+                    if (is_string($s) && $s !== '') {
+                        $symbols[QtyPrecision::canonicalSymbol($s)] = true;
+                    }
+                }
+            } catch (\Throwable) {
+                // no table / DB down: config list only
+            }
+            self::$relevant = ['at' => $now, 'config' => $configured, 'symbols' => $symbols];
+        }
+
+        return isset(self::$relevant['symbols'][QtyPrecision::canonicalSymbol($symbol)]);
     }
 
     private static function configQtyDecimals(string $sym): ?int

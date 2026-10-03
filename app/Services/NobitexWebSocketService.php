@@ -53,7 +53,10 @@ class NobitexWebSocketService
 
     /** Single-instance lock (avoid duplicated consumers) */
     protected string $lockKey = 'nobitex:ws:consumer:lock';
-    protected int $lockTtl  = 60; // sec
+    protected int $lockTtl  = 60; // sec; raised in the constructor to outlast one blocking read
+
+    /** Socket read timeout (trading.websocket.read_timeout_seconds); > Centrifugo's ~25s ping. */
+    protected int $readTimeoutSeconds = 60;
 
     /** Debug / stdout controls */
     protected bool $debugStdout = false;
@@ -101,6 +104,10 @@ class NobitexWebSocketService
         $this->ttlOrderbookSeconds = (int) (config('trading.cache.market_stats_ttl', 60));
         $this->cacheWriteIntervalMs = max(0, (int) config('trading.websocket.cache_write_interval_ms', 1000));
         $this->seedBudgetSeconds    = max(0, (int) config('trading.websocket.seed_budget_seconds', 15));
+        $this->readTimeoutSeconds   = max(1, (int) config('trading.websocket.read_timeout_seconds', 60));
+        // The lock is refreshed once per frame; it must not lapse while
+        // receive() blocks for up to a full read timeout.
+        $this->lockTtl = max($this->lockTtl, $this->readTimeoutSeconds + 15);
     }
 
     /* ====================== Public helpers (used elsewhere) ====================== */
@@ -188,7 +195,7 @@ class NobitexWebSocketService
 
         // textalk/websocket client
         $client = new \WebSocket\Client($this->wsUrl, [
-            'timeout' => 25,
+            'timeout' => $this->readTimeoutSeconds,
             'headers' => $this->buildHandshakeHeaders(),
         ]);
         $this->out('[WS] Connected OK');
