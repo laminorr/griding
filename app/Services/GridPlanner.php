@@ -4,7 +4,9 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Contracts\MarketData;
+use App\Support\MarketPrecision;
 use App\Support\Money;
+use App\Support\QtyPrecision;
 use Illuminate\Support\Facades\Log;
 
 class GridPlanner
@@ -19,7 +21,7 @@ class GridPlanner
      * @param string      $mode      'both' | 'buy' | 'sell'
      * @param int         $budgetIrt بودجه ریالی برای گزارش (Dry-run)
      * @param string|null $fixedQty  اگر ست شود، مقدار qty همه لول‌ها این است (مثل "0.001")
-     * @param int|null    $tick      اندازه تیک (پیش‌فرض از config یا 10)
+     * @param int|null    $tick      اندازه تیک (پیش‌فرض: MarketPrecision::priceTick — live /v2/options → config)
      * @param string|null $presetBaseQty
      *        Balance-aware sizing (Phase 11 Step 5). When set (and > 0), the
      *        SELL side is backed by base currency the account ALREADY holds:
@@ -46,7 +48,7 @@ class GridPlanner
         $mode   = strtolower(trim($mode));
 
         // --- config های مرتبط
-        $tick        ??= (int) (config("trading.ticks.$symbol") ?? 10);
+        $tick        ??= MarketPrecision::priceTick($symbol);
 
         // Hard-coded fallback for min_order_value_irt to handle config loading issues
         $minNotional = (int) config('trading.min_order_value_irt');
@@ -60,7 +62,14 @@ class GridPlanner
         $feeModel     = app(FeeModel::class);
         $buyFeeBps    = $feeModel->rateFor(null, FeeModel::SIDE_BUY);
         $sellFeeBps   = $feeModel->rateFor(null, FeeModel::SIDE_SELL);
-        $qtyDecimals  = (int) (config("trading.exchange.precision.$symbol.qty_decimals") ?? 6);
+        $qtyDecimals  = QtyPrecision::decimalsFor($symbol);
+
+        // A caller-supplied fixed quantity is fitted to the market step HERE,
+        // so the planned quantity is exactly what will be stored and sent
+        // (bot 48: 0.00004504 was planned/stored, Nobitex kept 0.000045).
+        if ($fixedQty !== null) {
+            $fixedQty = $this->formatQty(Money::normalize($fixedQty), $qtyDecimals);
+        }
 
         // --- اعتبارسنجی ساده
         if (!in_array($mode, ['both', 'buy', 'sell'], true)) {
@@ -243,15 +252,9 @@ class GridPlanner
 
     protected function roundToTick(int $price, int $tick, bool $down): int
     {
-        if ($tick <= 1) return $price;
-        $q = intdiv($price, $tick);
-        $hasRemainder = ($price % $tick) !== 0;
-
-        if ($down) {
-            return $q * $tick; // floor
-        }
-        // ceil به نزدیک‌ترین تیک بالاتر
-        return $hasRemainder ? ($q + 1) * $tick : $price;
+        // Shared side-safe tick alignment (exact bcmath) — same helper the
+        // exit path and the send boundary use.
+        return MarketPrecision::alignToTick((string) $price, (string) $tick, up: ! $down);
     }
 
     /**

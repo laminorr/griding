@@ -17,6 +17,8 @@ return [
     |--------------------------------------------------------------------------
     | Market ticks (price step per symbol)
     |--------------------------------------------------------------------------
+    | FALLBACK ONLY — the live tick comes from Nobitex /v2/options
+    | (nobitex.pricePrecisions) via App\Support\MarketPrecision::priceTick().
     */
     'ticks' => [
         'BTCIRT'  => (int) env('TICK_BTCIRT', 10),
@@ -46,12 +48,21 @@ return [
             )
         ),
 
+        // FALLBACK ONLY. The live source of truth is Nobitex /v2/options
+        // (nobitex.amountPrecisions / pricePrecisions), resolved by
+        // App\Support\MarketPrecision: live (6h cache) → last-known-good →
+        // these values. Keep them equal to the exchange (verified on the host):
+        // amountPrecisions BTCIRT 0.000001, ETHIRT 0.00001, USDTIRT 0.01.
+        // See docs/market-precision.md.
         'precision' => [
-            'BTCIRT'  => ['price_decimals' => 0, 'qty_decimals' => 8],
-            'ETHIRT'  => ['price_decimals' => 0, 'qty_decimals' => 6],
+            'BTCIRT'  => ['price_decimals' => 0, 'qty_decimals' => 6],
+            'ETHIRT'  => ['price_decimals' => 0, 'qty_decimals' => 5],
             'LTCIRT'  => ['price_decimals' => 0, 'qty_decimals' => 6],
             'USDTIRT' => ['price_decimals' => 0, 'qty_decimals' => 2],
         ],
+
+        // Resolve precision live from /v2/options (false = config fallback only).
+        'precision_live' => (bool) env('TRADING_PRECISION_LIVE', true),
     ],
 
     /*

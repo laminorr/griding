@@ -30,5 +30,99 @@
         <env name="PULSE_ENABLED" value="false"/>
         <env name="TELESCOPE_ENABLED" value="false"/>
         <env name="NIGHTWATCH_ENABLED" value="false"/>
+        <!-- Never resolve market precision over the network in tests; tests that
+             exercise the live path enable it explicitly with Http::fake(). -->
+        <env name="TRADING_PRECISION_LIVE" value="false" force="true"/>
+        <!-- Live-bot behaviour switches: a production .env must never reach the test process. -->
+        <env name="NOBITEX_WS_ACT_ON_EVENTS" value="false" force="true"/>
+        <env name="TRADING_SIMULATION_MODE" value="false" force="true"/>
+        <env name="TRADING_ENABLE_SCHEDULER" value="true" force="true"/>
+        <env name="WEBSOCKET_ENABLED" value="true" force="true"/>
+        <env name="QUEUE_RETRY_ENABLED" value="false" force="true"/>
+        <env name="TRADING_RECONCILE_ENABLED" value="true" force="true"/>
+        <env name="TRADING_RECONCILE_CANCEL_ON_NOT_FOUND" value="true" force="true"/>
+        <env name="TRADING_RESTORE_INVENTORY_ON_BUY_EXIT" value="true" force="true"/>
+        <env name="TRADING_EXIT_FOR_PARTIAL_CANCELS" value="true" force="true"/>
+        <env name="NOBITEX_RATE_LIMIT_ENFORCE" value="false" force="true"/>
+        <!-- Exchange endpoint + credentials: never the real account. -->
+        <env name="NOBITEX_USE_TESTNET" value="false" force="true"/>
+        <env name="NOBITEX_BASE_URL" value="https://apiv2.nobitex.ir" force="true"/>
+        <env name="NOBITEX_API_KEY" value="" force="true"/>
+        <env name="NOBITEX_API_PUBLIC_KEY" value="" force="true"/>
+        <env name="NOBITEX_API_PRIVATE_KEY" value="" force="true"/>
+        <!-- Money / market numbers the golden tests assume (config defaults). -->
+        <env name="TRADING_BUY_FEE_BPS" value="25" force="true"/>
+        <env name="TRADING_SELL_FEE_BPS" value="25" force="true"/>
+        <env name="TRADING_BUY_FEE_CURRENCY" value="base" force="true"/>
+        <env name="TRADING_SELL_FEE_CURRENCY" value="quote" force="true"/>
+        <env name="TRADING_FEE_SCALE" value="10" force="true"/>
+        <env name="TRADING_FEE_DRIFT_WARN_BPS" value="5" force="true"/>
+        <env name="TRADING_FEE_CLASSIFY_MAX_BPS" value="100" force="true"/>
+        <env name="TRADING_SPACING_MARGIN_BPS" value="10" force="true"/>
+        <env name="TRADING_EXIT_SELF_HEAL_MIN_RATIO" value="0.98" force="true"/>
+        <env name="TRADING_MIN_ORDER_VALUE_IRT" value="3000000" force="true"/>
+        <env name="TICK_BTCIRT" value="10" force="true"/>
+        <env name="TICK_ETHIRT" value="10" force="true"/>
+        <env name="TICK_USDTIRT" value="10" force="true"/>
+        <env name="TRADING_SYMBOLS_ALLOWED" value="BTCIRT,ETHIRT,USDTIRT" force="true"/>
+        <env name="TRADING_ALLOWED_SYMBOLS" value="BTCIRT" force="true"/>
+        <!-- Timing / thresholds asserted by health-check, reconciler and cadence tests. -->
+        <env name="NOBITEX_WS_DEAD_AFTER_SECONDS" value="180" force="true"/>
+        <env name="NOBITEX_WS_SILENT_AFTER_SECONDS" value="600" force="true"/>
+        <env name="TRADING_RECONCILE_MIN_AGE_SECONDS" value="300" force="true"/>
+        <env name="TRADING_RECONCILE_PENDING_MIN_AGE_SECONDS" value="900" force="true"/>
+        <env name="TRADING_RECONCILE_NOT_FOUND_CONFIRMATIONS" value="2" force="true"/>
+        <env name="TRADING_RECONCILE_MAX_ATTEMPTS" value="12" force="true"/>
+        <env name="TRADING_RECONCILE_MAX_AGE_HOURS" value="6" force="true"/>
+        <env name="TRADING_INTERVAL_CHECK_TRADES" value="60" force="true"/>
+        <env name="TRADING_INTERVAL_ADJUST_GRID" value="600" force="true"/>
+        <env name="TRADING_SCHEDULER_ALIGN" value="true" force="true"/>
+        <env name="TRADING_SCHEDULER_JITTER" value="0" force="true"/>
+        <env name="TRADING_QUEUE_DEPTH_ALERT" value="500" force="true"/>
+        <!-- Same pins in $_SERVER: Laravel's env repository reads $_SERVER before $_ENV,
+             so a variable exported in the shell (not just .env) would otherwise win. -->
+        <server name="TRADING_PRECISION_LIVE" value="false"/>
+        <server name="NOBITEX_WS_ACT_ON_EVENTS" value="false"/>
+        <server name="TRADING_SIMULATION_MODE" value="false"/>
+        <server name="TRADING_ENABLE_SCHEDULER" value="true"/>
+        <server name="WEBSOCKET_ENABLED" value="true"/>
+        <server name="QUEUE_RETRY_ENABLED" value="false"/>
+        <server name="TRADING_RECONCILE_ENABLED" value="true"/>
+        <server name="TRADING_RECONCILE_CANCEL_ON_NOT_FOUND" value="true"/>
+        <server name="TRADING_RESTORE_INVENTORY_ON_BUY_EXIT" value="true"/>
+        <server name="TRADING_EXIT_FOR_PARTIAL_CANCELS" value="true"/>
+        <server name="NOBITEX_RATE_LIMIT_ENFORCE" value="false"/>
+        <server name="NOBITEX_USE_TESTNET" value="false"/>
+        <server name="NOBITEX_BASE_URL" value="https://apiv2.nobitex.ir"/>
+        <server name="NOBITEX_API_KEY" value=""/>
+        <server name="NOBITEX_API_PUBLIC_KEY" value=""/>
+        <server name="NOBITEX_API_PRIVATE_KEY" value=""/>
+        <server name="TRADING_BUY_FEE_BPS" value="25"/>
+        <server name="TRADING_SELL_FEE_BPS" value="25"/>
+        <server name="TRADING_BUY_FEE_CURRENCY" value="base"/>
+        <server name="TRADING_SELL_FEE_CURRENCY" value="quote"/>
+        <server name="TRADING_FEE_SCALE" value="10"/>
+        <server name="TRADING_FEE_DRIFT_WARN_BPS" value="5"/>
+        <server name="TRADING_FEE_CLASSIFY_MAX_BPS" value="100"/>
+        <server name="TRADING_SPACING_MARGIN_BPS" value="10"/>
+        <server name="TRADING_EXIT_SELF_HEAL_MIN_RATIO" value="0.98"/>
+        <server name="TRADING_MIN_ORDER_VALUE_IRT" value="3000000"/>
+        <server name="TICK_BTCIRT" value="10"/>
+        <server name="TICK_ETHIRT" value="10"/>
+        <server name="TICK_USDTIRT" value="10"/>
+        <server name="TRADING_SYMBOLS_ALLOWED" value="BTCIRT,ETHIRT,USDTIRT"/>
+        <server name="TRADING_ALLOWED_SYMBOLS" value="BTCIRT"/>
+        <server name="NOBITEX_WS_DEAD_AFTER_SECONDS" value="180"/>
+        <server name="NOBITEX_WS_SILENT_AFTER_SECONDS" value="600"/>
+        <server name="TRADING_RECONCILE_MIN_AGE_SECONDS" value="300"/>
+        <server name="TRADING_RECONCILE_PENDING_MIN_AGE_SECONDS" value="900"/>
+        <server name="TRADING_RECONCILE_NOT_FOUND_CONFIRMATIONS" value="2"/>
+        <server name="TRADING_RECONCILE_MAX_ATTEMPTS" value="12"/>
+        <server name="TRADING_RECONCILE_MAX_AGE_HOURS" value="6"/>
+        <server name="TRADING_INTERVAL_CHECK_TRADES" value="60"/>
+        <server name="TRADING_INTERVAL_ADJUST_GRID" value="600"/>
+        <server name="TRADING_SCHEDULER_ALIGN" value="true"/>
+        <server name="TRADING_SCHEDULER_JITTER" value="0"/>
+        <server name="TRADING_QUEUE_DEPTH_ALERT" value="500"/>
     </php>
 </phpunit>

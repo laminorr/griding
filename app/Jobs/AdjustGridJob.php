@@ -415,21 +415,12 @@ class AdjustGridJob implements ShouldQueue
     }
 
     /**
-     * Tick rounding identical to GridPlanner::roundToTick (GridPlanner.php:227),
-     * replicated here (small, intentionally not abstracted) so the reconstructed
-     * fallback bounds land on the same ticks the planner would have placed.
+     * Tick rounding identical to GridPlanner::roundToTick — both delegate to
+     * the shared MarketPrecision::alignToTick, so the reconstructed fallback
+     * bounds land on the same ticks the planner would have placed.
      */
     private function roundToTick(int $price, int $tick, bool $down): int
     {
-        if ($tick <= 1) {
-            return $price;
-        }
-        $q = intdiv($price, $tick);
-        $hasRemainder = ($price % $tick) !== 0;
-
-        if ($down) {
-            return $q * $tick;
-        }
-        return $hasRemainder ? ($q + 1) * $tick : $price;
+        return \App\Support\MarketPrecision::alignToTick((string) $price, (string) $tick, up: ! $down);
     }
 }

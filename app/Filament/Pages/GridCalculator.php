@@ -172,9 +172,9 @@ class GridCalculator extends Page
         // activeBudget = capital * activePercent / 100 (see calculateOrderSize).
         $activeBudget = (int) floor($capital * ($active / 100));
 
-        // Explicit, deterministic tick from config (no bot context here, so the
-        // global config tick is the honest source; GridPlanner reads the same).
-        $tick = (int) (config("trading.ticks.{$this->symbol}") ?? 10);
+        // Explicit, deterministic tick from the market (live /v2/options →
+        // config fallback); GridPlanner resolves the same source.
+        $tick = \App\Support\MarketPrecision::priceTick($this->symbol);
 
         try {
             // The SAME planner the live bot calls in placeGridOrders(). Explicit

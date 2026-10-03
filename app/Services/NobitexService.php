@@ -21,6 +21,7 @@ use App\DTOs\OrderStatusDto;
 use App\DTOs\WalletsDto;
 use App\Models\GridOrder;
 use App\Support\Money;
+use App\Support\MarketPrecision;
 use App\Support\QtyPrecision;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
@@ -1329,13 +1330,19 @@ class NobitexService implements ExchangeClient
             ]);
         }
 
+        // Price on the market tick, side-safe (buy down, sell up). Safety net
+        // only — the exit path aligns before writing its row; firing here
+        // logs ORDER_PRICE_ROUNDED.
+        $sideNorm = strtolower($side) === 'buy' ? 'buy' : 'sell';
+        $priceStr = MarketPrecision::priceForSend($price, $symbol, $sideNorm);
+
         $payload = [
-            'type'        => strtolower($side) === 'buy' ? 'buy' : 'sell',
+            'type'        => $sideNorm,
             'execution'   => 'limit',
             'srcCurrency' => $src,
             'dstCurrency' => $dst,
             'amount'      => $amount,
-            'price'       => (string)$price,
+            'price'       => $priceStr,
         ];
 
         if ($clientRef !== null) {

@@ -6,7 +6,8 @@ namespace App\Support;
 
 /**
  * Market quantity precision — the ONE place an order amount is fitted to the
- * exchange's quantity step (config trading.exchange.precision.{SYMBOL}.qty_decimals).
+ * exchange's quantity step. The step itself comes from MarketPrecision
+ * (Nobitex /v2/options amountPrecisions; config is only the fallback).
  *
  * Every order-sending path (CreateOrderDto::toApiPayload for grid orders,
  * NobitexService::placeOrder for exit orders) and the planner go through
@@ -32,11 +33,13 @@ final class QtyPrecision
         return $s;
     }
 
+    /**
+     * Quantity decimals for a symbol — delegated to MarketPrecision (live
+     * /v2/options → last-known-good → config fallback). Never throws.
+     */
     public static function decimalsFor(string $symbol): int
     {
-        $dec = config('trading.exchange.precision.' . self::canonicalSymbol($symbol) . '.qty_decimals');
-        $dec = $dec === null ? self::DEFAULT_DECIMALS : (int) $dec;
-        return max(0, min(18, $dec));
+        return max(0, min(18, MarketPrecision::qtyDecimals($symbol)));
     }
 
     /** One quantity step, e.g. "0.00000001" for 8 decimals. */
