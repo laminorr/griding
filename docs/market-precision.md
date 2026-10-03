@@ -31,6 +31,7 @@ live map (parsed /v2/options, cached 6h)
 
 - **An exchange outage never blocks order placement**, and `MarketPrecision` never throws. Any failure (network, signing, a malformed payload, a cache error) drops to the next step and logs **`PRECISION_FALLBACK`** (warning, channel `trading`). A failed fetch is not retried for 60 s, so an outage costs one HTTP attempt per minute, not one per order.
 - A symbol that is missing from the live map uses the last-known-good value, then config. This is logged `PRECISION_FALLBACK` at most once a day.
+- **Log scope:** every symbol is still parsed, but `PRECISION_INVALID` and the symbol-missing `PRECISION_FALLBACK` are only logged for symbols this system trades (`trading.exchange.allowed_symbols` plus any `bot_configs.symbol`); invalid entries for other symbols (e.g. sub-rial meme-coin IRT ticks such as `1KBONKIRT "0.001"`) are rolled into one debug line, `PRECISION_INVALID_SKIPPED {count}`, per refresh.
 - When the live value differs from config, the live value is used and **`PRECISION_DRIFT`** is logged at most once per symbol per field per day. Fix config when you see it.
 - The config values are **fallbacks only**, and they are kept equal to the exchange: BTCIRT 6, ETHIRT 5, USDTIRT 2 (LTCIRT unchanged at 6). All ticks are 10.
 - `TRADING_PRECISION_LIVE=false` (config `trading.exchange.precision_live`) turns the live source off. The test suite does this in `phpunit.xml`, so no test can reach the network by accident. Tests that exercise the live path turn it back on with `Http::fake()`.

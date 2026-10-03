@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature\Support;
 
+use App\Models\BotConfig;
 use App\Services\NobitexService;
 use App\Support\MarketPrecision;
 use App\Support\QtyPrecision;
@@ -13,6 +14,7 @@ use Illuminate\Support\Facades\Log;
 use Mockery;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Psr\Log\LoggerInterface;
+use Tests\Concerns\BuildsGridSchema;
 use Tests\TestCase;
 
 /**
@@ -22,6 +24,8 @@ use Tests\TestCase;
  */
 final class MarketPrecisionTest extends TestCase
 {
+    use BuildsGridSchema;
+
     private const OPTIONS = [
         'status'  => 'ok',
         'nobitex' => [
@@ -53,6 +57,7 @@ final class MarketPrecisionTest extends TestCase
             'trading.ticks.BTCIRT' => 10,
         ]);
         Cache::flush();
+        MarketPrecision::forgetLive();
 
         $this->log = Mockery::spy(LoggerInterface::class);
         Log::spy();
@@ -242,6 +247,61 @@ final class MarketPrecisionTest extends TestCase
             ->once();
         // BTCUSDT's 0.01 tick is legitimate for a USDT market — not flagged
         $this->log->shouldNotHaveReceived('warning', fn ($m, $ctx = []) => $m === 'PRECISION_INVALID' && ($ctx['symbol'] ?? null) === 'BTCUSDT');
+    }
+
+    // ── log scope ────────────────────────────────────────────────────────
+
+    public function test_invalid_tick_on_a_symbol_no_bot_trades_is_not_warned(): void
+    {
+        // TRADING_SYMBOLS_ALLOWED is BTCIRT,ETHIRT,USDTIRT; no bot_configs table here.
+        $body = self::OPTIONS;
+        $body['nobitex']['pricePrecisions']['1KBONKIRT'] = '0.001';
+        $body['nobitex']['pricePrecisions']['PUMPIRT']   = '0.1';
+        $body['nobitex']['amountPrecisions']['PUMPIRT']  = 'junk';
+        $this->fakeOptions($body);
+
+        $this->assertSame(10, MarketPrecision::priceTick('BTCIRT')); // live map still parsed and used
+        $this->assertFalse(MarketPrecision::isRelevantSymbol('PUMPIRT'));
+
+        $this->log->shouldNotHaveReceived('warning', fn ($m) => $m === 'PRECISION_INVALID');
+        $this->log->shouldHaveReceived('debug')
+            ->withArgs(fn ($m, $ctx = []) => $m === 'PRECISION_INVALID_SKIPPED' && ($ctx['count'] ?? null) === 3)
+            ->once();
+    }
+
+    public function test_invalid_tick_is_still_warned_for_a_symbol_a_bot_uses(): void
+    {
+        $this->buildGridSchema();
+        BotConfig::create(['name' => 'meme', 'symbol' => 'PUMPIRT', 'grid_spacing' => 1.00]);
+
+        $body = self::OPTIONS;
+        $body['nobitex']['pricePrecisions']['PUMPIRT']   = '0.1';
+        $body['nobitex']['pricePrecisions']['1KBONKIRT'] = '0.001';
+        $this->fakeOptions($body);
+
+        MarketPrecision::priceTick('BTCIRT');
+
+        $this->log->shouldHaveReceived('warning')
+            ->withArgs(fn ($m, $ctx = []) => $m === 'PRECISION_INVALID' && ($ctx['symbol'] ?? null) === 'PUMPIRT')
+            ->once();
+        $this->log->shouldNotHaveReceived('warning', fn ($m, $ctx = []) => $m === 'PRECISION_INVALID' && ($ctx['symbol'] ?? null) === '1KBONKIRT');
+        $this->assertTrue(MarketPrecision::isRelevantSymbol('PUMPIRT'));
+
+        $this->dropGridSchema();
+    }
+
+    public function test_symbol_missing_fallback_is_only_logged_for_relevant_symbols(): void
+    {
+        $this->fakeOptions();
+
+        $this->assertIsInt(MarketPrecision::qtyDecimals('LTCIRT'));  // not allowed, no bot → config
+        $this->log->shouldNotHaveReceived('warning', fn ($m) => $m === 'PRECISION_FALLBACK');
+
+        config(['trading.exchange.allowed_symbols' => ['BTCIRT', 'LTCIRT']]);
+        MarketPrecision::qtyDecimals('LTCIRT');
+        $this->log->shouldHaveReceived('warning')
+            ->withArgs(fn ($m, $ctx = []) => $m === 'PRECISION_FALLBACK' && ($ctx['symbol'] ?? null) === 'LTCIRT')
+            ->once();
     }
 
     // ── rounding ─────────────────────────────────────────────────────────
