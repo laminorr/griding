@@ -329,6 +329,27 @@ return [
         // `pkill -f nobitex:ws-private` and let its keepalive cron restart it.
         'act_on_private_events' => (bool) env('NOBITEX_WS_ACT_ON_EVENTS', false),
 
+        // W4 API-lag re-check: when a Done/Canceled event's REST status is still
+        // live (REST lags the WS by ~1s), ProcessOrderEventJob re-dispatches
+        // itself after each of these delays (seconds), then gives up
+        // (WS_EVENT_API_LAGGING_GAVE_UP) and leaves it to the minute poller.
+        // Empty disables re-checks.
+        'api_lag_recheck_delays' => array_values(array_filter(array_map('intval', explode(',', (string) env('NOBITEX_WS_API_LAG_RECHECK_DELAYS', '2,4,8'))), fn ($v) => $v > 0)),
+
+        // Socket read timeout for BOTH consumers (ws-consumer, ws-private).
+        // Centrifugo pings every ~25s; the timeout must exceed that plus a
+        // margin, or a silent channel times out while waiting for the ping.
+        'read_timeout_seconds' => (int) env('NOBITEX_WS_READ_TIMEOUT_SECONDS', 60),
+
+        // Private consumer liveness: no frame at all (pings included) for this
+        // long -> reconnect with reason "no frames for Ns". A read timeout
+        // shorter than this is tolerated (the read loop just waits again).
+        'private_max_silence_seconds' => (int) env('NOBITEX_WS_PRIVATE_MAX_SILENCE_SECONDS', 90),
+
+        // More reconnects than this within one hour -> ERROR WS_PRIVATE_FLAPPING.
+        // Below it, a reconnect after a healthy connection logs a WARNING.
+        'private_flap_reconnects_per_hour' => (int) env('NOBITEX_WS_PRIVATE_FLAP_RECONNECTS_PER_HOUR', 10),
+
         // WsFeedHealthCheck thresholds (log-only).
         'health' => [
             // No frame at all (not even a {} ping) for this long -> CRITICAL WS_FEED_DEAD

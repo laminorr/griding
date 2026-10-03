@@ -6,6 +6,8 @@ namespace App\Services;
 
 use App\Contracts\WsFrameClient;
 use App\Exceptions\PrivateWsReconnectException;
+use App\Exceptions\PrivateWsSilenceException;
+use App\Exceptions\WsReadTimeoutException;
 use App\Models\ExchangeWsEvent;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
@@ -39,6 +41,22 @@ use Illuminate\Support\Facades\Log;
  * server disconnect or a closed socket drops the connection; run() reconnects
  * with a fresh token after backoff.
  *
+ * Liveness (the private channels are almost always silent; only Centrifugo's
+ * ~25s {} pings arrive): the socket read timeout is
+ * trading.websocket.read_timeout_seconds (default 60, must exceed the ping
+ * interval + margin). A read timeout is NOT a drop by itself: the loop keeps
+ * reading until no frame at all (pings included) has arrived for
+ * trading.websocket.private_max_silence_seconds (default 90), then reconnects
+ * with "no frames for Ns". Each read's timeout is capped at the silence budget
+ * left, so that reconnect happens on time.
+ *
+ * Reconnect logging: the first genuine drop (socket error, read failure,
+ * silence) in an hour is ERROR, later ones WARNING with reconnects_last_hour;
+ * a planned reconnect (token expiry, server disconnect, refresh rejected) is
+ * WARNING; a failed reconnect attempt (attempt > 1) is ERROR. More than
+ * trading.websocket.private_flap_reconnects_per_hour reconnects in an hour
+ * logs ERROR WS_PRIVATE_FLAPPING (at most once an hour).
+ *
  * SECURITY: the token is never logged; the websocketAuthParam (and channel
  * names, which embed it) are only ever logged masked.
  */
@@ -63,8 +81,25 @@ class NobitexPrivateWsService
 
     protected const LOCK_TTL_SECONDS = 60;
 
+    /** Lock TTL margin over the longest blocking read. */
+    protected const LOCK_TTL_MARGIN_SECONDS = 15;
+
+    protected const FLAP_WINDOW_SECONDS = 3600;
+
     protected string $wsUrl;
     protected bool $debugStdout = false;
+
+    protected int $readTimeoutSeconds;
+    protected int $maxSilenceSeconds;
+    protected int $flapReconnectsPerHour;
+    /** Never shorter than one blocking read, so the lock cannot lapse mid-read. */
+    protected int $lockTtlSeconds;
+
+    /* ---- reconnect accounting (process lifetime) ---- */
+    /** @var list<int> unix seconds of each reconnect in the last hour */
+    protected array $reconnectTimes = [];
+    protected ?int $lastGenuineDropAt = null;
+    protected ?int $flapAlertedAt = null;
 
     /* ---- per-connection state (reset on every connect) ---- */
     protected int $nextId = 1;
@@ -74,6 +109,8 @@ class NobitexPrivateWsService
     protected ?int $refreshAt = null;
     protected ?int $refreshInFlightId = null;
     protected bool $established = false;
+    /** Unix seconds of the last frame of any kind (pings included). */
+    protected int $lastFrameAt = 0;
     protected string $ordersChannel = '';
     protected string $tradesChannel = '';
 
@@ -86,6 +123,12 @@ class NobitexPrivateWsService
         $cfg = (array) config('trading.nobitex', []);
         $this->wsUrl = (string) ($cfg['websocket_url']
             ?? env('NOBITEX_WS_URL', env('WEBSOCKET_URL', 'wss://ws.nobitex.ir/connection/websocket')));
+
+        $ws = (array) config('trading.websocket', []);
+        $this->readTimeoutSeconds    = max(1, (int) ($ws['read_timeout_seconds'] ?? 60));
+        $this->maxSilenceSeconds     = max(1, (int) ($ws['private_max_silence_seconds'] ?? 90));
+        $this->flapReconnectsPerHour = max(1, (int) ($ws['private_flap_reconnects_per_hour'] ?? 10));
+        $this->lockTtlSeconds        = max(self::LOCK_TTL_SECONDS, $this->readTimeoutSeconds + self::LOCK_TTL_MARGIN_SECONDS);
     }
 
     public function enableStdout(bool $enable): void
@@ -100,7 +143,7 @@ class NobitexPrivateWsService
     {
         $this->out('[WS-PRIVATE] Run loop start', ['force' => $force]);
 
-        if (!$force && !Cache::add(self::LOCK_KEY, getmypid(), self::LOCK_TTL_SECONDS)) {
+        if (!$force && !Cache::add(self::LOCK_KEY, getmypid(), $this->lockTtlSeconds)) {
             $this->out('[WS-PRIVATE] Another private consumer already running; abort.');
             return;
         }
@@ -116,14 +159,56 @@ class NobitexPrivateWsService
                     $attempt = 1; // a healthy connection dropped: restart the backoff ladder
                 }
                 $wait = $this->computeBackoffWithJitter($attempt);
-                $level = $e instanceof PrivateWsReconnectException ? 'warning' : 'error';
-                $this->out('[WS-PRIVATE] Connection dropped; reconnecting', [
-                    'error' => $e->getMessage(), 'attempt' => $attempt, 'wait' => $wait,
-                ], $level);
+                $this->reportDrop($e, $attempt, $wait);
                 $this->sleepSeconds($wait);
             } finally {
-                Cache::put(self::LOCK_KEY, getmypid(), self::LOCK_TTL_SECONDS);
+                Cache::put(self::LOCK_KEY, getmypid(), $this->lockTtlSeconds);
             }
+        }
+    }
+
+    /**
+     * Log one reconnect at the right level and track flapping. See the class
+     * docblock for the rules.
+     */
+    protected function reportDrop(\Throwable $e, int $attempt, int $wait): void
+    {
+        $now = $this->nowSeconds();
+        $this->reconnectTimes = array_values(array_filter(
+            $this->reconnectTimes,
+            fn (int $t) => $t > $now - self::FLAP_WINDOW_SECONDS
+        ));
+        $this->reconnectTimes[] = $now;
+        $count = count($this->reconnectTimes);
+
+        $genuine = !($e instanceof PrivateWsReconnectException) || $e instanceof PrivateWsSilenceException;
+
+        if ($attempt > 1) {
+            $level = 'error';   // the reconnect itself is failing
+        } elseif (!$genuine) {
+            $level = 'warning'; // planned: token expiry, server disconnect, refresh rejected
+        } else {
+            $firstThisHour = $this->lastGenuineDropAt === null
+                || ($now - $this->lastGenuineDropAt) >= self::FLAP_WINDOW_SECONDS;
+            $level = $firstThisHour ? 'error' : 'warning';
+        }
+        if ($genuine) {
+            $this->lastGenuineDropAt = $now;
+        }
+
+        $this->out('[WS-PRIVATE] Connection dropped; reconnecting', [
+            'error' => $e->getMessage(), 'attempt' => $attempt, 'wait' => $wait,
+            'reconnects_last_hour' => $count,
+        ], $level);
+
+        if ($count > $this->flapReconnectsPerHour
+            && ($this->flapAlertedAt === null || ($now - $this->flapAlertedAt) >= self::FLAP_WINDOW_SECONDS)) {
+            $this->flapAlertedAt = $now;
+            $this->out('WS_PRIVATE_FLAPPING', [
+                'reconnects_last_hour' => $count,
+                'threshold'            => $this->flapReconnectsPerHour,
+                'last_error'           => $e->getMessage(),
+            ], 'error');
         }
     }
 
@@ -142,6 +227,7 @@ class NobitexPrivateWsService
 
         $this->out('[WS-PRIVATE] Connecting', ['url' => $this->wsUrl, 'auth_param' => self::mask($param)]);
         $client = $this->openClient();
+        $this->lastFrameAt = $this->nowSeconds();
 
         try {
             $this->sendCommand($client, ['connect' => ['token' => $token]], ['type' => 'connect']);
@@ -153,9 +239,20 @@ class NobitexPrivateWsService
             }
 
             while (true) {
-                Cache::put(self::LOCK_KEY, getmypid(), self::LOCK_TTL_SECONDS);
+                Cache::put(self::LOCK_KEY, getmypid(), $this->lockTtlSeconds);
 
-                $raw = $client->receive();
+                $client->setReadTimeout($this->nextReadTimeout());
+                try {
+                    $raw = $client->receive();
+                } catch (WsReadTimeoutException $e) {
+                    $this->onReadTimeout($client, $e);
+                    // Still within the silence budget: keep the connection.
+                    // Refresh deadlines are checked here too, not only after
+                    // frames (see maybeRefresh()).
+                    $this->maybeRefresh($client);
+                    continue;
+                }
+                $this->lastFrameAt = $this->nowSeconds();
                 $this->writeHeartbeat();
 
                 if ($raw === null || $raw === '') {
@@ -188,6 +285,33 @@ class NobitexPrivateWsService
                 // already gone
             }
         }
+    }
+
+    /** This read's timeout: the configured one, capped at the silence budget left. */
+    protected function nextReadTimeout(): int
+    {
+        $left = $this->maxSilenceSeconds - ($this->nowSeconds() - $this->lastFrameAt);
+        return max(1, min($this->readTimeoutSeconds, $left));
+    }
+
+    /**
+     * A read timed out. Reconnect if the socket is gone or no frame (pings
+     * included) arrived for maxSilenceSeconds; otherwise keep reading.
+     */
+    protected function onReadTimeout(WsFrameClient $client, WsReadTimeoutException $e): void
+    {
+        if (!$client->isConnected()) {
+            throw $e; // the client dropped the socket on that timeout: genuine drop
+        }
+
+        $silence = $this->nowSeconds() - $this->lastFrameAt;
+        if ($silence >= $this->maxSilenceSeconds) {
+            throw new PrivateWsSilenceException("no frames for {$silence}s");
+        }
+
+        $this->out('[WS-PRIVATE] Read timeout; within silence budget', [
+            'silence' => $silence, 'max_silence' => $this->maxSilenceSeconds,
+        ], 'debug');
     }
 
     protected function resetConnectionState(): void
@@ -245,7 +369,17 @@ class NobitexPrivateWsService
                 $this->out('[WS-PRIVATE] Connected', ['ttl' => $data['connect']['ttl'] ?? null]);
                 break;
             case 'subscribe':
-                $this->out('[WS-PRIVATE] Subscribed', ['channel' => self::maskChannel($meta['channel'] ?? '')]);
+                // Recovery fields tell whether the server keeps history for
+                // this channel (Centrifugo recover/epoch/offset on reconnect).
+                $sub = (array) ($data['subscribe'] ?? []);
+                $this->out('[WS-PRIVATE] Subscribed', [
+                    'channel'     => self::maskChannel($meta['channel'] ?? ''),
+                    'recoverable' => $sub['recoverable'] ?? null,
+                    'positioned'  => $sub['positioned'] ?? null,
+                    'epoch'       => $sub['epoch'] ?? null,
+                    'offset'      => $sub['offset'] ?? null,
+                    'reply_keys'  => array_keys($sub),
+                ]);
                 break;
             case 'refresh':
                 $this->refreshInFlightId = null;
@@ -336,6 +470,14 @@ class NobitexPrivateWsService
         $this->refreshAt = $now + max(1, $lead);
     }
 
+    /**
+     * Send a token refresh once refreshAt has passed. Called after every frame
+     * and after every tolerated read timeout. On a silent private channel the
+     * frames are Centrifugo's {} pings (~every 25s), so with the 120s refresh
+     * margin a due refresh goes out within one ping interval; the read-timeout
+     * call covers a missed ping, and the silence rule reconnects (fresh token)
+     * long before the token's ttl if frames stop altogether.
+     */
     protected function maybeRefresh(WsFrameClient $client): void
     {
         $now = $this->nowSeconds();
@@ -393,7 +535,7 @@ class NobitexPrivateWsService
     /** Socket factory. Overridden in tests with a scripted fake. */
     protected function openClient(): WsFrameClient
     {
-        $ws = new \WebSocket\Client($this->wsUrl, ['timeout' => 25, 'headers' => []]);
+        $ws = new \WebSocket\Client($this->wsUrl, ['timeout' => $this->readTimeoutSeconds, 'headers' => []]);
 
         return new class($ws) implements WsFrameClient {
             public function __construct(private \WebSocket\Client $ws)
@@ -407,8 +549,17 @@ class NobitexPrivateWsService
 
             public function receive(): ?string
             {
-                $m = $this->ws->receive();
+                try {
+                    $m = $this->ws->receive();
+                } catch (\WebSocket\TimeoutException $e) {
+                    throw new WsReadTimeoutException($e->getMessage(), 0, $e);
+                }
                 return is_string($m) ? $m : null;
+            }
+
+            public function setReadTimeout(int $seconds): void
+            {
+                $this->ws->setTimeout(max(1, $seconds));
             }
 
             public function isConnected(): bool

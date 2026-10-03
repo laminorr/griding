@@ -54,6 +54,22 @@ final class NobitexWebSocketServiceTest extends TestCase
         }
     }
 
+    /* --------------------------- read timeout --------------------------- */
+
+    public function test_read_timeout_is_config_driven_and_the_lock_outlasts_a_blocking_read(): void
+    {
+        $read = fn (NobitexWebSocketService $s, string $p) => (fn () => $this->{$p})->call($s);
+
+        $default = new TestableWsService();
+        $this->assertSame(60, $read($default, 'readTimeoutSeconds'));
+        $this->assertSame(75, $read($default, 'lockTtl'));
+
+        config(['trading.websocket.read_timeout_seconds' => 20]);
+        $short = new TestableWsService();
+        $this->assertSame(20, $read($short, 'readTimeoutSeconds'));
+        $this->assertSame(60, $read($short, 'lockTtl'));
+    }
+
     /* ------------------------------ seeding ----------------------------- */
 
     public function test_seed_writes_both_keys_in_the_same_shape_as_a_publication(): void

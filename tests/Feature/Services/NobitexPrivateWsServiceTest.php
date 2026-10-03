@@ -6,6 +6,8 @@ namespace Tests\Feature\Services;
 
 use App\Contracts\WsFrameClient;
 use App\Exceptions\PrivateWsReconnectException;
+use App\Exceptions\PrivateWsSilenceException;
+use App\Exceptions\WsReadTimeoutException;
 use App\Models\ExchangeWsEvent;
 use App\Services\ExchangeWsEventRecorder;
 use App\Services\NobitexPrivateWsService;
@@ -327,6 +329,260 @@ final class NobitexPrivateWsServiceTest extends TestCase
         $this->assertNoSecretsLogged($ws);
     }
 
+    /* ------------------------------ liveness / timeouts ------------------------------ */
+
+    /** A scripted read that times out at the given clock (the socket stays open). */
+    private static function timeoutAt(int $clock, bool $socketClosed = false): \Closure
+    {
+        return function (TestablePrivateWsService $ws) use ($clock, $socketClosed) {
+            $ws->clock = $clock;
+            if ($socketClosed) {
+                $ws->currentClient->connected = false;
+            }
+            throw new WsReadTimeoutException('Client read timeout');
+        };
+    }
+
+    private static function pingAt(int $clock): \Closure
+    {
+        return fn (TestablePrivateWsService $ws) => [$ws->clock = $clock, '{}'][1];
+    }
+
+    /** @return array<int,array{0:string,1:string,2:array}> */
+    private static function logsNamed(TestablePrivateWsService $ws, string $msg): array
+    {
+        return array_values(array_filter($ws->logs, fn ($l) => $l[1] === $msg));
+    }
+
+    public function test_silence_longer_than_the_old_25s_with_pings_does_not_reconnect(): void
+    {
+        $client = new FakeWsClient([
+            self::connectReply(),           // t=1000
+            self::pingAt(1040),             // 40s gap: the old 25s socket timeout would have dropped here
+            self::timeoutAt(1100),          // 60s read timeout, 60s < 90s silence: keep reading
+            self::pingAt(1105),             // ping resets the silence clock
+            self::timeoutAt(1165),
+            self::pingAt(1170),
+        ]);
+        $ws = $this->service($this->api([self::TOKEN1]));
+        $ws->clients = [$client];
+        $client->owner = $ws;
+
+        try {
+            $ws->consumeOnce();
+            $this->fail('expected the script to run out while still connected');
+        } catch (ScriptExhausted) {
+            // still reading: no reconnect
+        }
+
+        $this->assertSame(60, config('trading.websocket.read_timeout_seconds'));
+        // Full 60s reads; the read after each timeout is capped at the silence budget left (90-60=30).
+        $this->assertSame([60, 60, 60, 30, 60, 30, 60], $client->readTimeouts);
+        $this->assertSame(['{}', '{}', '{}'], array_slice($client->sent, 3)); // every ping answered
+        $this->assertSame([], self::logsNamed($ws, '[WS-PRIVATE] Connection dropped; reconnecting'));
+        $this->assertCount(2, self::logsNamed($ws, '[WS-PRIVATE] Read timeout; within silence budget'));
+    }
+
+    public function test_no_frames_for_max_silence_reconnects_with_that_reason(): void
+    {
+        $client = new FakeWsClient([
+            self::connectReply(),           // t=1000: last frame
+            self::timeoutAt(1060),          // tolerated
+            self::timeoutAt(1090),          // 90s without any frame
+        ]);
+        $second = new FakeWsClient([self::connectReply()]);
+        $ws = $this->service($this->api([self::TOKEN1, self::TOKEN2]));
+        $ws->clients = [$client, $second];
+        $client->owner = $second->owner = $ws;
+        $ws->loops = 1;
+
+        $ws->run();
+
+        $this->assertSame([60, 60, 30], $client->readTimeouts);
+        $this->assertTrue($client->closed);
+        $drops = self::logsNamed($ws, '[WS-PRIVATE] Connection dropped; reconnecting');
+        $this->assertCount(1, $drops);
+        $this->assertSame('no frames for 90s', $drops[0][2]['error']);
+        $this->assertSame('error', $drops[0][0]); // first genuine drop this hour
+    }
+
+    public function test_read_timeout_on_a_closed_socket_is_a_drop(): void
+    {
+        $client = new FakeWsClient([self::connectReply(), self::timeoutAt(1060, socketClosed: true)]);
+        $ws = $this->service($this->api([self::TOKEN1]));
+        $ws->clients = [$client];
+        $client->owner = $ws;
+
+        $this->expectException(WsReadTimeoutException::class);
+        $ws->consumeOnce();
+    }
+
+    public function test_config_drives_read_timeout_and_silence(): void
+    {
+        config([
+            'trading.websocket.read_timeout_seconds' => 40,
+            'trading.websocket.private_max_silence_seconds' => 100,
+        ]);
+        $client = new FakeWsClient([self::connectReply(), self::timeoutAt(1040), self::timeoutAt(1080), self::timeoutAt(1100)]);
+        $ws = $this->service($this->api([self::TOKEN1]));
+        $ws->clients = [$client];
+        $client->owner = $ws;
+
+        try {
+            $ws->consumeOnce();
+            $this->fail('expected a silence reconnect');
+        } catch (PrivateWsSilenceException $e) {
+            $this->assertSame('no frames for 100s', $e->getMessage());
+        }
+        $this->assertSame([40, 40, 40, 20], $client->readTimeouts);
+        // The single-instance lock must outlast one blocking read.
+        $this->assertSame(60, (fn () => $this->lockTtlSeconds)->call($ws));
+        config(['trading.websocket.read_timeout_seconds' => 60]);
+        $this->assertSame(75, (fn () => $this->lockTtlSeconds)->call($this->service($this->api([]))));
+    }
+
+    public function test_repeated_drops_warn_and_flapping_logs_one_error(): void
+    {
+        config(['trading.websocket.private_flap_reconnects_per_hour' => 3]);
+        $clients = [];
+        for ($i = 0; $i < 5; $i++) {
+            // Each connection is healthy, then the socket read fails (attempt 1 every time).
+            $clients[] = new FakeWsClient([
+                self::connectReply(),
+                function (TestablePrivateWsService $ws) use ($i) {
+                    $ws->clock = 1000 + ($i + 1) * 120;
+                    throw new \RuntimeException('Broken frame');
+                },
+            ]);
+        }
+        $ws = $this->service($this->api(array_fill(0, 5, self::TOKEN1)));
+        $ws->clients = $clients;
+        foreach ($clients as $c) {
+            $c->owner = $ws;
+        }
+        $ws->loops = 5;
+
+        $ws->run();
+
+        $drops = self::logsNamed($ws, '[WS-PRIVATE] Connection dropped; reconnecting');
+        $this->assertSame(['error', 'warning', 'warning', 'warning', 'warning'], array_column($drops, 0));
+        $this->assertSame([1, 2, 3, 4, 5], array_map(fn ($d) => $d[2]['reconnects_last_hour'], $drops));
+        $this->assertSame([1, 1, 1, 1, 1], array_map(fn ($d) => $d[2]['attempt'], $drops));
+
+        $flap = self::logsNamed($ws, 'WS_PRIVATE_FLAPPING');
+        $this->assertCount(1, $flap); // crossed at the 4th reconnect; not repeated within the hour
+        $this->assertSame('error', $flap[0][0]);
+        $this->assertSame(4, $flap[0][2]['reconnects_last_hour']);
+        $this->assertSame(3, $flap[0][2]['threshold']);
+    }
+
+    public function test_flap_window_is_one_hour(): void
+    {
+        config(['trading.websocket.private_flap_reconnects_per_hour' => 1]);
+        $clients = [];
+        foreach ([1100, 5000, 5100] as $t) {
+            $clients[] = new FakeWsClient([
+                self::connectReply(),
+                function (TestablePrivateWsService $ws) use ($t) {
+                    $ws->clock = $t;
+                    throw new \RuntimeException('Broken frame');
+                },
+            ]);
+        }
+        $ws = $this->service($this->api(array_fill(0, 3, self::TOKEN1)));
+        $ws->clients = $clients;
+        foreach ($clients as $c) {
+            $c->owner = $ws;
+        }
+        $ws->loops = 3;
+
+        $ws->run();
+
+        $drops = self::logsNamed($ws, '[WS-PRIVATE] Connection dropped; reconnecting');
+        // 1100 → first; 5000 is > 1h later → first again (ERROR); 5100 → repeat.
+        $this->assertSame(['error', 'error', 'warning'], array_column($drops, 0));
+        $this->assertSame([1, 1, 2], array_map(fn ($d) => $d[2]['reconnects_last_hour'], $drops));
+        $this->assertCount(1, self::logsNamed($ws, 'WS_PRIVATE_FLAPPING'));
+    }
+
+    public function test_planned_reconnect_warns_and_failed_reconnect_attempt_errors(): void
+    {
+        $planned = new FakeWsClient([
+            self::connectReply(),
+            json_encode(['push' => ['disconnect' => ['code' => 3005, 'reason' => 'connection expired']]]),
+        ]);
+        // Never established: the reconnect attempt itself fails.
+        $failing = new FakeWsClient([fn () => throw new \RuntimeException('handshake failed')]);
+        $ws = $this->service($this->api([self::TOKEN1, self::TOKEN2]));
+        $ws->clients = [$planned, $failing];
+        $planned->owner = $failing->owner = $ws;
+        $ws->loops = 2;
+
+        $ws->run();
+
+        $drops = self::logsNamed($ws, '[WS-PRIVATE] Connection dropped; reconnecting');
+        $this->assertSame([['warning', 1], ['error', 2]], array_map(fn ($d) => [$d[0], $d[2]['attempt']], $drops));
+    }
+
+    public function test_refresh_still_fires_on_a_silent_channel_from_pings_alone(): void
+    {
+        // connect at t=1000, ttl 1200 → refresh due at 2080. Only pings arrive.
+        $script = [self::connectReply(1200)];
+        for ($t = 1025; $t <= 2100; $t += 25) {
+            $script[] = self::pingAt($t);
+        }
+        $client = new FakeWsClient($script);
+        $ws = $this->service($this->api([self::TOKEN1, self::TOKEN2]));
+        $ws->clients = [$client];
+        $client->owner = $ws;
+
+        try { $ws->consumeOnce(); } catch (ScriptExhausted) {}
+
+        $frames = self::decoded($client);
+        $refreshAt = array_keys(array_filter($frames, fn ($f) => is_array($f) && isset($f['refresh'])));
+        $this->assertCount(1, $refreshAt);
+        $this->assertSame(['token' => self::TOKEN2], $frames[$refreshAt[0]]['refresh']);
+        // Sent right after the first ping at/after 2080 (t=2100), i.e. within one ping interval.
+        $pongsBefore = count(array_filter(array_slice($client->sent, 3, $refreshAt[0] - 3), fn ($f) => $f === '{}'));
+        $this->assertSame(intdiv(2100 - 1025, 25) + 1, $pongsBefore);
+    }
+
+    public function test_refresh_fires_after_a_tolerated_read_timeout(): void
+    {
+        $client = new FakeWsClient([
+            self::connectReply(1200),   // refresh due at 2080
+            self::pingAt(2050),
+            self::timeoutAt(2110),      // a missed ping; 60s < 90s silence → keep reading
+        ]);
+        $ws = $this->service($this->api([self::TOKEN1, self::TOKEN2]));
+        $ws->clients = [$client];
+        $client->owner = $ws;
+
+        try { $ws->consumeOnce(); } catch (ScriptExhausted) {}
+
+        $this->assertSame(['id' => 4, 'refresh' => ['token' => self::TOKEN2]], self::decoded($client)[4]);
+        $this->assertCount(1, self::logsNamed($ws, '[WS-PRIVATE] Token refresh sent'));
+    }
+
+    public function test_subscribe_reply_recovery_fields_are_logged(): void
+    {
+        $client = new FakeWsClient([
+            self::connectReply(),
+            json_encode(['id' => 2, 'subscribe' => ['recoverable' => true, 'epoch' => 'abcd', 'offset' => 17, 'positioned' => true]]),
+            json_encode(['id' => 3, 'subscribe' => (object) []]),
+        ]);
+        $ws = $this->service($this->api([self::TOKEN1]));
+        $ws->clients = [$client];
+
+        try { $ws->consumeOnce(); } catch (ScriptExhausted) {}
+
+        $subs = self::logsNamed($ws, '[WS-PRIVATE] Subscribed');
+        $this->assertSame('private:orders#Ab12…', $subs[0][2]['channel']);
+        $this->assertSame([true, true, 'abcd', 17], [$subs[0][2]['recoverable'], $subs[0][2]['positioned'], $subs[0][2]['epoch'], $subs[0][2]['offset']]);
+        $this->assertSame([null, null, null, null, []], [$subs[1][2]['recoverable'], $subs[1][2]['positioned'], $subs[1][2]['epoch'], $subs[1][2]['offset'], $subs[1][2]['reply_keys']]);
+        $this->assertNoSecretsLogged($ws);
+    }
+
     /* ---------------------------------- heartbeat ---------------------------------- */
 
     public function test_heartbeat_written_on_frames_with_ten_second_guard(): void
@@ -374,6 +630,8 @@ final class FakeWsClient implements WsFrameClient
     public bool $disconnectOnNull = false;
     public ?TestablePrivateWsService $owner = null;
     public ?\Closure $afterReceive = null;
+    /** @var array<int,int> every setReadTimeout() value, in order */
+    public array $readTimeouts = [];
 
     /** @param array<int,string|\Closure> $script */
     public function __construct(private array $script)
@@ -408,6 +666,11 @@ final class FakeWsClient implements WsFrameClient
         return $this->connected;
     }
 
+    public function setReadTimeout(int $seconds): void
+    {
+        $this->readTimeouts[] = $seconds;
+    }
+
     public function close(): void
     {
         $this->closed = true;
@@ -419,6 +682,7 @@ final class TestablePrivateWsService extends NobitexPrivateWsService
     public int $clock = 1000;
     /** @var array<int,FakeWsClient> */
     public array $clients = [];
+    public ?FakeWsClient $currentClient = null;
     public int $opened = 0;
     public int $loops = 0;
     /** @var array<int,int> */
@@ -438,7 +702,7 @@ final class TestablePrivateWsService extends NobitexPrivateWsService
         if ($c === null) {
             throw new \LogicException('no fake client left');
         }
-        return $c;
+        return $this->currentClient = $c;
     }
 
     protected function keepRunning(): bool

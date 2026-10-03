@@ -12,6 +12,7 @@ use App\Services\NobitexService;
 use Illuminate\Contracts\Queue\ShouldBeUniqueUntilProcessing;
 use Illuminate\Log\Events\MessageLogged;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Queue;
 use Mockery;
 use Tests\Concerns\BuildsGridSchema;
 use Tests\TestCase;
@@ -32,6 +33,9 @@ final class ProcessOrderEventJobTest extends TestCase
     {
         parent::setUp();
         $this->buildGridSchema();
+        // A Done event over a still-ACTIVE REST status schedules an API-lag
+        // re-check; keep it queued (inspected in ProcessOrderEventRecheckTest).
+        Queue::fake();
         $this->logs = [];
         Event::listen(MessageLogged::class, function (MessageLogged $m) {
             $this->logs[] = ['level' => $m->level, 'message' => $m->message, 'context' => $m->context];
