@@ -77,7 +77,7 @@ base_dust ← credited + base_dust − amount           (always in [0, 1 step))
 ```
 
 - The sell is **never larger than the BTC the buy credited plus the bot's own dust**.
-- `floor_qty` truncates to the market's quantity step. Every order amount, including those sent through `NobitexService::placeOrder`, is truncated **down** by `App\Support\QtyPrecision`. Nothing is ever rounded up past a balance.
+- `floor_qty` truncates to the market's quantity step. Every order amount, including those sent through `NobitexService::placeOrder`, is truncated **down** by `App\Support\QtyPrecision`. Nothing is ever rounded up past a balance. The step itself (BTCIRT: 6 decimals) and the price tick come from Nobitex `/v2/options` via `App\Support\MarketPrecision` — see [market-precision.md](market-precision.md).
 - Dust is folded into the sell automatically once it reaches one step. A dust-only order is never placed.
 - If folding a *negative* dust (a recorded shortfall, §5) would push the sell below `min_order_value_irt`, the fold is deferred (`EXIT_DUST_DEFERRED`).
 
