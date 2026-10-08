@@ -83,6 +83,14 @@
         <env name="NOBITEX_WS_PRIVATE_MAX_SILENCE_SECONDS" value="90" force="true"/>
         <env name="NOBITEX_WS_PRIVATE_FLAP_RECONNECTS_PER_HOUR" value="10" force="true"/>
         <env name="NOBITEX_WS_API_LAG_RECHECK_DELAYS" value="2,4,8" force="true"/>
+        <!-- Logs: a test run must never append to the production log files
+             (laravel/trading/nobitex/queue/scheduler). Every file channel is
+             redirected to storage/logs/testing-*.log; tests that assert on logs
+             use Log::spy()/shouldReceive() and are unaffected. -->
+        <env name="LOG_FILE_OVERRIDE" value="testing.log" force="true"/>
+        <env name="LOG_CHANNEL" value="stack" force="true"/>
+        <env name="LOG_STACK" value="laravel" force="true"/>
+        <env name="LOG_DEPRECATIONS_CHANNEL" value="null" force="true"/>
         <!-- Same pins in $_SERVER: Laravel's env repository reads $_SERVER before $_ENV,
              so a variable exported in the shell (not just .env) would otherwise win. -->
         <server name="TRADING_PRECISION_LIVE" value="false"/>
@@ -132,5 +140,9 @@
         <server name="NOBITEX_WS_PRIVATE_MAX_SILENCE_SECONDS" value="90"/>
         <server name="NOBITEX_WS_PRIVATE_FLAP_RECONNECTS_PER_HOUR" value="10"/>
         <server name="NOBITEX_WS_API_LAG_RECHECK_DELAYS" value="2,4,8"/>
+        <server name="LOG_FILE_OVERRIDE" value="testing.log"/>
+        <server name="LOG_CHANNEL" value="stack"/>
+        <server name="LOG_STACK" value="laravel"/>
+        <server name="LOG_DEPRECATIONS_CHANNEL" value="null"/>
     </php>
 </phpunit>

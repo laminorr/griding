@@ -120,15 +120,22 @@ class TradingEngineService
             }
 
             // 5. محاسبه اندازه سفارشات
-            // Ensure active_capital_percent has a valid value
-            $activePercent = $botConfig->active_capital_percent ?? 100.0;
-            if ($activePercent <= 0 || $activePercent > 100) {
-                throw new Exception("Invalid active_capital_percent: {$activePercent}. Must be between 0 and 100.");
+            // Active budget = total_capital × active_capital_percent / 100 —
+            // resolved by the SAME BotConfig helper AdjustGridJob uses for
+            // rebalances, so both size levels from one allocation.
+            // Null percent → 100 (WARNING); outside (0, 100] → refuse to start.
+            // (calculateOrderSize keeps receiving total + percent so its
+            // MIN_CAPITAL_IRT check and risk metrics stay against total_capital;
+            // total × percent / 100 / levels is the activeBudgetIrt() split.)
+            try {
+                $activePercent = $botConfig->activeCapitalPercent();
+            } catch (\InvalidArgumentException $e) {
+                throw new Exception($e->getMessage());
             }
 
             $orderSizeResult = $this->gridCalculator->calculateOrderSize(
-                $botConfig->total_capital,
-                $activePercent,
+                (float) $botConfig->total_capital,
+                (float) $activePercent,
                 $botConfig->grid_levels,
                 $botConfig->symbol ?? 'BTCIRT'
             );
@@ -737,7 +744,9 @@ class TradingEngineService
             levels: (int) $botConfig->grid_levels,
             stepPct: (float) $botConfig->grid_spacing,
             mode: $mode,
-            budgetIrt: (int) $botConfig->total_capital,
+            // Reporting only here (fixedQty pins the size) — but log the
+            // ACTIVE budget, the same figure the rebalance path plans with.
+            budgetIrt: (int) $botConfig->activeBudgetIrt(),
             fixedQty: $fixedQty,
             presetBaseQty: $presetBaseQty
         );

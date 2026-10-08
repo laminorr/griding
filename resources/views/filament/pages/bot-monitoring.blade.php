@@ -205,7 +205,7 @@
                                           x-text="(bot.profit_24h >= 0 ? '+' : '') + formatNum(bot.profit_24h)"></span>
                                     <div class="metric-foot">
                                         <span class="metric-sub" :class="bot.profit_change_24h >= 0 ? 'pos' : 'neg'"
-                                              x-text="(bot.profit_change_24h >= 0 ? '▲ ' : '▼ ') + faDigits(Math.abs(bot.profit_change_24h)) + '%'"></span>
+                                              x-text="bot.profit_change_24h === null ? '—' : (bot.profit_change_24h >= 0 ? '▲ ' : '▼ ') + faDigits(Math.abs(bot.profit_change_24h)) + '%'"></span>
                                         <span class="metric-chip">سود روز جاری</span>
                                     </div>
                                 </div>
@@ -223,7 +223,7 @@
                                     <span class="metric-value" x-text="faDigits(bot.total_cycles || 0)"></span>
                                     <div class="metric-foot">
                                         <span class="metric-sub">از خرید تا فروش</span>
-                                        <span class="metric-chip">سیکل‌های موفق</span>
+                                        <span class="metric-chip">معاملات تکمیل‌شده</span>
                                     </div>
                                 </div>
                                 {{-- زمان از آخرین معامله --}}
@@ -353,7 +353,7 @@
                                         </div>
                                         <div class="metric-card is-row">
                                             <span class="metric-label">میانگین مدت چرخه</span>
-                                            <span class="metric-value" style="direction: ltr;" x-text="formatDuration(bot.avg_cycle_duration || 0)"></span>
+                                            <span class="metric-value" style="direction: ltr;" x-text="bot.avg_cycle_duration === null ? '—' : formatDuration(bot.avg_cycle_duration)"></span>
                                         </div>
                                         <div class="metric-card is-row">
                                             <span class="metric-label">سفارشات فعال</span>
@@ -361,7 +361,7 @@
                                         </div>
                                         <div class="metric-card is-row">
                                             <span class="metric-label">نرخ موفقیت</span>
-                                            <span class="metric-value pos" x-text="faDigits(bot.total_cycles > 0 ? '100' : '0') + '%'"></span>
+                                            <span class="metric-value pos" x-text="bot.success_rate === null ? '—' : faDigits(bot.success_rate) + '%'"></span>
                                         </div>
                                     </div>
                                 </div>
@@ -413,14 +413,14 @@
                         <div class="panel-section__body" style="border-block-end: 1px solid var(--at-border);">
                             <div class="at-stack-sm">
                                 <div class="metric-card is-row">
-                                    <span class="metric-label">وضعیت آخرین چرخه</span>
+                                    <span class="metric-label">وضعیت آخرین اجرای بررسی</span>
                                     <span class="metric-value"
                                           :class="{ 'pos': ['success','in_progress'].includes(bot.activity_summary.last_cycle_status), 'neg': bot.activity_summary.last_cycle_status === 'error', 'at-t-warn': bot.activity_summary.last_cycle_status === 'warning' }"
                                           x-text="cycleLabel(bot.activity_summary.last_cycle_status)"></span>
                                     <span class="metric-sub" x-show="bot.activity_summary.last_cycle_time" x-text="formatTimeAgo(bot.activity_summary.last_cycle_time)"></span>
                                 </div>
                                 <div class="metric-card is-row">
-                                    <span class="metric-label">میانگین زمان چرخه</span>
+                                    <span class="metric-label">میانگین زمان اجرای بررسی</span>
                                     <span class="metric-value" style="direction: ltr;" x-text="formatCycleDuration(bot.activity_summary.avg_cycle_duration)"></span>
                                     <span class="metric-sub">۲۴ ساعت گذشته</span>
                                 </div>
@@ -432,7 +432,7 @@
                                     <span class="metric-sub">نوبیتکس</span>
                                 </div>
                                 <div class="metric-card is-row">
-                                    <span class="metric-label">چرخه‌ها ۲۴ ساعت</span>
+                                    <span class="metric-label">اجرای بررسی ۲۴ ساعت</span>
                                     <span class="metric-value" x-text="faDigits(bot.activity_summary.cycles_count_24h)"></span>
                                     <span class="metric-sub">اجرای CheckTrades</span>
                                 </div>
@@ -452,7 +452,7 @@
                                 API <span class="at-t-muted" x-text="'(' + faDigits(getApiCallsCount(bot.activity_cycles)) + ')'"></span>
                             </button>
                             <button type="button" class="at-btn" :class="activeFilter === 'cycles' ? 'at-btn--accent' : ''" @click="activeFilter = 'cycles'">
-                                چرخه‌ها <span class="at-t-muted" x-text="'(' + faDigits(bot.activity_cycles.filter(c => c.status !== 'ungrouped').length) + ')'"></span>
+                                اجراهای بررسی <span class="at-t-muted" x-text="'(' + faDigits(bot.activity_cycles.filter(c => c.status !== 'ungrouped').length) + ')'"></span>
                             </button>
                         </div>
 
@@ -1164,12 +1164,12 @@
 
                 cycleTitle(status) {
                     return {
-                        success: 'چرخه بررسی ربات',
-                        warning: 'چرخه با هشدار',
-                        error: 'چرخه با خطا',
-                        in_progress: 'چرخه در حال اجرا',
+                        success: 'اجرای بررسی موفق',
+                        warning: 'اجرای بررسی با هشدار',
+                        error: 'اجرای بررسی با خطا',
+                        in_progress: 'اجرای بررسی در حال انجام',
                         ungrouped: 'لاگ‌های متفرقه'
-                    }[status] || 'چرخه';
+                    }[status] || 'اجرای بررسی';
                 },
 
                 cycleLabel(status) {
