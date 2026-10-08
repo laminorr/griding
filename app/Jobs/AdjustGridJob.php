@@ -147,15 +147,26 @@ class AdjustGridJob implements ShouldQueue
                     // that spent-and-waiting IRT, so we subtract it to get the
                     // budget actually available to redeploy this pass.
                     //
-                    // FIELD NOTE: this job has always fed GridPlanner
-                    // total_capital (see the original budgetIrt argument below),
-                    // so we deduct from total_capital — not budget_irt — to keep
-                    // the locked==0 case byte-for-byte identical to prior
-                    // behavior. Initial placement (TradingEngineService::
-                    // initializeGrid) needs no change: at init there are no open
-                    // cycles, so capital_locked_irt is 0 and effectiveBudget ==
-                    // total_capital.
-                    $totalBudget   = (string) ($bot->total_capital ?? 50_000_000);
+                    // ACTIVE BUDGET (live-audit fix, bot 48): the planner must be
+                    // fed total_capital × active_capital_percent / 100 — the same
+                    // allocation initial placement (TradingEngineService::
+                    // initializeGrid) deploys — NOT the whole total_capital. Before
+                    // this fix a rebalance re-sized an 80% bot at 100% (GRID_PLAN
+                    // budget_irt 50,000,000 instead of 40,000,000). Both paths
+                    // resolve the percent through BotConfig::activeCapitalPercent().
+                    $totalBudget = Money::normalize((string) ($bot->total_capital ?? '0'));
+                    try {
+                        $activeBudget = $bot->activeBudgetIrt();
+                    } catch (\InvalidArgumentException $e) {
+                        // Same values initializeGrid refuses to start a grid with:
+                        // skip this bot's rebalance rather than guess an allocation.
+                        Log::channel('trading')->warning('REBALANCE_SKIP_INVALID_ACTIVE_CAPITAL_PERCENT', [
+                            'bot_id' => $bot->id,
+                            'active_capital_percent' => $bot->active_capital_percent,
+                            'error' => $e->getMessage(),
+                        ]);
+                        continue;
+                    }
                     $lockedCapital = $bot->capital_locked_irt ?? '0';
 
                     // Guard against a stale/missing capital_locked_irt: if the
@@ -180,7 +191,8 @@ class AdjustGridJob implements ShouldQueue
                         $lockedCapital = $bot->capital_locked_irt ?? '0';
                     }
 
-                    $effectiveBudget = Money::sub($totalBudget, (string) $lockedCapital);
+                    // effectiveBudget = max(0, activeBudget − capital_locked_irt)
+                    $effectiveBudget = Money::max('0', Money::sub($activeBudget, (string) $lockedCapital));
 
                     // If nothing is available to deploy (locked >= total) we skip
                     // ONLY this bot's rebalance for this cycle. This is NOT a Kill
@@ -190,6 +202,7 @@ class AdjustGridJob implements ShouldQueue
                         Log::channel('trading')->warning('REBALANCE_SKIP_NO_AVAILABLE_BUDGET', [
                             'bot_id'           => $bot->id,
                             'total_budget'     => $totalBudget,
+                            'active_budget'    => $activeBudget,
                             'locked_capital'   => (string) $lockedCapital,
                             'effective_budget' => $effectiveBudget,
                         ]);
@@ -199,6 +212,7 @@ class AdjustGridJob implements ShouldQueue
                     Log::channel('trading')->info('REBALANCE_EFFECTIVE_BUDGET', [
                         'bot_id'           => $bot->id,
                         'total_budget'     => $totalBudget,
+                        'active_budget'    => $activeBudget,
                         'locked_capital'   => (string) $lockedCapital,
                         'effective_budget' => $effectiveBudget,
                     ]);

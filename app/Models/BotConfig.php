@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use App\Support\Money;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -195,6 +196,64 @@ class BotConfig extends Model
     public function completedTrades(): HasMany
     {
         return $this->hasMany(CompletedTrade::class, 'bot_config_id');
+    }
+
+    // ========= Capital allocation =========
+
+    /**
+     * The bot's active_capital_percent as a decimal string, in (0, 100].
+     *
+     * Single source of truth for BOTH initial placement
+     * (TradingEngineService::initializeGrid) and rebalance (AdjustGridJob).
+     * Null / empty defaults to 100 with a WARNING (initializeGrid's historical
+     * `?? 100.0`). A non-numeric value or one outside (0, 100] throws — the
+     * same values initializeGrid has always refused to start a grid with — so
+     * no path ever deploys capital the operator did not allocate.
+     *
+     * @throws \InvalidArgumentException
+     */
+    public function activeCapitalPercent(): string
+    {
+        $raw = $this->active_capital_percent;
+
+        if ($raw === null || trim((string) $raw) === '') {
+            Log::channel('trading')->warning('ACTIVE_CAPITAL_PERCENT_DEFAULTED', [
+                'bot_id' => $this->id,
+                'value'  => $raw,
+                'used'   => '100',
+            ]);
+
+            return '100';
+        }
+
+        $pct = trim((string) $raw);
+        if (! is_numeric($pct)
+            || Money::compare(Money::normalize($pct), '0') <= 0
+            || Money::compare(Money::normalize($pct), '100') > 0
+        ) {
+            throw new \InvalidArgumentException(
+                "Invalid active_capital_percent: {$pct}. Must be between 0 and 100."
+            );
+        }
+
+        return Money::normalize($pct);
+    }
+
+    /**
+     * Rial budget the grid may deploy: total_capital × active_capital_percent
+     * / 100, exact BCMath, floored to whole rial. Before any locked-capital
+     * deduction (AdjustGridJob subtracts capital_locked_irt from this).
+     *
+     * @throws \InvalidArgumentException on an invalid active_capital_percent
+     */
+    public function activeBudgetIrt(): string
+    {
+        $total = Money::normalize($this->attributes['total_capital'] ?? '0');
+
+        return Money::floorToScale(
+            Money::div(Money::mul($total, $this->activeCapitalPercent(), 10), '100', 10),
+            0
+        );
     }
 
     // ========= Scopes =========
