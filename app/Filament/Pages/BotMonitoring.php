@@ -130,11 +130,14 @@ class BotMonitoring extends Page
         $data = [];
 
         foreach ($bots as $bot) {
-            // Active orders: فقط سفارشاتی که واقعاً فعال هستند (هنوز fill نشده و pair نشده)
+            // Active orders: every order still resting on the book — the same
+            // open set the price chart draws (placed + partially_filled, plus the
+            // legacy 'active'). Continuation legs (paired_order_id = parent id)
+            // ARE open orders and are counted; excluding them under-reported
+            // «سفارشات فعال» whenever an exit leg was waiting.
             $activeOrders = $bot->gridOrders()
-                ->whereIn('status', ['placed', 'active'])
-                ->whereNull('filled_at')        // هنوز fill نشده
-                ->whereNull('paired_order_id')  // هنوز pair نشده
+                ->whereIn('status', [...self::CHART_OPEN_ORDER_STATUSES, 'active'])
+                ->whereNull('filled_at')
                 ->get();
 
             // Filled orders in last 24h
@@ -155,7 +158,7 @@ class BotMonitoring extends Page
                 $date = now()->subDays($i)->format('Y-m-d');
                 $dayProfit = $completedTrades
                     ->filter(fn($t) => $t->created_at->format('Y-m-d') === $date)
-                    ->sum('profit');
+                    ->sum(fn ($t) => (float) ($t->net_profit ?? $t->profit));
                 $dailyProfits[] = [
                     'date' => $date,
                     'profit' => $dayProfit,
@@ -181,35 +184,25 @@ class BotMonitoring extends Page
                 ];
             }
 
-            // Calculate average cycle duration
-            $pairedOrders = $bot->gridOrders()
-                ->where('status', 'filled')
-                ->whereNotNull('paired_order_id')
-                ->get();
+            // Trading-cycle KPIs — every number here comes from completed_trades
+            // (one row per closed buy→sell round trip), never from activity-log
+            // polling runs and never from double-counted order legs.
+            $tradingKpis = $this->tradingCycleKpis($bot);
 
-            $cycleDurations = [];
-            foreach ($pairedOrders as $order) {
-                $paired = $bot->gridOrders()->find($order->paired_order_id);
-                if ($paired && $paired->filled_at && $order->filled_at) {
-                    $duration = abs($paired->filled_at->diffInMinutes($order->filled_at));
-                    $cycleDurations[] = $duration;
-                }
-            }
+            // Calculate 24h change (realised net profit, rial)
+            $profit24h = $this->sumNetProfit(
+                $bot->completedTrades()->where('created_at', '>=', now()->subHours(24))
+            );
 
-            $avgCycleDuration = !empty($cycleDurations) ? array_sum($cycleDurations) / count($cycleDurations) : 0;
+            $profitPrevious24h = $this->sumNetProfit(
+                $bot->completedTrades()->whereBetween('created_at', [now()->subHours(48), now()->subHours(24)])
+            );
 
-            // Calculate 24h change
-            $profit24h = $completedTrades
-                ->filter(fn($t) => $t->created_at >= now()->subHours(24))
-                ->sum('profit');
-
-            $profitPrevious24h = CompletedTrade::where('bot_config_id', $bot->id)
-                ->whereBetween('created_at', [now()->subHours(48), now()->subHours(24)])
-                ->sum('profit');
-
+            // Only a positive previous-day base gives a meaningful % change;
+            // anything else is "not computable" (null → «—»), not a fake 0%.
             $profitChange = $profitPrevious24h > 0
-                ? (($profit24h - $profitPrevious24h) / $profitPrevious24h) * 100
-                : 0;
+                ? round((($profit24h - $profitPrevious24h) / $profitPrevious24h) * 100, 2)
+                : null;
 
             // Get latest activity logs (safe check for table existence)
             try {
@@ -264,8 +257,8 @@ class BotMonitoring extends Page
                 'currently_filled' => $currentlyFilled,
                 'completed_trades_total' => $bot->completedTrades()->count(),
                 'completed_trades_24h_actual' => $bot->completedTrades()->where('created_at', '>=', now()->subHours(24))->count(),
-                'profit_total' => $bot->completedTrades()->sum('profit'),
-                'profit_24h_actual' => $bot->completedTrades()->where('created_at', '>=', now()->subHours(24))->sum('profit'),
+                'profit_total' => $this->sumNetProfit($bot->completedTrades()),
+                'profit_24h_actual' => $profit24h,
             ];
 
             $data[] = [
@@ -286,21 +279,23 @@ class BotMonitoring extends Page
                     'nobitex_order_id' => $o->nobitex_order_id,
                 ]),
                 'filled_24h' => $filledOrders,
-                'completed_trades_24h' => $completedTrades->filter(fn($t) => $t->created_at >= now()->subHours(24))->count(),
+                'completed_trades_24h' => $tradingKpis['completed_cycles_24h'],
                 'profit_24h' => $profit24h,
-                'profit_change_24h' => round($profitChange, 2),
+                'profit_change_24h' => $profitChange,
                 'last_check_at' => $bot->last_check_at,
-                // Presentation-only: newest trade time, derived from the
-                // $completedTrades collection already loaded above (ordered asc,
-                // so last() is the most recent). No extra query — feeds the
-                // "زمان از آخرین معامله" stat card in the live view.
-                'last_trade_at' => optional($completedTrades->last())->created_at?->toIso8601String(),
+                // Newest completed trade, all-time (not limited to the 30-day
+                // chart window) — feeds the "زمان از آخرین معامله" stat card.
+                'last_trade_at' => optional($bot->completedTrades()->latest('created_at')->first(['created_at']))->created_at?->toIso8601String(),
 
                 // Chart data
                 'daily_profits' => $dailyProfits,
                 'fill_distribution' => $fillDistribution,
-                'avg_cycle_duration' => round($avgCycleDuration, 1),
-                'total_cycles' => count($cycleDurations),
+                // Minutes per real trading cycle (null when no closed cycle).
+                'avg_cycle_duration' => $tradingKpis['avg_cycle_duration'],
+                // Completed trading cycles, all-time = COUNT(completed_trades).
+                'total_cycles' => $tradingKpis['completed_cycles'],
+                // Profitable cycles / all cycles × 100; null (→ «—») with 0 trades.
+                'success_rate' => $tradingKpis['success_rate'],
 
                 // Activity logs - new cycle-based structure
                 'activity_cycles' => $cycleData['cycles'],
@@ -312,6 +307,76 @@ class BotMonitoring extends Page
         }
 
         return $data;
+    }
+
+    /**
+     * Trading-cycle KPIs for one bot, derived only from completed_trades and
+     * the grid_orders legs they reference.
+     *
+     * - completed_cycles      COUNT(completed_trades), all-time
+     * - completed_cycles_24h  COUNT(completed_trades) created in the last 24h
+     * - success_rate          % of those with net profit > 0 (net_profit, else
+     *                         the legacy profit column); null when 0 trades
+     * - avg_cycle_duration    mean minutes from the EARLIER leg's filled_at to
+     *                         the trade's booking (completed_trades.created_at);
+     *                         null when no trade has a timed leg
+     *
+     * @return array{completed_cycles:int,completed_cycles_24h:int,success_rate:?float,avg_cycle_duration:?float}
+     */
+    public function tradingCycleKpis(BotConfig $bot): array
+    {
+        $trades = $bot->completedTrades()
+            ->get(['id', 'buy_order_id', 'sell_order_id', 'profit', 'net_profit', 'created_at']);
+
+        $total = $trades->count();
+        if ($total === 0) {
+            return [
+                'completed_cycles' => 0,
+                'completed_cycles_24h' => 0,
+                'success_rate' => null,
+                'avg_cycle_duration' => null,
+            ];
+        }
+
+        $since24h = now()->subHours(24);
+        $cycles24h = $trades->filter(fn ($t) => $t->created_at !== null && $t->created_at->gte($since24h))->count();
+
+        $profitable = $trades->filter(function ($t) {
+            $net = $t->getRawOriginal('net_profit') ?? $t->getRawOriginal('profit');
+
+            return $net !== null && bccomp(Money::normalize($net), '0', 18) > 0;
+        })->count();
+
+        $legIds = $trades->pluck('buy_order_id')->merge($trades->pluck('sell_order_id'))->filter()->unique()->values();
+        $filledAt = GridOrder::whereIn('id', $legIds)->whereNotNull('filled_at')->pluck('filled_at', 'id');
+
+        $durations = [];
+        foreach ($trades as $t) {
+            $legTimes = collect([$filledAt[$t->buy_order_id] ?? null, $filledAt[$t->sell_order_id] ?? null])
+                ->filter()
+                ->map(fn ($v) => \Illuminate\Support\Carbon::parse($v));
+            if ($legTimes->isEmpty() || $t->created_at === null) {
+                continue;
+            }
+            $start = $legTimes->sort()->first();
+            $durations[] = max(0, $start->diffInSeconds($t->created_at, false)) / 60;
+        }
+
+        return [
+            'completed_cycles' => $total,
+            'completed_cycles_24h' => $cycles24h,
+            'success_rate' => round($profitable * 100 / $total, 1),
+            'avg_cycle_duration' => $durations === [] ? null : round(array_sum($durations) / count($durations), 1),
+        ];
+    }
+
+    /**
+     * Realised net profit (rial) over a completed_trades query: net_profit,
+     * falling back to the legacy profit column for rows that predate it.
+     */
+    private function sumNetProfit($query): float
+    {
+        return (float) $query->sum(DB::raw('COALESCE(net_profit, profit)'));
     }
 
     /**

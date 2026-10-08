@@ -158,7 +158,7 @@ final class BotMonitoringChartDataTest extends TestCase
             'active_orders', 'filled_24h', 'completed_trades_24h', 'profit_24h',
             'profit_change_24h', 'last_check_at', 'last_trade_at',
             'daily_profits', 'fill_distribution', 'avg_cycle_duration', 'total_cycles',
-            'activity_cycles', 'activity_summary', 'debug',
+            'success_rate', 'activity_cycles', 'activity_summary', 'debug',
         ], array_keys($data[0]));
 
         // Plain arrays only (no Collections / Carbon): survives a JSON round trip unchanged.
