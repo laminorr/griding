@@ -1,5 +1,17 @@
 <?php
 
+/*
+| LOG_FILE_OVERRIDE — when set (phpunit.xml pins it to "testing.log"), EVERY
+| file channel below writes to storage/logs/<that file> instead of its own
+| production file, so a test run can never append to laravel/trading/nobitex/
+| queue/scheduler logs. Unset in production: each channel keeps its own file.
+*/
+$logFile = static function (string $default): string {
+    $override = trim((string) env('LOG_FILE_OVERRIDE', ''));
+
+    return storage_path('logs/' . ($override !== '' ? basename($override) : $default));
+};
+
 return [
 
     /*
@@ -41,7 +53,7 @@ return [
         */
         'laravel' => [
             'driver' => 'daily',
-            'path' => storage_path('logs/laravel.log'),
+            'path' => $logFile('laravel.log'),
             'level' => env('LOG_LEVEL', 'info'),
             'days' => (int) env('LOG_DAYS', 14),
             'tap' => [App\Logging\CustomizeFormatter::class],
@@ -53,7 +65,7 @@ return [
         */
         'trading' => [
             'driver' => 'daily',
-            'path' => storage_path('logs/trading.log'),
+            'path' => $logFile('trading.log'),
             'level' => env('LOG_TRADING_LEVEL', 'info'),
             'days' => (int) env('LOG_TRADING_DAYS', 30),
             'tap' => [App\Logging\CustomizeFormatter::class],
@@ -65,7 +77,7 @@ return [
         */
         'nobitex' => [
             'driver' => 'daily',
-            'path' => storage_path('logs/nobitex.log'),
+            'path' => $logFile('nobitex.log'),
             'level' => env('LOG_NOBITEX_LEVEL', 'warning'),
             'days' => (int) env('LOG_NOBITEX_DAYS', 30),
             'tap' => [App\Logging\CustomizeFormatter::class],
@@ -77,7 +89,7 @@ return [
         */
         'queue' => [
             'driver' => 'daily',
-            'path' => storage_path('logs/queue.log'),
+            'path' => $logFile('queue.log'),
             'level' => env('LOG_QUEUE_LEVEL', 'info'),
             'days' => (int) env('LOG_QUEUE_DAYS', 14),
             'tap' => [App\Logging\CustomizeFormatter::class],
@@ -89,7 +101,7 @@ return [
         */
         'scheduler' => [
             'driver' => 'daily',
-            'path' => storage_path('logs/scheduler.log'),
+            'path' => $logFile('scheduler.log'),
             'level' => env('LOG_SCHEDULER_LEVEL', 'info'),
             'days' => (int) env('LOG_SCHEDULER_DAYS', 14),
             'tap' => [App\Logging\CustomizeFormatter::class],
@@ -101,7 +113,7 @@ return [
         */
         'single' => [
             'driver' => 'single',
-            'path' => storage_path('logs/laravel.log'),
+            'path' => $logFile('laravel.log'),
             'level' => env('LOG_LEVEL', 'info'),
             'tap' => [App\Logging\CustomizeFormatter::class],
             'replace_placeholders' => true,
@@ -135,7 +147,7 @@ return [
         ],
 
         'emergency' => [
-            'path' => storage_path('logs/laravel.log'),
+            'path' => $logFile('laravel.log'),
         ],
     ],
 ];
