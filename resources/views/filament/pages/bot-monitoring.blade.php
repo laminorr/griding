@@ -777,8 +777,15 @@
                     // First paint comes from the server-rendered seed (no extra
                     // round-trip); fetch immediately only if there was none.
                     if (this.loading) this.fetchData();
-                    setInterval(() => this.tick(), 1000);
-                    setInterval(() => this.fetchData(), 30000);
+                    // Both timers stop for good once the stale-panel guard
+                    // (filament.components.stale-panel-guard) has seen a failed
+                    // Livewire request: a tab left open across a deploy must
+                    // not keep posting its old snapshot every 30s.
+                    const clockTimer = setInterval(() => this.tick(), 1000);
+                    const dataTimer = setInterval(() => this.fetchData(), 30000);
+                    const stop = () => { clearInterval(clockTimer); clearInterval(dataTimer); };
+                    if (window.__atPanelStale) stop();
+                    window.addEventListener('at-panel-stale', stop, { once: true });
 
                     // Follow the top selector: when Livewire's selectedBotId
                     // changes (a pill click), refocus the live view on it too.
@@ -817,7 +824,7 @@
                 // renderless on the server, so it does not re-render the page).
                 // A failed refresh keeps the last good data on screen.
                 async fetchData() {
-                    if (this.fetching || !this.$wire) return;
+                    if (this.fetching || !this.$wire || window.__atPanelStale) return;
                     this.fetching = true;
                     try {
                         const data = await this.$wire.getBotData();
@@ -962,6 +969,11 @@
                     // drives that; nothing extra to subscribe to here.
                     this.load(true);
                     timer = setInterval(() => this.load(false), 10000);
+                    // Stale panel (see botMonitoring.init): stop refreshing.
+                    window.addEventListener('at-panel-stale', () => {
+                        if (timer) clearInterval(timer);
+                        timer = null;
+                    }, { once: true });
                 },
 
                 destroy() {
@@ -982,7 +994,7 @@
                 },
 
                 async load(force) {
-                    if (this.destroyed || !this.$wire) return;
+                    if (this.destroyed || !this.$wire || window.__atPanelStale) return;
                     if (this.fetching && !force) return;
                     const mySeq = ++this.seq;
                     const res = this.resolution;

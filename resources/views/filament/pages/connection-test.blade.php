@@ -104,12 +104,20 @@
     </div>
 
     <script>
-        // Auto refresh cached data every 30 seconds
-        setInterval(function () {
+        // Auto refresh cached data every 30 seconds. Stops for good once the
+        // stale-panel guard (filament.components.stale-panel-guard) has seen a
+        // failed Livewire request: a tab left open across a deploy must not
+        // keep replaying its old snapshot.
+        const atConnTimer = setInterval(function () {
+            if (window.__atPanelStale) {
+                clearInterval(atConnTimer);
+                return;
+            }
             if (!@this.isLoading) {
                 @this.loadCachedData();
             }
         }, 30000);
+        window.addEventListener('at-panel-stale', () => clearInterval(atConnTimer), { once: true });
 
         // Keyboard shortcut: Ctrl/Cmd + T → run connection test
         document.addEventListener('keydown', function (e) {
