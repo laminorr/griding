@@ -15,7 +15,8 @@ use Illuminate\Support\Facades\Log;
  * - Subscribes to candle channels public:candle-{SYMBOL}-{RESOLUTION} from
  *   config('trading.websocket.candle_*') and caches the latest candle per
  *   (symbol, resolution) at MarketDataLayer::candleCacheKey() (read by CandleService)
- * - Handles ping/pong ({}) and reconnect with backoff + jitter
+ * - Handles ping/pong ({}) and reconnect with backoff + jitter; drops are
+ *   logged by reportDrop() (expected server drop = WARNING, see there)
  * - Seeds each symbol's orderbook from REST v3 on every (re)connect, since the
  *   orderbook channel only publishes on change
  * - Updates Laravel cache using keys expected by MarketDataLayer, throttled per
@@ -92,6 +93,17 @@ class NobitexWebSocketService
     /** @var array<string,true> candle keys whose latest candle is not yet in cache */
     protected array $dirtyCandles = [];
 
+    /** Reconnect accounting window (one hour) */
+    protected const FLAP_WINDOW_SECONDS = 3600;
+    /** More reconnects than this in an hour logs WS_PUBLIC_FLAPPING */
+    protected int $flapReconnectsPerHour;
+    /** @var list<int> unix seconds of each reconnect in the last hour */
+    protected array $reconnectTimes = [];
+    protected ?int $lastUnexpectedDropAt = null;
+    protected ?int $flapAlertedAt = null;
+    /** True once the current connection has received a frame after subscribing */
+    protected bool $established = false;
+
     public function __construct()
     {
         $cfg = (array) config('trading.nobitex', []);
@@ -108,6 +120,8 @@ class NobitexWebSocketService
         // The lock is refreshed once per frame; it must not lapse while
         // receive() blocks for up to a full read timeout.
         $this->lockTtl = max($this->lockTtl, $this->readTimeoutSeconds + 15);
+        // Same flap threshold as the private consumer (one knob for both).
+        $this->flapReconnectsPerHour = max(1, (int) config('trading.websocket.private_flap_reconnects_per_hour', 10));
     }
 
     /* ====================== Public helpers (used elsewhere) ====================== */
@@ -165,19 +179,96 @@ class NobitexWebSocketService
         }
 
         $attempt = 0;
-        while (true) {
+        while ($this->keepRunning()) {
             try {
                 $attempt++;
                 $this->consume($symbols);
                 $attempt = 0; // unlikely (consume is a forever loop), but reset backoff if loop returns
             } catch (\Throwable $e) {
+                if ($this->established) {
+                    $attempt = 1; // a healthy connection dropped: restart the backoff ladder
+                }
                 $wait = $this->computeBackoffWithJitter($attempt);
-                $this->out('[WS] Crash', ['error' => $e->getMessage(), 'attempt' => $attempt, 'wait' => $wait], 'error');
-                sleep($wait);
+                $this->reportDrop($e, $attempt, $wait);
+                $this->sleepSeconds($wait);
             } finally {
                 Cache::put($this->lockKey, getmypid(), $this->lockTtl);
             }
         }
+    }
+
+    /**
+     * Log one reconnect at the right level and track flapping — the same
+     * policy as NobitexPrivateWsService::reportDrop():
+     *  - an expected server drop (Nobitex recycles connections nightly:
+     *    "Empty read; connection dead?", a close frame) is WARNING;
+     *  - any other drop of a healthy connection is ERROR the first time in an
+     *    hour, WARNING after that;
+     *  - a failed reconnect attempt (attempt > 1: the connection never came
+     *    back up) is ERROR;
+     *  - more than trading.websocket.private_flap_reconnects_per_hour
+     *    reconnects in an hour logs ERROR WS_PUBLIC_FLAPPING (once an hour).
+     */
+    protected function reportDrop(\Throwable $e, int $attempt, int $wait): void
+    {
+        $now = $this->nowSeconds();
+        $this->reconnectTimes = array_values(array_filter(
+            $this->reconnectTimes,
+            fn (int $t) => $t > $now - self::FLAP_WINDOW_SECONDS
+        ));
+        $this->reconnectTimes[] = $now;
+        $count = count($this->reconnectTimes);
+
+        $expected = self::isExpectedDrop($e);
+
+        if ($attempt > 1) {
+            $level = 'error';   // the reconnect itself is failing
+        } elseif ($expected) {
+            $level = 'warning'; // server recycled the connection
+        } else {
+            $firstThisHour = $this->lastUnexpectedDropAt === null
+                || ($now - $this->lastUnexpectedDropAt) >= self::FLAP_WINDOW_SECONDS;
+            $level = $firstThisHour ? 'error' : 'warning';
+        }
+        if (!$expected) {
+            $this->lastUnexpectedDropAt = $now;
+        }
+
+        $this->out('[WS] Connection dropped; reconnecting', [
+            'error' => $e->getMessage(), 'attempt' => $attempt, 'wait' => $wait,
+            'reconnects_last_hour' => $count,
+        ], $level);
+
+        if ($count > $this->flapReconnectsPerHour
+            && ($this->flapAlertedAt === null || ($now - $this->flapAlertedAt) >= self::FLAP_WINDOW_SECONDS)) {
+            $this->flapAlertedAt = $now;
+            $this->out('WS_PUBLIC_FLAPPING', [
+                'reconnects_last_hour' => $count,
+                'threshold'            => $this->flapReconnectsPerHour,
+                'last_error'           => $e->getMessage(),
+            ], 'error');
+        }
+    }
+
+    /** A drop the server initiates on purpose (connection recycling), not a fault. */
+    public static function isExpectedDrop(\Throwable $e): bool
+    {
+        return (bool) preg_match(
+            '/empty read|connection dead|close frame|closed by server/i',
+            $e->getMessage()
+        );
+    }
+
+    /** Loop guard for run(). Overridable in tests. */
+    protected function keepRunning(): bool
+    {
+        return true;
+    }
+
+    /** Backoff sleep for run(). Overridable in tests. */
+    protected function sleepSeconds(int $seconds): void
+    {
+        sleep($seconds);
     }
 
     /* ============================ Core consume loop =========================== */
@@ -188,6 +279,7 @@ class NobitexWebSocketService
      */
     protected function consume(array $symbols): void
     {
+        $this->established = false;
         $this->out('[WS] Connecting', [
             'url' => $this->wsUrl,
             'ssl_insecure' => false,
@@ -222,6 +314,13 @@ class NobitexWebSocketService
 
             // Receive frame (string)
             $raw = $client->receive();
+
+            // A close frame from the server leaves the client disconnected:
+            // drop now (expected) instead of failing on the next send/receive.
+            if (!$client->isConnected()) {
+                throw new \RuntimeException('Socket closed by server (close frame)');
+            }
+            $this->established = true;
 
             // Heartbeat + flush throttled snapshots on EVERY frame (pings included)
             $this->onFrameReceived();

@@ -4,7 +4,9 @@ declare(strict_types=1);
 namespace App\Console\Commands;
 
 use App\Services\NobitexWebSocketService;
+use App\Support\MarketSymbols;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Log;
 
 class NobitexWsConsumer extends Command
 {
@@ -17,7 +19,22 @@ class NobitexWsConsumer extends Command
 
     public function handle(NobitexWebSocketService $service): int
     {
-        $symbols = array_map('trim', explode(',', (string) $this->argument('symbols')));
+        $requested = array_map('trim', explode(',', (string) $this->argument('symbols')));
+
+        // Only seed/subscribe symbols in trading.exchange.allowed_symbols: the
+        // cron line passes BTCIRT,ETHIRT,USDTIRT, and a disallowed symbol only
+        // produces failed REST seeds. One WARNING per start, then skipped.
+        ['allowed' => $symbols, 'skipped' => $skipped] = MarketSymbols::partitionAllowed($requested);
+        if ($skipped !== []) {
+            $msg = '[WS] Skipping symbols not in trading.exchange.allowed_symbols';
+            $ctx = ['skipped' => $skipped, 'subscribing' => $symbols];
+            try {
+                Log::channel('nobitex')->warning($msg, $ctx);
+            } catch (\Throwable) {
+                Log::warning($msg, $ctx);
+            }
+            $this->warn('[CMD] Skipping disallowed symbols: '.implode(',', $skipped));
+        }
         $force   = (bool) $this->option('force');
         $debug   = (bool) $this->option('debug');
 
