@@ -41,7 +41,7 @@
         /* Crosshair legend for fill markers: one quiet line over the chart's
            top-left corner, only while the crosshair is on a candle with fills. */
         .at-pchart__legend {
-            position: absolute; inset-block-start: 6px; inset-inline-start: 8px; z-index: 3;
+            position: absolute; top: 6px; left: 8px; z-index: 3; /* physical: the canvas is LTR, legend text RTL */
             max-inline-size: calc(100% - 90px); pointer-events: none;
             font-family: Vazirmatn, system-ui, sans-serif; font-size: 11px; line-height: 1.6;
             color: #c9d4e3; background: rgba(11, 18, 32, 0.78); border-radius: 6px; padding: 2px 6px;
@@ -942,8 +942,8 @@
                 get note() {
                     if (this.mode === 'market') return 'ربات فعالی انتخاب نشده — فقط قیمت بازار';
                     if (this.mode === 'inactive') {
-                        return 'ربات متوقف — فقط معاملات گذشته؛ خطوط سفارش باز نمایش داده نمی‌شود'
-                            + (this.staleLevels > 0 ? ' (' + faDigits(this.staleLevels) + ' سفارش هنوز «ثبت‌شده» در پایگاه‌داده)' : '');
+                        return 'ربات متوقف — فقط معاملات گذشته'
+                            + (this.staleLevels > 0 ? ' · ' + faDigits(this.staleLevels) + ' سفارش «ثبت‌شده» رسم نشد' : '');
                     }
                     return '';
                 },
@@ -1124,14 +1124,15 @@
                     const esc = (v) => String(v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
                     this.legend = rows.map(m => {
                         const buy = m.side === 'buy';
+                        const num = (v) => '<bdi dir="ltr">' + esc(v) + '</bdi>';
                         let txt = '<span class="' + (buy ? 'buy' : 'sell') + '">' + (buy ? 'خرید' : 'فروش')
                             + (Number(m.count) > 1 ? ' ×' + faDigits(m.count) : '') + '</span> '
-                            + (Number(m.count) > 1 ? 'میانگین ' : '') + esc(this.fmtPrice(Number(m.price)))
-                            + ' · ' + esc(faDigits(String(m.amount)));
+                            + (Number(m.count) > 1 ? 'میانگین ' : '') + num(this.fmtPrice(Number(m.price)))
+                            + ' · مقدار ' + num(faDigits(String(m.amount)));
                         if (m.cycle_profit !== null && m.cycle_profit !== undefined) {
                             const p = Number(m.cycle_profit);
-                            txt += ' · بستن چرخه: ' + '<span class="' + (p >= 0 ? 'buy' : 'sell') + '">'
-                                + esc(faDigits(Math.round(p).toLocaleString('en-US'))) + '</span>';
+                            txt += ' · سود چرخه <span class="' + (p >= 0 ? 'buy' : 'sell') + '">'
+                                + num(faDigits(Math.round(p).toLocaleString('en-US'))) + '</span>';
                         }
                         return txt;
                     }).join('<br>');

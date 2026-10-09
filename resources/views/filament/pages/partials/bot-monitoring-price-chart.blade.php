@@ -23,10 +23,10 @@
                     <button type="button" class="at-btn" :class="resolution === tf.res ? 'at-btn--accent' : ''"
                             :aria-pressed="resolution === tf.res" @click="setResolution(tf.res)" x-text="tf.label"></button>
                 </template>
-                <button type="button" class="at-btn" x-show="mode !== 'market'"
-                        :class="showFills ? 'at-btn--accent' : ''" :aria-pressed="showFills"
-                        title="نمایش معاملات پُرشده روی نمودار" @click="toggleFills()">معاملات</button>
             </div>
+            <button type="button" class="at-btn" x-show="mode !== 'market'"
+                    :class="showFills ? 'at-btn--accent' : ''" :aria-pressed="showFills"
+                    title="نمایش معاملات پُرشده روی نمودار" @click="toggleFills()">معاملات</button>
         </div>
     </div>
     <div class="panel-section__body at-pchart__body">
