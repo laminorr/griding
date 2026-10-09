@@ -24,6 +24,33 @@ Centrifugo sends a `{}` ping about every 25 s and expects `{}` back. The private
 - **Single-instance lock**: each consumer's cache lock TTL is now `max(60, read_timeout + 15)`, which is 75 s by default. It can no longer lapse while `receive()` blocks. After a `pkill`, the cron restart can therefore take one extra minute while the old lock expires.
 - **Public consumer**: only the timeout changed. A read timeout there still reconnects, because orderbook pushes are constant and a silent public socket is a dead one.
 
+### Public reconnect logging
+
+`nobitex:ws-consumer` now follows the same policy as the private consumer.
+Every reconnect logs
+`[WS] Connection dropped; reconnecting {error, attempt, wait, reconnects_last_hour}`.
+This replaces the old `ERROR [WS] Crash` line.
+
+- **Expected server drop**: `Empty read; connection dead?`, or a close frame,
+  which is logged as `Socket closed by server (close frame)`. Logged as
+  **WARNING**. Nobitex recycles public connections almost every night around
+  03:50–04:05 Tehran.
+- **Any other drop of a healthy connection**: **ERROR** the first time in an
+  hour, **WARNING** after that.
+- **Failed reconnect attempt** (`attempt > 1`, the new connection never
+  received a frame): **ERROR**. The attempt counter now goes back to 1 after a
+  healthy connection. It used to count up for the life of the process
+  (`attempt 4`, `8`, …).
+- **Flapping**: more than `trading.websocket.private_flap_reconnects_per_hour`
+  reconnects in an hour also logs **ERROR** `WS_PUBLIC_FLAPPING`, at most once
+  an hour. This is the same threshold the private consumer uses.
+- **Symbols**: the command filters its `symbols` argument through
+  `trading.exchange.allowed_symbols` (`TRADING_SYMBOLS_ALLOWED`). Disallowed
+  symbols are logged once per start in
+  `WARNING [WS] Skipping symbols not in trading.exchange.allowed_symbols`, then
+  never seeded or subscribed. The REST re-seed still runs on every reconnect,
+  for the allowed symbols.
+
 ### Private reconnect logging
 
 All reconnects log `[WS-PRIVATE] Connection dropped; reconnecting {error, attempt, wait, reconnects_last_hour}`.

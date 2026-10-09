@@ -1239,6 +1239,8 @@ final class BotAuditor
             'WS_PRIVATE_RECONNECT'    => fn ($e) => str_starts_with($e['message'], '[WS-PRIVATE] Connection dropped'),
             'WS_PRIVATE_FLAPPING'     => fn ($e) => $e['event'] === 'WS_PRIVATE_FLAPPING',
             'WS_PRIVATE_CONNECT_FAILED' => fn ($e) => $e['event'] === 'WS_PRIVATE_CONNECT_FAILED',
+            'WS_PUBLIC_RECONNECT'     => fn ($e) => str_starts_with($e['message'], '[WS] Connection dropped') || str_starts_with($e['message'], '[WS] Crash'),
+            'WS_PUBLIC_FLAPPING'      => fn ($e) => $e['event'] === 'WS_PUBLIC_FLAPPING',
             'WS_FEED_*'               => fn ($e) => str_starts_with($e['event'], 'WS_FEED_'),
             'WS_EVENT_API_LAG_*'      => fn ($e) => str_starts_with($e['event'], 'WS_EVENT_API_LAG'),
             'WS_EVENT_JOB_FAILED'     => fn ($e) => $e['event'] === 'WS_EVENT_JOB_FAILED',
@@ -1284,7 +1286,7 @@ final class BotAuditor
             $outcomes[$o] = ($outcomes[$o] ?? 0) + 1;
         }
 
-        foreach (['WS_PRIVATE_FLAPPING' => 'warning', 'QUEUE_DEPTH_*' => 'warning', 'FEE_CURRENCY_UNEXPECTED' => 'warning', 'EXIT_BLOCKED' => 'critical', 'WS_EVENT_JOB_FAILED' => 'warning', 'CRITICAL' => 'warning'] as $k => $sev) {
+        foreach (['WS_PRIVATE_FLAPPING' => 'warning', 'WS_PUBLIC_FLAPPING' => 'warning', 'QUEUE_DEPTH_*' => 'warning', 'FEE_CURRENCY_UNEXPECTED' => 'warning', 'EXIT_BLOCKED' => 'critical', 'WS_EVENT_JOB_FAILED' => 'warning', 'CRITICAL' => 'warning'] as $k => $sev) {
             if ($totals[$k] > 0) {
                 $this->flag($sev, 'LOG_' . preg_replace('/[^A-Z_]/', '', $k), "{$totals[$k]} {$k} log line(s) in the window", []);
             }
@@ -1322,7 +1324,7 @@ final class BotAuditor
             $a = self::raw($t->getAttributes());
             $ev[] = [(string) $a['created_at'], 'db:completed_trades', 'INFO', 'CYCLE_BOOKED', "{$a['buy_order_id']},{$a['sell_order_id']}", 'trade ' . $a['id'] . ' net ' . self::dec($a['net_profit'] ?? $a['profit'])];
         }
-        $infra = '/^(WS_PRIVATE_|WS_FEED_|QUEUE_DEPTH_|WS_EVENT_API_LAG|\[WS-PRIVATE\] Connection dropped|\[WS-PRIVATE\] Connected|ORDER_PRICE_ROUNDED|PRECISION_FALLBACK|PRECISION_DRIFT)/';
+        $infra = '/^(WS_PRIVATE_|WS_PUBLIC_FLAPPING|WS_FEED_|QUEUE_DEPTH_|WS_EVENT_API_LAG|\[WS-PRIVATE\] Connection dropped|\[WS-PRIVATE\] Connected|ORDER_PRICE_ROUNDED|PRECISION_FALLBACK|PRECISION_DRIFT)/';
         $bot = array_flip($this->botLogs);
         foreach ($this->logs as $i => $e) {
             if (! isset($bot[$i]) && ! preg_match($infra, $e['event'])) {

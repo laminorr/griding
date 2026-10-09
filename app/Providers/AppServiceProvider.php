@@ -12,6 +12,8 @@ use App\Contracts\RateLimiter;
 use App\Services\RateLimiting\CacheRateLimiter;
 use App\Models\GridOrder;
 use App\Observers\GridOrderObserver;
+use Filament\Support\Facades\FilamentView;
+use Filament\View\PanelsRenderHook;
 use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -47,6 +49,15 @@ class AppServiceProvider extends ServiceProvider
         GridOrder::observe(GridOrderObserver::class);
 
         $this->registerPersianDigits();
+
+        // Stale-tab guard on every panel page: after a deploy, a tab still
+        // polling with its old Livewire snapshot gets ONE "reload" banner and
+        // stops polling, instead of erroring every 30s. Registered here (not
+        // in AdminPanelProvider) so the panel's layout/CSS hooks stay untouched.
+        FilamentView::registerRenderHook(
+            PanelsRenderHook::BODY_END,
+            fn (): string => view('filament.components.stale-panel-guard')->render(),
+        );
 
         if ($this->app->runningInConsole()) {
             $this->validateCacheDriverForOnOneServer();
