@@ -22,7 +22,7 @@ final class QueueWorkerScriptTest extends TestCase
         if (!is_executable('/usr/bin/flock') && trim((string) shell_exec('command -v flock')) === '') {
             $this->markTestSkipped('flock not available');
         }
-        $this->dir = sys_get_temp_dir() . '/qw-test-' . bin2hex(random_bytes(4));
+        $this->dir = storage_path('framework/qw-test-' . bin2hex(random_bytes(4)));
         mkdir($this->dir);
         // Fake "php": records its argv and exits non-zero, like a crashed worker.
         file_put_contents($this->dir . '/php', "#!/bin/sh\necho \"\$*\" >> \"{$this->dir}/runs\"\nexit 3\n");
