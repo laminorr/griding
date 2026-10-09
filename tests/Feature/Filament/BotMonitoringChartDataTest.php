@@ -129,15 +129,24 @@ final class BotMonitoringChartDataTest extends TestCase
         $this->assertSame('IRR', $out['unit']);
     }
 
-    public function test_no_selected_bot_returns_no_bot_status(): void
+    public function test_no_selected_bot_shows_default_market_candles_without_annotations(): void
     {
-        $this->mock(CandleService::class, fn ($m) => $m->shouldNotReceive('getCandles'));
+        config(['trading.websocket.candle_symbols' => ['BTCIRT']]);
+        $candles = [['t' => 900, 'o' => '1', 'h' => '2', 'l' => '1', 'c' => '2', 'v' => '0.1']];
+        $this->mock(CandleService::class, function ($m) use ($candles) {
+            $m->shouldReceive('getCandles')->once()->with('BTCIRT', '15', 200)
+                ->andReturn(['status' => 'ok', 'candles' => $candles, 'live' => false, 'errmsg' => null, 'unit' => 'IRR']);
+        });
 
         $out = $this->pageFor(null)->getChartData('15');
 
-        $this->assertSame('no_bot', $out['status']);
-        $this->assertSame([], $out['candles']);
+        $this->assertSame('ok', $out['status']);
+        $this->assertSame('market', $out['mode']);
+        $this->assertSame('BTCIRT', $out['symbol']);
+        $this->assertSame($candles, $out['candles']);
         $this->assertSame([], $out['levels']);
+        $this->assertSame([], $out['markers']);
+        $this->assertNull($out['start_t']);
     }
 
     public function test_get_bot_data_is_json_serializable_with_the_same_top_level_shape(): void

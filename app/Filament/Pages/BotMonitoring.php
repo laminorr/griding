@@ -380,36 +380,70 @@ class BotMonitoring extends Page
     }
 
     /**
-     * Candles + open-order levels for the «نمودار قیمت» chart (selected bot).
+     * Candle duration in seconds per CHART_RESOLUTIONS entry. Used only to
+     * bound the last candle's bucket; fills are aligned to the REAL candle
+     * open times CandleService returned (see bucketOf()), so a daily candle
+     * that opens at Tehran or UTC midnight is matched either way.
+     */
+    public const CHART_RESOLUTION_SECONDS = ['1' => 60, '15' => 900, '60' => 3600, 'D' => 86400];
+
+    /** At most this many (merged) fill markers, newest first. */
+    public const CHART_MARKER_CAP = 60;
+
+    /**
+     * Candles + open-order levels + fill / start annotations for the
+     * «نمودار قیمت» chart.
      *
      * Polled from the browser via `$wire.getChartData(res)`. Prices are decimal
      * strings in the CandleService output unit (RIAL for IRT markets — the
-     * same unit as grid_orders.price). Levels are the selected bot's real open
-     * grid orders only. Nothing is synthesised: no bot / no candles comes back
-     * as an explicit status the view renders as an empty state.
+     * same unit as grid_orders.price). Nothing is synthesised:
      *
-     * @return array{status:string,live:bool,unit:?string,candles:array,levels:array,symbol:?string,resolution:string}
+     * - mode 'market'   no bot selected (or it no longer exists): the default
+     *                   symbol's candles only — no levels, no markers.
+     * - mode 'bot'      active bot: candles, its open grid orders as levels,
+     *                   its fills as markers and its start marker.
+     * - mode 'inactive' stopped bot: candles, historical fill + start markers,
+     *                   but NO levels — a stopped bot has no live orders. Rows
+     *                   still in an open status are not drawn; their count is
+     *                   reported as stale_levels so the view can say so.
+     *
+     * markers: FILLED grid_orders whose filled_at lies inside the returned
+     * candle range, aligned to the candle they fell in, merged to one entry
+     * per (candle, side), capped at CHART_MARKER_CAP newest. For a merged
+     * entry price is the amount-weighted mean fill price, amount the sum, and
+     * cycle_profit the sum of the completed_trades net profit (COALESCE
+     * net_profit, profit) of the fills in it that closed a cycle (null when
+     * none did).
+     *
+     * start_t: candle containing MIN(grid_orders.created_at) for the bot (its
+     * first grid order); bot_configs.created_at only when the bot has no
+     * orders. null when that is outside the returned candle range — the range
+     * is never stretched to include it.
+     *
+     * @return array{status:string,mode:string,live:bool,unit:?string,candles:array,levels:array,markers:array,start_t:?int,stale_levels:int,symbol:?string,resolution:string}
      */
     public function getChartData(string $resolution): array
     {
         $this->skipRenderForDataPoll();
 
+        $empty = [
+            'status' => 'invalid_resolution', 'mode' => 'market', 'live' => false, 'unit' => null,
+            'candles' => [], 'levels' => [], 'markers' => [], 'start_t' => null, 'stale_levels' => 0,
+            'symbol' => null, 'resolution' => $resolution,
+        ];
+
         if (! in_array($resolution, self::CHART_RESOLUTIONS, true)) {
-            return [
-                'status' => 'invalid_resolution', 'live' => false, 'unit' => null,
-                'candles' => [], 'levels' => [], 'symbol' => null, 'resolution' => $resolution,
-            ];
+            return $empty;
         }
 
         $bot = $this->selectedBotId !== null ? BotConfig::find($this->selectedBotId) : null;
-        if (! $bot) {
-            return [
-                'status' => 'no_bot', 'live' => false, 'unit' => null,
-                'candles' => [], 'levels' => [], 'symbol' => null, 'resolution' => $resolution,
-            ];
-        }
 
-        $symbol = trim((string) $bot->symbol) !== '' ? (string) $bot->symbol : 'BTCIRT';
+        if ($bot) {
+            $symbol = trim((string) $bot->symbol) !== '' ? (string) $bot->symbol : 'BTCIRT';
+        } else {
+            $symbol = (string) (config('trading.websocket.candle_symbols')[0] ?? 'BTCIRT');
+            $symbol = trim($symbol) !== '' ? $symbol : 'BTCIRT';
+        }
 
         try {
             $result = app(CandleService::class)->getCandles($symbol, $resolution, self::CHART_CANDLE_COUNT);
@@ -430,24 +464,203 @@ class BotMonitoring extends Page
             ];
         }
 
-        $levels = $bot->gridOrders()
-            ->whereIn('status', self::CHART_OPEN_ORDER_STATUSES)
-            ->whereIn('type', ['buy', 'sell'])
-            ->orderBy('price', 'desc')
-            ->get(['id', 'price', 'type'])
-            ->map(fn ($o) => ['price' => Money::normalize($o->getRawOriginal('price')), 'side' => (string) $o->type])
-            ->values()
-            ->all();
-
-        return [
+        $out = array_merge($empty, [
             'status'     => (string) ($result['status'] ?? 'error'),
             'live'       => (bool) ($result['live'] ?? false),
             'unit'       => $result['unit'] ?? CandleService::priceUnit($symbol),
             'candles'    => $candles,
-            'levels'     => $levels,
             'symbol'     => strtoupper($symbol),
-            'resolution' => $resolution,
-        ];
+        ]);
+
+        if (! $bot) {
+            return $out;
+        }
+
+        $out['mode'] = $bot->is_active ? 'bot' : 'inactive';
+
+        $openOrders = $bot->gridOrders()
+            ->whereIn('status', self::CHART_OPEN_ORDER_STATUSES)
+            ->whereIn('type', ['buy', 'sell'])
+            ->orderBy('price', 'desc')
+            ->get(['id', 'price', 'type']);
+
+        if ($bot->is_active) {
+            $out['levels'] = $openOrders
+                ->map(fn ($o) => ['price' => Money::normalize($o->getRawOriginal('price')), 'side' => (string) $o->type])
+                ->values()
+                ->all();
+        } else {
+            $out['stale_levels'] = $openOrders->count();
+        }
+
+        if ($candles !== []) {
+            $times = array_column($candles, 't');
+            sort($times);
+            $out['markers'] = $this->chartFillMarkers($bot, $times, $resolution);
+            $out['start_t'] = $this->chartStartTime($bot, $times, $resolution);
+        }
+
+        return $out;
+    }
+
+    /**
+     * Open time of the candle containing $ts, or null when $ts is outside the
+     * candle range. $times is ascending.
+     */
+    private function bucketOf(int $ts, array $times, string $resolution): ?int
+    {
+        $n = count($times);
+        if ($n === 0 || $ts < $times[0] || $ts >= $times[$n - 1] + self::CHART_RESOLUTION_SECONDS[$resolution]) {
+            return null;
+        }
+
+        // Largest candle open time <= $ts (binary search).
+        $lo = 0;
+        $hi = $n - 1;
+        while ($lo < $hi) {
+            $mid = intdiv($lo + $hi + 1, 2);
+            if ($times[$mid] <= $ts) {
+                $lo = $mid;
+            } else {
+                $hi = $mid - 1;
+            }
+        }
+
+        // A gap in the candles (no trades in that interval) must not swallow a
+        // fill into an older candle.
+        return $ts < $times[$lo] + self::CHART_RESOLUTION_SECONDS[$resolution] ? $times[$lo] : null;
+    }
+
+    /** Candle open time of the bot's start (first grid order), or null out of range. */
+    private function chartStartTime(BotConfig $bot, array $times, string $resolution): ?int
+    {
+        $first = $bot->gridOrders()->min('created_at');
+        $start = $first !== null ? \Illuminate\Support\Carbon::parse($first) : $bot->created_at;
+
+        return $start ? $this->bucketOf($start->getTimestamp(), $times, $resolution) : null;
+    }
+
+    /**
+     * Merged fill markers (see getChartData()).
+     *
+     * @return list<array{t:int,side:string,count:int,price:string,amount:string,cycle_profit:?string}>
+     */
+    private function chartFillMarkers(BotConfig $bot, array $times, string $resolution): array
+    {
+        // Bounds in the app timezone: datetime columns hold app-timezone wall
+        // time, and createFromTimestamp() alone would yield UTC wall time.
+        $tz   = config('app.timezone');
+        $from = \Illuminate\Support\Carbon::createFromTimestamp($times[0], $tz);
+        $to   = \Illuminate\Support\Carbon::createFromTimestamp(end($times) + self::CHART_RESOLUTION_SECONDS[$resolution], $tz);
+
+        $fills = $bot->gridOrders()
+            ->where('status', 'filled')
+            ->whereIn('type', ['buy', 'sell'])
+            ->whereNotNull('filled_at')
+            ->where('filled_at', '>=', $from)
+            ->where('filled_at', '<', $to)
+            ->orderBy('filled_at', 'desc')
+            ->get(['id', 'type', 'price', 'amount', 'filled_amount', 'average_fill_price', 'filled_at']);
+
+        if ($fills->isEmpty()) {
+            return [];
+        }
+
+        $closing = $this->cycleClosingProfits($bot, $fills->pluck('id')->all());
+
+        // Merge per (candle, side), newest candle first.
+        $groups = [];
+        foreach ($fills as $o) {
+            $t = $this->bucketOf($o->filled_at->getTimestamp(), $times, $resolution);
+            if ($t === null) {
+                continue;
+            }
+            $side = (string) $o->type;
+            $key  = $t . ':' . $side;
+
+            // (string) on the raw column: MySQL already returns decimal strings;
+            // a driver returning floats gets PHP's shortest round-trip form.
+            $price  = (string) ($o->getRawOriginal('average_fill_price') ?: $o->getRawOriginal('price'));
+            $amount = (string) ($o->getRawOriginal('filled_amount') ?: $o->getRawOriginal('amount'));
+            if (Money::compare($amount, '0') <= 0) {
+                $amount = (string) $o->getRawOriginal('amount');
+            }
+
+            $g = $groups[$key] ?? ['t' => $t, 'side' => $side, 'count' => 0, 'notional' => '0', 'amount' => '0', 'cycle_profit' => null];
+            $g['count']++;
+            $g['notional'] = Money::add($g['notional'], Money::mul($price, $amount));
+            $g['amount']   = Money::add($g['amount'], $amount);
+            if (isset($closing[$o->id])) {
+                $g['cycle_profit'] = Money::add($g['cycle_profit'] ?? '0', $closing[$o->id]);
+            }
+            $g['last_price'] = $g['last_price'] ?? $price;
+            $groups[$key] = $g;
+        }
+
+        $markers = [];
+        foreach (array_slice(array_values($groups), 0, self::CHART_MARKER_CAP) as $g) {
+            $price = $g['count'] === 1 || Money::compare($g['amount'], '0') <= 0
+                ? $g['last_price']
+                : Money::div($g['notional'], $g['amount'], 8);
+            $markers[] = [
+                't'            => $g['t'],
+                'side'         => $g['side'],
+                'count'        => $g['count'],
+                'price'        => Money::normalize($price),
+                'amount'       => Money::normalize($g['amount']),
+                'cycle_profit' => $g['cycle_profit'] !== null ? Money::normalize($g['cycle_profit']) : null,
+            ];
+        }
+
+        // Lightweight Charts wants markers ascending by time.
+        usort($markers, fn ($a, $b) => [$a['t'], $a['side']] <=> [$b['t'], $b['side']]);
+
+        return $markers;
+    }
+
+    /**
+     * order id => completed_trades net profit, for the leg whose fill CLOSED
+     * the cycle (the later-filled of buy_order_id / sell_order_id; the sell
+     * leg when the fill times cannot tell them apart).
+     *
+     * @param  list<int> $orderIds
+     * @return array<int,string>
+     */
+    private function cycleClosingProfits(BotConfig $bot, array $orderIds): array
+    {
+        $trades = $bot->completedTrades()
+            ->where(fn ($q) => $q->whereIn('buy_order_id', $orderIds)->orWhereIn('sell_order_id', $orderIds))
+            ->get(['id', 'buy_order_id', 'sell_order_id', 'profit', 'net_profit']);
+
+        if ($trades->isEmpty()) {
+            return [];
+        }
+
+        $legIds = $trades->pluck('buy_order_id')->merge($trades->pluck('sell_order_id'))->filter()->unique()->all();
+        $filledAt = GridOrder::whereIn('id', $legIds)->pluck('filled_at', 'id');
+
+        $out = [];
+        foreach ($trades as $tr) {
+            $buyAt  = $tr->buy_order_id ? ($filledAt[$tr->buy_order_id] ?? null) : null;
+            $sellAt = $tr->sell_order_id ? ($filledAt[$tr->sell_order_id] ?? null) : null;
+
+            $closer = $tr->sell_order_id ?: $tr->buy_order_id;
+            if ($buyAt !== null && $sellAt !== null && $tr->buy_order_id && $tr->sell_order_id
+                && \Illuminate\Support\Carbon::parse($buyAt)->gt(\Illuminate\Support\Carbon::parse($sellAt))) {
+                $closer = $tr->buy_order_id;
+            }
+            if (! $closer) {
+                continue;
+            }
+
+            $net = $tr->getRawOriginal('net_profit') ?? $tr->getRawOriginal('profit');
+            if ($net === null) {
+                continue;
+            }
+            $out[(int) $closer] = Money::add($out[(int) $closer] ?? '0', (string) $net);
+        }
+
+        return $out;
     }
 
     /**
