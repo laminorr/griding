@@ -7,6 +7,7 @@ use App\Jobs\CheckTradesJob;
 use App\Jobs\AdjustGridJob;
 use App\Jobs\ReadMarketStatsJob;
 use App\Jobs\ReconcileSubmissionsJob;
+use App\Support\MarketSymbols;
 use App\Support\ScheduleCadence;
 use App\Support\QueueDepthHealthCheck;
 use App\Support\WsFeedHealthCheck;
@@ -63,7 +64,7 @@ if ((bool) config('trading.enable_scheduler', true)) {
         ->description('Prune old queue batches')
         ->dailyAt('03:20');
 
-    // ---- Market stats heartbeat (BTCIRT/ETHIRT/USDTIRT) ----
+    // ---- Market stats heartbeat (symbols in use AND allowed) ----
     // These run INLINE via Schedule::call (not Schedule::job) on purpose. Each
     // is a tiny fire-and-forget heartbeat that only reads an order book and
     // LOGS a line — nothing downstream consumes its result, and it carries no
@@ -77,15 +78,22 @@ if ((bool) config('trading.enable_scheduler', true)) {
     // slow/failed exchange read cannot break schedule:run. CheckTradesJob, by
     // contrast, keeps its queued + retry/backoff/timeout design (Schedule::job
     // above) — only the needless enqueues are removed here.
-    foreach (['BTCIRT','ETHIRT','USDTIRT'] as $s) {
-        Schedule::call(function () use ($s) {
+    //
+    // The symbol list is resolved at RUN time by MarketSymbols::marketStatsSymbols():
+    // active bots' symbols + the default chart symbol, intersected with
+    // trading.exchange.allowed_symbols. A symbol in use but not allowed is
+    // skipped (one INFO line per day), instead of a MARKET_STATS_FAILED
+    // warning every minute. Resolving here (not at schedule-definition time)
+    // keeps every artisan boot free of a DB query.
+    Schedule::call(function () {
+        foreach (MarketSymbols::marketStatsSymbols() as $s) {
             app()->call([new ReadMarketStatsJob($s), 'handle']);
-        })
-            ->name("read-market-{$s}")
-            ->description("Log last price & spread for {$s}")
-            ->everyMinute()
-            ->withoutOverlapping(2);
-    }
+        }
+    })
+        ->name('read-market-stats')
+        ->description('Log last price & spread for symbols in use and allowed')
+        ->everyMinute()
+        ->withoutOverlapping(2);
 
     // ---- Queue-depth health guard ----
     // Early-warning against the one-job-per-minute worker misconfiguration
