@@ -38,6 +38,17 @@
             border: 1px solid var(--at-border, #233349);
         }
         .at-pchart__empty { min-block-size: 180px; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        /* Crosshair legend for fill markers: one quiet line over the chart's
+           top-left corner, only while the crosshair is on a candle with fills. */
+        .at-pchart__legend {
+            position: absolute; inset-block-start: 6px; inset-inline-start: 8px; z-index: 3;
+            max-inline-size: calc(100% - 90px); pointer-events: none;
+            font-family: Vazirmatn, system-ui, sans-serif; font-size: 11px; line-height: 1.6;
+            color: #c9d4e3; background: rgba(11, 18, 32, 0.78); border-radius: 6px; padding: 2px 6px;
+        }
+        .at-pchart__legend .buy { color: #34D399; }
+        .at-pchart__legend .sell { color: #ff5d68; }
+        .at-pchart__note { font-size: 11px; margin-block-start: 6px; }
     </style>
 
     {{-- =================================================================
@@ -106,6 +117,20 @@
                     <div class="at-empty__icon">🤖</div>
                     هیچ ربات فعالی برای نمایش وجود ندارد
                 </div>
+            </div>
+        </template>
+
+        {{-- Price chart when the selected bot is not in the active fleet:
+             a stopped bot (history only, no live order lines) or no bot at all
+             (market price only). Keyed on the selection so it is re-created —
+             and refetched — when the selector changes. --}}
+        <template x-if="!loading && !selectedInFleet">
+            <div>
+                <template x-for="key in [String(selectedBotId ?? 'market')]" :key="key">
+                    <div class="at-stack" style="margin-block-end: var(--at-gap-lg);">
+                        @include('filament.pages.partials.bot-monitoring-price-chart')
+                    </div>
+                </template>
             </div>
         </template>
 
@@ -252,39 +277,7 @@
                          grid orders as price lines, polled via $wire.getChartData().
                          Re-created when the selection changes (x-for key + x-if). --}}
                     <template x-if="String(bot.id) === String(selectedBotId)">
-                        <div class="panel-section at-pchart" x-data="priceChart()">
-                            <div class="panel-section__head">
-                                <div>
-                                    <span class="panel-section__title">نمودار قیمت</span>
-                                    <p class="panel-section__sub">
-                                        <span class="at-mono" x-text="symbol || bot.symbol"></span>
-                                        <template x-if="unitLabel">
-                                            <span> · <span x-text="'واحد: ' + unitLabel"></span></span>
-                                        </template>
-                                        <template x-if="hasData">
-                                            <span> · <span x-text="faDigits(levelCount) + ' سفارش باز روی نمودار'"></span></span>
-                                        </template>
-                                    </p>
-                                </div>
-                                <div class="at-pchart__tools">
-                                    <span class="at-badge" :class="live ? 'pos' : 'muted'" x-show="hasData"
-                                          x-text="live ? 'زنده' : 'با تأخیر'"></span>
-                                    <div class="at-pchart__tf" role="group" aria-label="بازه زمانی">
-                                        <template x-for="tf in timeframes" :key="tf.res">
-                                            <button type="button" class="at-btn" :class="resolution === tf.res ? 'at-btn--accent' : ''"
-                                                    :aria-pressed="resolution === tf.res" @click="setResolution(tf.res)" x-text="tf.label"></button>
-                                        </template>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="panel-section__body at-pchart__body">
-                                <div class="at-pchart__canvas" x-ref="canvas" dir="ltr" x-show="hasData"></div>
-                                <div class="at-empty at-pchart__empty" x-show="!hasData">
-                                    <div class="at-empty__icon">📉</div>
-                                    <span x-text="emptyMessage"></span>
-                                </div>
-                            </div>
-                        </div>
+                        @include('filament.pages.partials.bot-monitoring-price-chart')
                     </template>
 
                     {{-- Open orders  |  cycle summary + next targets --}}
@@ -807,6 +800,14 @@
                     return match.length ? match : this.bots;
                 },
 
+                // True when the selected bot is one of the active bots rendered
+                // below (its chart lives inside its card). Otherwise the page
+                // shows the standalone chart: stopped bot, or market only.
+                get selectedInFleet() {
+                    if (this.selectedBotId === null || this.selectedBotId === undefined || this.selectedBotId === '') return false;
+                    return this.bots.some(b => String(b.id) === String(this.selectedBotId));
+                },
+
                 tick() {
                     // fa-IR locale already renders Persian digits.
                     this.clock = new Date().toLocaleString('fa-IR');
@@ -893,12 +894,19 @@
             const TEHRAN = 'Asia/Tehran';
             const COLORS = {
                 bg: '#0B1220', text: '#8d9cb0', grid: 'rgba(35, 51, 73, 0.45)', border: '#233349',
-                up: '#23d18b', down: '#ff5d68',
+                up: '#23d18b', down: '#ff5d68', buyMark: '#34D399', start: '#8d9cb0',
             };
 
             // Non-reactive handles (kept out of Alpine's proxies on purpose).
             let chart = null, series = null, lines = [], ro = null, timer = null, lwc = null;
             let levelRange = null, userMoved = false;
+            // Fill / start markers: one markers primitive per chart, updated in
+            // place with setMarkers() on every refresh (the chart is never
+            // re-created for them). fillsByT feeds the crosshair legend.
+            let markersApi = null, lastMarkers = [], lastStartT = null, fillsByT = new Map();
+            // «معاملات» toggle: in memory for this page session only (shared by
+            // re-created chart components, gone on reload).
+            if (typeof window.__atChartShowFills !== 'boolean') window.__atChartShowFills = true;
 
             return {
                 timeframes: [
@@ -918,6 +926,10 @@
                 destroyed: false,
                 seq: 0,
                 fitNext: true,
+                mode: 'bot',
+                staleLevels: 0,
+                showFills: window.__atChartShowFills,
+                legend: '',
 
                 get hasData() { return this.status === 'ok' && this.candleCount > 0; },
                 get unitLabel() { return this.unit === 'IRR' ? 'ریال' : (this.unit || ''); },
@@ -925,6 +937,22 @@
                     if (this.status === 'loading') return 'در حال بارگذاری نمودار…';
                     if (this.status === 'lib_error') return 'نمودار بارگذاری نشد — داده‌ای در دسترس نیست';
                     return 'داده‌ای در دسترس نیست';
+                },
+                // One honest line under the chart when it is not a live bot view.
+                get note() {
+                    if (this.mode === 'market') return 'ربات فعالی انتخاب نشده — فقط قیمت بازار';
+                    if (this.mode === 'inactive') {
+                        return 'ربات متوقف — فقط معاملات گذشته؛ خطوط سفارش باز نمایش داده نمی‌شود'
+                            + (this.staleLevels > 0 ? ' (' + faDigits(this.staleLevels) + ' سفارش هنوز «ثبت‌شده» در پایگاه‌داده)' : '');
+                    }
+                    return '';
+                },
+
+                toggleFills() {
+                    this.showFills = !this.showFills;
+                    window.__atChartShowFills = this.showFills;
+                    this.legend = '';
+                    this.drawMarkers();
                 },
 
                 init() {
@@ -941,8 +969,9 @@
                     if (timer) clearInterval(timer);
                     try { if (ro) ro.disconnect(); } catch (e) {}
                     try { if (chart) chart.remove(); } catch (e) {}
-                    chart = series = ro = timer = null;
+                    chart = series = ro = timer = markersApi = null;
                     lines = [];
+                    fillsByT = new Map();
                 },
 
                 setResolution(res) {
@@ -976,6 +1005,8 @@
                     const candles = (data && Array.isArray(data.candles)) ? data.candles : [];
                     this.symbol = data && data.symbol ? data.symbol : null;
                     this.unit = data && data.unit ? data.unit : null;
+                    this.mode = data && data.mode ? data.mode : 'bot';
+                    this.staleLevels = data && Number(data.stale_levels) > 0 ? Number(data.stale_levels) : 0;
 
                     if (!data || data.status !== 'ok' || candles.length === 0) {
                         this.status = (data && data.status && data.status !== 'ok') ? data.status : 'no_data';
@@ -1011,6 +1042,9 @@
                             open: Number(c.o), high: Number(c.h), low: Number(c.l), close: Number(c.c),
                         })));
                         this.drawLevels(Array.isArray(data.levels) ? data.levels : []);
+                        lastMarkers = Array.isArray(data.markers) ? data.markers : [];
+                        lastStartT = Number.isFinite(Number(data.start_t)) && data.start_t !== null ? Number(data.start_t) : null;
+                        this.drawMarkers();
                         if (this.fitNext) { this.fit(); this.fitNext = false; }
                     } catch (e) {
                         console.error('[price-chart] render failed', e);
@@ -1046,6 +1080,61 @@
                         }));
                     });
                     this.levelCount = lines.length;
+                },
+
+                // Fill markers (toggle) + the bot start marker, via setMarkers().
+                // Server already merged fills per (candle, side) and capped them.
+                // No text on fill markers; the start marker carries «شروع».
+                drawMarkers() {
+                    if (!series || !lwc) return;
+                    fillsByT = new Map();
+                    const out = [];
+                    if (this.showFills) {
+                        lastMarkers.forEach(m => {
+                            const t = Number(m.t);
+                            if (!Number.isFinite(t)) return;
+                            const buy = m.side === 'buy';
+                            out.push({
+                                time: t,
+                                position: buy ? 'belowBar' : 'aboveBar',
+                                shape: buy ? 'arrowUp' : 'arrowDown',
+                                color: buy ? COLORS.buyMark : COLORS.down,
+                                size: 0.6,
+                            });
+                            if (!fillsByT.has(t)) fillsByT.set(t, []);
+                            fillsByT.get(t).push(m);
+                        });
+                    }
+                    if (lastStartT !== null) {
+                        out.push({ time: lastStartT, position: 'aboveBar', shape: 'circle', color: COLORS.start, size: 0.4, text: 'شروع' });
+                    }
+                    out.sort((a, b) => a.time - b.time);
+                    if (!markersApi) {
+                        markersApi = lwc.createSeriesMarkers(series, out);
+                    } else {
+                        markersApi.setMarkers(out);
+                    }
+                },
+
+                // Crosshair legend: only on a candle that has fills.
+                onCrosshair(param) {
+                    const t = param && param.time !== undefined && param.point ? Number(param.time) : null;
+                    const rows = t !== null ? fillsByT.get(t) : null;
+                    if (!rows || !rows.length) { if (this.legend) this.legend = ''; return; }
+                    const esc = (v) => String(v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+                    this.legend = rows.map(m => {
+                        const buy = m.side === 'buy';
+                        let txt = '<span class="' + (buy ? 'buy' : 'sell') + '">' + (buy ? 'خرید' : 'فروش')
+                            + (Number(m.count) > 1 ? ' ×' + faDigits(m.count) : '') + '</span> '
+                            + (Number(m.count) > 1 ? 'میانگین ' : '') + esc(this.fmtPrice(Number(m.price)))
+                            + ' · ' + esc(faDigits(String(m.amount)));
+                        if (m.cycle_profit !== null && m.cycle_profit !== undefined) {
+                            const p = Number(m.cycle_profit);
+                            txt += ' · بستن چرخه: ' + '<span class="' + (p >= 0 ? 'buy' : 'sell') + '">'
+                                + esc(faDigits(Math.round(p).toLocaleString('en-US'))) + '</span>';
+                        }
+                        return txt;
+                    }).join('<br>');
                 },
 
                 fmtPrice(p) {
@@ -1116,6 +1205,8 @@
                             };
                         },
                     });
+
+                    chart.subscribeCrosshairMove((param) => this.onCrosshair(param));
 
                     if (window.ResizeObserver) {
                         let lastW = width;
