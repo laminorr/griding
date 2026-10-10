@@ -160,6 +160,10 @@ trait BuildsGridSchema
             // every rebalance that actually places/cancels orders.
             $table->integer('rebalance_count')->default(0);
 
+            // Classic-grid re-arm (2026_10_10_000001_add_classic_rearm_columns).
+            $table->boolean('rearm_exits')->default(false);
+            $table->unsignedInteger('grid_generation')->default(0);
+
             $table->timestamps();
         });
 
@@ -211,6 +215,12 @@ trait BuildsGridSchema
             $table->string('exit_state', 16)->nullable();
             $table->string('exit_blocked_reason', 255)->nullable();
             $table->timestamp('exit_blocked_at')->nullable();
+            // Classic-grid re-arm (2026_10_10_000001_add_classic_rearm_columns).
+            $table->unsignedBigInteger('rearm_order_id')->nullable()->index();
+            $table->string('rearm_state', 48)->nullable();
+            $table->unsignedBigInteger('rearm_exit_order_id')->nullable()->unique();
+            $table->unsignedBigInteger('rearm_root_order_id')->nullable()->index();
+            $table->unsignedInteger('grid_generation')->nullable()->index();
             $table->timestamps();
         });
 

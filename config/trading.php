@@ -296,6 +296,18 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Classic-grid re-arm (GridRearmer) — per bot via bot_configs.rearm_exits
+    |--------------------------------------------------------------------------
+    | max_fill_age_minutes: the poller re-arms only exits whose fill was
+    | recorded within this window, so switching the flag on never re-arms
+    | cycles that closed long before.
+    */
+    'rearm' => [
+        'max_fill_age_minutes' => (int) env('TRADING_REARM_MAX_FILL_AGE_MINUTES', 60),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | WebSocket market-data feed (nobitex:ws-consumer)
     |--------------------------------------------------------------------------
     */

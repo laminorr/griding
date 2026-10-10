@@ -7,6 +7,7 @@ use App\DTOs\CreateOrderDto;
 use App\Enums\ExecutionType;
 use App\Enums\OrderSide;
 use App\Exceptions\DefinitiveOrderRejection;
+use App\Models\BotConfig;
 use App\Models\GridOrder;
 use App\Support\MarketPrecision;
 use App\Support\Money;
@@ -73,6 +74,10 @@ class GridOrderExecutor
         }
 
         $placed = 0; $cancelled = 0; $errors = 0;
+
+        // Classic-grid re-arm: every row placed here carries the grid
+        // generation it belongs to (see beginGeneration()).
+        $generation = $this->beginGeneration($botId, $diff, $role);
 
         /* =============================================================
          * 1) لغو سفارش‌هایی که «در پلن جدید نیستند»
@@ -248,6 +253,7 @@ class GridOrderExecutor
                         'status'           => 'placed',
                         'nobitex_order_id' => 'SIM-' . uniqid(),
                         'role'             => $role,
+                        'grid_generation'  => $generation,
                     ]);
 
                     Log::channel('trading')->info('EXEC_SIM_PLACE', [
@@ -273,6 +279,7 @@ class GridOrderExecutor
                         'type'            => $side,
                         'status'          => 'pending',
                         'role'            => $role,
+                        'grid_generation' => $generation,
                     ]);
                     $clientOrderId = (string) $gridOrder->client_order_id;
 
@@ -381,6 +388,53 @@ class GridOrderExecutor
                 'note'      => 'simulation=true → no real orders',
             ]);
         }
+    }
+
+    /**
+     * Grid generation for the rows this call writes.
+     *
+     * A call that BUILDS a grid — role 'initial_grid' (TradingEngineService)
+     * or 'rebalance' (AdjustGridJob) with a non-empty diff — starts a new
+     * generation: bot_configs.grid_generation is bumped and the open grid rows
+     * the diff KEPT (they match the new plan) are re-stamped with it, so their
+     * levels stay current. Every other call writes the current generation.
+     * GridRearmer re-arms a level only while its generation is the bot's
+     * current one — a rebuild never resurrects old levels. Exits are never
+     * stamped: a cycle's generation is the one of the order that opened it.
+     */
+    private function beginGeneration(int $botId, array $diff, ?string $role): ?int
+    {
+        $builds = in_array($role, ['initial_grid', 'rebalance'], true)
+            && (! empty($diff['to_place']) || ! empty($diff['to_cancel']));
+
+        if ($builds) {
+            BotConfig::whereKey($botId)->increment('grid_generation');
+        }
+
+        $generation = BotConfig::whereKey($botId)->value('grid_generation');
+        if ($generation === null) {
+            return null;
+        }
+        $generation = (int) $generation;
+
+        if ($builds) {
+            $keptIds = array_values(array_filter(array_map(
+                fn ($k) => is_array($k) ? (string) ($k['id'] ?? '') : '',
+                (array) ($diff['keep'] ?? [])
+            )));
+            if ($keptIds !== []) {
+                GridOrder::where('bot_config_id', $botId)
+                    ->whereIn('nobitex_order_id', $keptIds)
+                    ->whereIn('role', ['initial_grid', 'rebalance', 'rearm'])
+                    ->update(['grid_generation' => $generation]);
+            }
+
+            Log::channel('trading')->info('GRID_GENERATION_STARTED', [
+                'bot_id' => $botId, 'role' => $role, 'grid_generation' => $generation, 'kept' => count($keptIds),
+            ]);
+        }
+
+        return $generation;
     }
 
     /**

@@ -16,8 +16,8 @@ use Illuminate\Support\Facades\Log;
  *
  *   position   = Σ grid_orders.net_base_delta over the bot's fills (buys add
  *                filled − BTC fee, sells subtract) — seed 0
- *   committed  = Σ amount of the bot's OTHER open cycle_exit sells
- *                (pending / placed / partially_filled / submission_unknown)
+ *   committed  = Σ amount of the bot's OTHER open cycle_exit and re-arm
+ *                sells (pending / placed / partially_filled / submission_unknown)
  *   free       = position − committed
  *
  * Before a simulated exit SELL is "placed", its amount is compared with free;
@@ -45,12 +45,12 @@ class SimulatedBasePosition
         return $sum;
     }
 
-    /** BTC committed to the bot's open exit sells, excluding $exceptOrderId. */
+    /** BTC committed to the bot's open exit / re-arm sells, excluding $exceptOrderId. */
     public function committed(int $botId, ?int $exceptOrderId = null): string
     {
         $sum = '0';
         GridOrder::where('bot_config_id', $botId)
-            ->where('role', 'cycle_exit')
+            ->whereIn('role', ['cycle_exit', 'rearm'])
             ->where('type', 'sell')
             ->whereIn('status', self::OPEN)
             ->when($exceptOrderId !== null, fn ($q) => $q->where('id', '!=', $exceptOrderId))

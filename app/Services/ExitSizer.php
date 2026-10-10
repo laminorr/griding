@@ -295,6 +295,121 @@ class ExitSizer
         });
     }
 
+    /**
+     * Classic-grid re-arm SELL (GridRearmer): a sell-first level whose exit
+     * buy just filled is re-armed with the BTC that buy restored.
+     *
+     *   backing   = what the parent sell removed (−net_base_delta, else its
+     *               filled quantity) — the part of the exit buy's credit that
+     *               settleExitBuyFill did NOT book into base_dust
+     *   available = backing + base_dust   (dust already holds credited − backing)
+     *   amount    = floor_qty(available)
+     *   dust_after = available − amount ∈ [0, one step)
+     *
+     * So the sell is never more than the BTC the exit buy credited plus the
+     * dust that was there before — a negative dust (shortfall) shrinks it.
+     * Must run inside the caller's transaction: it locks the bot row and writes
+     * base_dust ONLY when the order is placeable (positive, ≥ min notional);
+     * a skipped re-arm moves no dust. 'dust_delta' goes on the re-arm row as
+     * exit_dust_delta so revertDust() can undo it.
+     *
+     * @return array{amount:string, backing:string, dust_before:string, dust_after:string, dust_delta:string, notional:string, below_min:bool}
+     */
+    public function reserveRearmSell(GridOrder $parentSell, BotConfig $bot, string $price): array
+    {
+        $botRow  = BotConfig::whereKey($bot->id)->lockForUpdate()->first() ?? $bot;
+        $dust    = self::dec($botRow->getAttribute('base_dust'));
+        $symbol  = (string) ($bot->symbol ?? 'BTCIRT');
+        $backing = $parentSell->net_base_delta !== null
+            ? Money::abs(self::dec($parentSell->net_base_delta))
+            : self::legQty($parentSell);
+
+        $available = Money::add($backing, $dust);
+        $amount    = Money::isPositive($available) ? QtyPrecision::floor($available, $symbol) : '0';
+        $dustAfter = Money::sub($available, $amount);
+        $notional  = Money::mul($amount, $price);
+        $belowMin  = Money::compare($notional, self::minOrderIrt()) < 0;
+
+        $sizing = [
+            'amount' => $amount, 'backing' => $backing, 'dust_before' => $dust, 'dust_after' => $dustAfter,
+            'dust_delta' => Money::sub($dustAfter, $dust), 'notional' => $notional, 'below_min' => $belowMin,
+        ];
+
+        if (Money::isPositive($amount) && ! $belowMin && Money::compare($dustAfter, $dust) !== 0) {
+            BotConfig::whereKey($bot->id)->update(['base_dust' => $dustAfter]);
+            $bot->setAttribute('base_dust', $dustAfter);
+            $bot->syncOriginalAttribute('base_dust');
+        }
+
+        Log::channel('trading')->info('REARM_SIZED', ['bot_id' => $bot->id, 'parent_order_id' => $parentSell->id, 'side' => 'sell'] + $sizing);
+
+        return $sizing;
+    }
+
+    /**
+     * Classic-grid re-arm BUY (GridRearmer): a buy-first level whose exit sell
+     * just filled is re-armed with the rial that sell produced — never with
+     * capital outside the bot's active budget.
+     *
+     *   proceeds = filled × avg price − quote fee of the exit sell
+     *   cost/BTC = price × (1 + buy rate) when the buy fee is charged in quote,
+     *              else price (a base-charged fee comes out of the BTC)
+     *   amount   = min(floor_qty(level size), floor_qty(proceeds / cost))
+     *
+     * The level size is the chain root's quantity (the original level), so a
+     * re-arm is the same size as the level whenever the proceeds cover it.
+     * Pure — moves no dust (a buy's dust is settled when its exit sell is sized).
+     *
+     * @return array{amount:string, level_qty:string, proceeds:string, affordable:string, notional:string, below_min:bool}
+     */
+    public function sizeRearmBuy(GridOrder $exitSell, GridOrder $root, ?BotConfig $bot, string $price): array
+    {
+        $symbol    = (string) ($bot?->symbol ?? 'BTCIRT');
+        $filled    = self::legQty($exitSell);
+        $fillPrice = self::dec($exitSell->avg_fill_price ?? $exitSell->average_fill_price ?? $exitSell->price);
+        $gross     = Money::mul($filled, $fillPrice);
+
+        if ($exitSell->fee_amount !== null && $exitSell->fee_currency !== null) {
+            $quoteFee = $exitSell->fee_currency === FeeModel::CURRENCY_QUOTE ? self::dec($exitSell->fee_amount) : '0';
+        } else {
+            $est      = $this->fees->estimate(FeeModel::SIDE_SELL, $filled, $fillPrice, $bot);
+            $quoteFee = $est['currency'] === FeeModel::CURRENCY_QUOTE ? $est['amount'] : '0';
+        }
+        $proceeds = Money::max('0', Money::sub($gross, $quoteFee));
+
+        $unitCost = $this->fees->expectedCurrency(FeeModel::SIDE_BUY) === FeeModel::CURRENCY_QUOTE
+            ? Money::mul($price, Money::add('1', $this->fees->rateFraction($bot, FeeModel::SIDE_BUY)))
+            : $price;
+        $affordable = Money::isPositive($proceeds)
+            ? QtyPrecision::floor(Money::div($proceeds, $unitCost, 18), $symbol)
+            : '0';
+        $levelQty = QtyPrecision::floor(self::dec($root->original_amount ?? $root->amount), $symbol);
+
+        $amount   = Money::compare($affordable, $levelQty) < 0 ? $affordable : $levelQty;
+        $notional = Money::mul($amount, $price);
+
+        $sizing = [
+            'amount' => $amount, 'level_qty' => $levelQty, 'proceeds' => $proceeds, 'affordable' => $affordable,
+            'notional' => $notional, 'below_min' => Money::compare($notional, self::minOrderIrt()) < 0,
+        ];
+
+        Log::channel('trading')->info('REARM_SIZED', ['bot_id' => $bot?->id, 'exit_order_id' => $exitSell->id, 'side' => 'buy'] + $sizing);
+
+        return $sizing;
+    }
+
+    private static function minOrderIrt(): string
+    {
+        return (string) (int) (config('trading.min_order_value_irt') ?: 3_000_000);
+    }
+
+    /** filled_amount when positive, else amount. */
+    private static function legQty(GridOrder $o): string
+    {
+        $filled = self::dec($o->filled_amount);
+        return Money::isPositive($filled) ? $filled : self::dec($o->original_amount ?? $o->amount);
+    }
+
     private function estimatedNetBaseDelta(GridOrder $o, BotConfig $bot): string
     {
         $f = $this->fees->fillFields($bot, (string) $o->type, (string) ($bot->symbol ?? 'BTCIRT'),

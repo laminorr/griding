@@ -90,6 +90,31 @@ class OrderRegistry
      */
     public function getGridExtentForBot(int $botId, string $symbol): ?array
     {
+        $prices = $this->currentBatchPrices($botId);
+
+        if ($prices === []) {
+            return null;
+        }
+
+        return ['min' => min($prices), 'max' => max($prices)];
+    }
+
+    /**
+     * Level prices of the bot's CURRENT grid batch (same batch rule as
+     * getGridExtentForBot). GridRearmer uses it ONLY for grid rows that predate
+     * the grid_generation column (NULL generation), to decide whether such a
+     * row's level still belongs to the live grid.
+     *
+     * @return list<int>
+     */
+    public function currentGridLevelPrices(int $botId): array
+    {
+        return array_values(array_unique($this->currentBatchPrices($botId)));
+    }
+
+    /** @return list<int> prices of the newest initial_grid / rebalance batch */
+    private function currentBatchPrices(int $botId): array
+    {
         $hasRebalance = \App\Models\GridOrder::where('bot_config_id', $botId)
             ->where('role', 'rebalance')
             ->exists();
@@ -100,10 +125,6 @@ class OrderRegistry
             ->orderByDesc('created_at')
             ->orderByDesc('id')
             ->get(['price', 'created_at']);
-
-        if ($rows->isEmpty()) {
-            return null;
-        }
 
         // Isolate the newest placement batch. The clustering window is half the
         // adjust-grid cadence, floored at 30s: comfortably larger than the
@@ -123,7 +144,7 @@ class OrderRegistry
             $prevTs = $ts;
         }
 
-        return ['min' => min($prices), 'max' => max($prices)];
+        return $prices;
     }
 
     /** @param array{id?:string,side:string,price:int,quantity:string} $order */

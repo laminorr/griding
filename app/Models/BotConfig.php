@@ -58,6 +58,9 @@ class BotConfig extends Model
         'stopped_at',
         'last_rebalance_at',
         'notes',
+
+        // -- گرید کلاسیک (re-arm) — GridRearmer
+        'rearm_exits',
     ];
 
     // ========= Casts =========
@@ -68,6 +71,8 @@ class BotConfig extends Model
         'budget_irt'           => 'integer',
         'simulation'           => 'boolean',
         'is_active'            => 'boolean',
+        'rearm_exits'          => 'boolean',
+        'grid_generation'      => 'integer',
         'min_order_value_irt'  => 'integer',
         'fee_bps'              => 'integer',
         'qty_decimals'         => 'integer',

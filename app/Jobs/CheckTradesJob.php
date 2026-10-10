@@ -8,6 +8,7 @@ use App\Models\CompletedTrade;
 use App\Exceptions\DefinitiveOrderRejection;
 use App\Services\ExitRejectionHandler;
 use App\Services\ExitSizer;
+use App\Services\GridRearmer;
 use App\Support\MarketPrecision;
 use App\Services\FeeModel;
 use App\Services\NobitexService;
@@ -142,6 +143,13 @@ class CheckTradesJob implements ShouldQueue
 
             foreach ($filledOrders as $filledOrder) {
                 $this->createPairOrder($filledOrder, $bot);
+            }
+
+            // Classic-grid re-arm (bot_configs.rearm_exits, default OFF): every
+            // exit that just closed a cycle re-arms its level. Runs after the
+            // fills above are committed and their CompletedTrades booked.
+            if ($bot->rearm_exits) {
+                app(GridRearmer::class)->sweep($bot);
             }
 
             // ✅ ADD: Log before update
@@ -512,6 +520,12 @@ class CheckTradesJob implements ShouldQueue
         if ($order->paired_order_id === null && $order->exit_state === null && self::isPairable($order)) {
             $result['pair_attempted'] = true;
             $this->createPairOrder($order, $bot);
+        }
+
+        // Classic-grid re-arm for an exit this event just filled (same guard
+        // set as the poller's sweep — whichever path gets there first wins).
+        if ($bot->rearm_exits && $order->role === 'cycle_exit' && $order->status === 'filled') {
+            app(GridRearmer::class)->rearmAfterExit($order, $bot);
         }
 
         return $result;
