@@ -216,6 +216,7 @@ final class BotAuditor
         'ADJUST_GRID_BOT_SKIP_KILLED', 'SKIP_PAIR_KILLED', 'PRECISION_ROW_SYNCED', 'PAIR_ORDER_PRE_CREATE',
         'PAIR_ORDER_POST_CREATE', 'PAIR_ORDER_ALREADY_PAIRED', 'EXIT_BLOCK_CLEARED', 'EXIT_SELF_HEALED',
         'RECONCILE_RESOLVED_PLACED', 'RECONCILE_RESOLVED_CANCELLED', 'FEES_BACKFILL', 'WS_EVENT_API_LAG_RECHECK',
+        'REARM_PLACED', 'REARM_SIZED', 'GRID_GENERATION_STARTED',
     ];
 
     public static function keepLogLine(array $e): bool
@@ -615,6 +616,107 @@ final class BotAuditor
                 'fill_paths' => $paths,
             ],
             'exit_delay_s' => self::stats($delays),
+            'rearm'  => $this->rearmLedger($rows),
+        ];
+    }
+
+    /**
+     * Classic-grid re-arm (GridRearmer): counts + the three invariants that
+     * can be checked from the rows.
+     *   (1) one exit fill → at most one re-arm (rearm_exit_order_id), and the
+     *       exit's rearm_order_id back-link points at it;
+     *   (2) a re-arm's level holds no other live order during its lifetime
+     *       (lifetime = created_at → filled_at / updated_at when terminal);
+     *   (5) a re-arm sell is above its exit buy, a re-arm buy below its exit
+     *       sell; and it sits on its root's price (no level drift).
+     */
+    private function rearmLedger(array $rows): array
+    {
+        $rearms = array_values(array_filter($rows, fn ($r) => ($r['role'] ?? null) === 'rearm'));
+        $states = [];
+        foreach ($rows as $r) {
+            if (($r['role'] ?? null) === 'cycle_exit' && ($r['rearm_state'] ?? null) !== null) {
+                $states[(string) $r['rearm_state']] = ($states[(string) $r['rearm_state']] ?? 0) + 1;
+            }
+        }
+        ksort($states);
+
+        $skips = [];
+        foreach ($this->botLogs as $i) {
+            $ev = (string) $this->logs[$i]['event'];
+            if (str_starts_with($ev, 'REARM_SKIPPED_') || $ev === 'REARM_REFUSED_PRICE_INVARIANT') {
+                $skips[$ev] = ($skips[$ev] ?? 0) + 1;
+            }
+        }
+        ksort($skips);
+
+        $byExit = [];
+        foreach ($rearms as $r) {
+            if (($r['rearm_exit_order_id'] ?? null) !== null) {
+                $byExit[(int) $r['rearm_exit_order_id']][] = (int) $r['id'];
+            }
+        }
+
+        $violations = ['one_rearm_per_exit' => 0, 'level_free' => 0, 'price_side' => 0];
+        foreach ($byExit as $exitId => $ids) {
+            if (count($ids) > 1) {
+                $violations['one_rearm_per_exit']++;
+                $this->flag('critical', 'REARM_DUPLICATE', "Exit {$exitId} spawned " . count($ids) . ' re-arms (' . implode(', ', $ids) . ')', array_merge([$exitId], $ids));
+            }
+            $exit = $this->byId[$exitId] ?? null;
+            if ($exit !== null && (int) ($exit['rearm_order_id'] ?? 0) !== $ids[0]) {
+                $this->flag('warning', 'REARM_BACKLINK_MISMATCH', "Exit {$exitId}.rearm_order_id = " . ($exit['rearm_order_id'] ?? 'null') . " but its re-arm is {$ids[0]}", [$exitId, $ids[0]]);
+            }
+        }
+
+        $open = '9999-12-31 23:59:59';   // still live
+        $span = function (array $r) use ($open): array {
+            $end = match ((string) $r['status']) {
+                'filled'    => (string) ($r['filled_at'] ?? $r['updated_at']),
+                'cancelled' => (string) ($r['updated_at'] ?? $open),
+                default     => $open,
+            };
+            return [(string) $r['created_at'], $end];
+        };
+
+        foreach ($rearms as $r) {
+            $id = (int) $r['id'];
+            $price = self::dec($r['price']);
+            [$start, $end] = $span($r);
+            foreach ($rows as $o) {
+                if ((int) $o['id'] === $id || Money::compare(self::dec($o['price']), $price) !== 0) {
+                    continue;
+                }
+                [$os, $oe] = $span($o);
+                if ($os < $end && $start < $oe) {
+                    $violations['level_free']++;
+                    $this->flag('critical', 'REARM_LEVEL_NOT_FREE', "Re-arm {$id} shared level {$price} with live order {$o['id']} (" . ($o['role'] ?? 'null') . ", {$os} → {$oe})", [$id, (int) $o['id']]);
+                }
+            }
+
+            $exit = $this->byId[(int) ($r['rearm_exit_order_id'] ?? 0)] ?? null;
+            if ($exit !== null) {
+                $cmp = Money::compare($price, self::dec($exit['price']));
+                if (((string) $r['type'] === 'sell' && $cmp <= 0) || ((string) $r['type'] === 'buy' && $cmp >= 0)) {
+                    $violations['price_side']++;
+                    $this->flag('critical', 'REARM_PRICE_INVARIANT', "Re-arm {$id} ({$r['type']} @ {$price}) is not on the right side of its exit {$exit['id']} @ {$exit['price']}", [$id, (int) $exit['id']]);
+                }
+            }
+            $root = $this->byId[(int) ($r['rearm_root_order_id'] ?? 0)] ?? null;
+            if ($root !== null && Money::compare(self::dec($root['price']), $price) !== 0) {
+                $this->flag('warning', 'REARM_LEVEL_DRIFT', "Re-arm {$id} @ {$price} is not on its root {$root['id']} level {$root['price']}", [$id, (int) $root['id']]);
+            }
+        }
+
+        return [
+            'flag_on'         => (bool) ($this->bot->getAttributes()['rearm_exits'] ?? false),
+            'grid_generation' => (int) ($this->bot->getAttributes()['grid_generation'] ?? 0),
+            'rows'            => count($rearms),
+            'by_status'       => array_count_values(array_map(fn ($r) => (string) $r['status'], $rearms)),
+            'exit_decisions'  => $states,
+            'placed_logged'   => count($this->botEvents('REARM_PLACED')),
+            'skipped_logged'  => $skips,
+            'violations'      => $violations,
         ];
     }
 
@@ -935,6 +1037,21 @@ final class BotAuditor
                 $sFee = $p['fee_currency'] === 'base' ? self::dec($p['fee_amount']) : '0';
                 $delta = Money::sub(Money::sub($bq, $bFee), Money::add($sq, $sFee));
                 $steps[] = ['at' => $r['filled_at'], 'row' => $id, 'kind' => 'exit_buy_settled', 'parent' => (int) $p['id'], 'delta' => $delta, 'stored' => self::decOrNull($r['exit_dust_delta'])];
+            }
+            // (4) re-arm SELL sized (GridRearmer): delta = backing − amount.
+            if (($r['role'] ?? null) === 'rearm' && (string) $r['type'] === 'sell' && $r['exit_dust_delta'] !== null) {
+                if ((string) $r['status'] === 'cancelled' && Money::isZero(self::dec($r['exit_dust_delta']))) {
+                    $steps[] = ['at' => $r['created_at'], 'row' => $id, 'kind' => 'rearm_sell_reverted', 'delta' => '0', 'stored' => '0', 'source' => 'row'];
+                } else {
+                    $exit = $this->byId[(int) ($r['rearm_exit_order_id'] ?? 0)] ?? null;
+                    $p    = $exit !== null ? ($this->byId[(int) $exit['paired_order_id']] ?? null) : null;
+                    if ($p !== null) {
+                        $backing = $p['net_base_delta'] !== null ? Money::abs(self::dec($p['net_base_delta'])) : $this->legQty($p);
+                        $amt     = self::dec($r['original_amount'] ?? $r['amount']);
+                        $steps[] = ['at' => $r['created_at'], 'row' => $id, 'kind' => 'rearm_sell_sized', 'parent' => (int) $p['id'],
+                            'backing' => $backing, 'rearm_amount' => $amt, 'delta' => Money::sub($backing, $amt), 'stored' => self::decOrNull($r['exit_dust_delta'])];
+                    }
+                }
             }
             // (3) partial of a cancelled order absorbed into dust.
             if ((string) ($r['exit_state'] ?? '') === 'dusted') {
@@ -1481,7 +1598,8 @@ final class BotAuditor
             ];
         }
         $bot     = $this->simulator->run($cs, $segments, $this->spacing, $this->tick, 'bot');
-        $classic = $this->simulator->run($cs, $segments, $this->spacing, $this->tick, 'classic');
+        $minIrt  = (string) (int) (config('trading.min_order_value_irt') ?: 3_000_000);
+        $classic = $this->simulator->run($cs, $segments, $this->spacing, $this->tick, 'classic', $minIrt);
         $estNet  = function (array $run): string {
             $sum = '0';
             foreach ($run['cycle_list'] as $c) {
@@ -1497,7 +1615,9 @@ final class BotAuditor
             'simulation' => [
                 'actual_cycles' => $cycles['totals']['count'],
                 'bot_rule' => ['cycles' => $bot['cycles'], 'fills' => $bot['fills'], 'open_exits' => $bot['open_exits'], 'est_net' => $estNet($bot)],
-                'classic_rearming' => ['cycles' => $classic['cycles'], 'fills' => $classic['fills'], 'open_exits' => $classic['open_exits'], 'est_net' => $estNet($classic)],
+                'classic_rearming' => ['cycles' => $classic['cycles'], 'fills' => $classic['fills'], 'open_exits' => $classic['open_exits'], 'est_net' => $estNet($classic),
+                    'rearms' => $classic['rearms'], 'rearm_skipped' => $classic['rearm_skipped']],
+                'bot_rearm_exits' => (bool) ($this->bot->getAttributes()['rearm_exits'] ?? false),
                 'segments' => count($segments),
                 'limits' => [
                     "Candle granularity ({$res}): the intra-candle path is assumed O→L→H→C (up candle) or O→H→L→C (down candle); multiple swings inside one candle are invisible, so both counts are LOWER bounds for a choppy market.",
@@ -1505,6 +1625,7 @@ final class BotAuditor
                     'Fees: cycle net uses FeeModel::cycleEstimate at the configured rates on the parent order notional; no slippage.',
                     'Each build is replayed from the first candle that opens after it; unfilled grid orders are dropped at the next build, spawned exits carry over (the bot never cancels exits).',
                     'The bot-rule replay is a calibration check: if it is far from the actual count, distrust the classic number by the same factor.',
+                    'The classic replay follows GridRearmer: an exit fill re-arms its level at the chain root\'s fixed price and size, one live order per level, a re-arm below the minimum order value is skipped, and an exit of an older build never re-arms. It ignores fees in re-arm sizing and the kill-switch / EXIT_BLOCKED gates. With rearm_exits ON the actual count should be compared with the classic replay, not the bot rule.',
                 ],
             ],
         ];

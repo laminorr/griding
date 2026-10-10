@@ -18,7 +18,7 @@ final class AuditReportRenderer
     private const SECTION_OF = [
         'KILL_SWITCH' => 1,
         'PRICE_OFF_TICK' => 2, 'AMOUNT_OFF_STEP' => 2, 'EXIT_' => 2, 'DUPLICATE_EXIT' => 2, 'BACKLINK_MISMATCH' => 2,
-        'FILL_WITHOUT_EXIT' => 2, 'FEE_' => 2, 'SELL_NOT_ABOVE_BUY' => 2, 'OVERFILL' => 2, 'FILLED_' => 2, 'UNRESOLVED_SUBMISSION' => 2,
+        'FILL_WITHOUT_EXIT' => 2, 'REARM_' => 2, 'FEE_' => 2, 'SELL_NOT_ABOVE_BUY' => 2, 'OVERFILL' => 2, 'FILLED_' => 2, 'UNRESOLVED_SUBMISSION' => 2,
         'EXCHANGE_' => 3, 'WALLET_UNAVAILABLE' => 3,
         'CYCLE_' => 4,
         'DUST_' => 5,
@@ -190,6 +190,13 @@ final class AuditReportRenderer
         $L[] = '';
         $c = $o['counts'];
         $L[] = "Rows {$c['total']}; with fills {$c['fills']}; open {$c['open']}. By status " . $this->kv($c['by_status']) . '. By role ' . $this->kv($c['by_role']) . '. Fill paths ' . $this->kv($c['fill_paths']) . '.';
+        $rm = $o['rearm'] ?? null;
+        if ($rm !== null) {
+            $L[] = '';
+            $L[] = 'Classic re-arm (rearm_exits ' . ($rm['flag_on'] ? 'ON' : 'OFF') . ", grid generation {$rm['grid_generation']}): {$rm['rows']} re-arm rows (by status " . $this->kv($rm['by_status'])
+                . '); exit decisions ' . $this->kv($rm['exit_decisions']) . "; REARM_PLACED logged {$rm['placed_logged']}; skips logged " . $this->kv($rm['skipped_logged'])
+                . '. Invariant violations: one re-arm per exit ' . $rm['violations']['one_rearm_per_exit'] . ', level free ' . $rm['violations']['level_free'] . ', price side ' . $rm['violations']['price_side'] . '.';
+        }
         $d = $o['exit_delay_s'];
         $L[] = '';
         $L[] = "Exit creation delay (s): n={$d['n']} min={$this->v($d['min'])} median={$this->v($d['median'])} p95={$this->v($d['p95'])} max={$this->v($d['max'])}.";
@@ -417,6 +424,10 @@ final class AuditReportRenderer
         $L[] = "| actual (completed_trades) | {$sim['actual_cycles']} | — | — | — |";
         $L[] = "| replay: bot rule (exit fills do not re-arm) | {$sim['bot_rule']['cycles']} | {$sim['bot_rule']['fills']} | {$sim['bot_rule']['open_exits']} | " . $this->r0($sim['bot_rule']['est_net']) . ' |';
         $L[] = "| replay: classic re-arming grid | {$sim['classic_rearming']['cycles']} | {$sim['classic_rearming']['fills']} | {$sim['classic_rearming']['open_exits']} | " . $this->r0($sim['classic_rearming']['est_net']) . ' |';
+        if (isset($sim['classic_rearming']['rearms'])) {
+            $L[] = '';
+            $L[] = "Classic replay: {$sim['classic_rearming']['rearms']} re-arms placed, skipped " . $this->kv($sim['classic_rearming']['rearm_skipped']) . '. The bot runs with rearm_exits ' . (($sim['bot_rearm_exits'] ?? false) ? 'ON — compare actual with the classic replay.' : 'OFF — compare actual with the bot rule.');
+        }
         $L[] = '';
         $L[] = 'Limits:';
         foreach ($sim['limits'] as $x) {
