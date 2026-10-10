@@ -150,6 +150,7 @@
                                         <span class="at-mono" x-text="bot.symbol"></span>
                                         <span> · </span><span x-text="faDigits(bot.grid_levels) + ' سطح'"></span>
                                         <span> · </span><span x-text="'فاصله ' + faDigits((bot.grid_spacing * 100).toFixed(1)) + '%'"></span>
+                                        <span> · </span><span x-text="'گرید کلاسیک: ' + (bot.debug.rearm_exits ? 'روشن' : 'خاموش')"></span>
                                     </p>
                                 </div>
                             </div>

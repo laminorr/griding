@@ -259,6 +259,8 @@ class BotMonitoring extends Page
                 'completed_trades_24h_actual' => $bot->completedTrades()->where('created_at', '>=', now()->subHours(24))->count(),
                 'profit_total' => $this->sumNetProfit($bot->completedTrades()),
                 'profit_24h_actual' => $profit24h,
+                // Classic-grid re-arm flag, shown in the bot's info line.
+                'rearm_exits' => (bool) $bot->rearm_exits,
             ];
 
             $data[] = [
