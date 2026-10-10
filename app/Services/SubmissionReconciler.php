@@ -429,6 +429,12 @@ class SubmissionReconciler
             }
         } else {
             $row->forceFill(['status' => 'cancelled'])->save();
+            // A re-arm sell reserved base_dust when its intent was written
+            // (GridRearmer); it never reached the exchange, so give it back.
+            // Its exit keeps the back-link: one exit → one re-arm attempt.
+            if ($row->role === 'rearm') {
+                app(ExitSizer::class)->revertDust($row);
+            }
         }
 
         Log::channel('trading')->info('RECONCILE_RESOLVED_CANCELLED', [

@@ -25,6 +25,8 @@ class GridOrder extends Model
         'exit_dust_delta',
         // Fee model Phase 5 — definitive rejections / blocked exits.
         'last_error_code','last_error_message','exit_state','exit_blocked_reason','exit_blocked_at',
+        // Classic-grid re-arm (GridRearmer).
+        'rearm_order_id','rearm_state','rearm_exit_order_id','rearm_root_order_id','grid_generation',
     ];
 
     protected $casts = [
@@ -55,6 +57,10 @@ class GridOrder extends Model
         'net_base_delta'     => 'decimal:18',
         'exit_dust_delta'    => 'decimal:18',
         'exit_blocked_at'    => 'datetime',
+        'rearm_order_id'      => 'integer',
+        'rearm_exit_order_id' => 'integer',
+        'rearm_root_order_id' => 'integer',
+        'grid_generation'     => 'integer',
     ];
 
     /**

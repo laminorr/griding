@@ -223,6 +223,12 @@ class BotConfigResource extends Resource
                             ->maxValue(20)
                             ->step(0.5)
                             ->helperText('درصد فاصله حد ضرر کیل‌سوییچ برای مدیریت ریسک'),
+
+                        Toggle::make('rearm_exits')
+                            ->label('فعال‌سازی دوباره‌ی سطح‌ها (گرید کلاسیک)')
+                            ->helperText('بعد از بسته شدن هر چرخه، همان سطح دوباره فعال می‌شود')
+                            ->default(false)
+                            ->inline(false),
                     ]),
                 ]),
 

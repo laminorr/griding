@@ -111,6 +111,8 @@ class GridOrderSync
                 //   - role: 'cycle_exit' (continuation order waiting for its
                 //     counterpart to fill) or 'manual' (operator-owned)
                 //   - paired_order_id: legacy signal, set on both legs of a cycle
+                // 'rearm' (GridRearmer) is deliberately NOT protected: an
+                // unfilled re-arm is a grid order and a rebuild replaces it.
                 $roleProtected = in_array((string) ($eo['role'] ?? ''), ['cycle_exit', 'manual'], true);
                 $pairProtected = !empty($eo['paired_order_id']);
 
