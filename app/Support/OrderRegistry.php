@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 namespace App\Support;
 
+use App\Models\GridOrder;
 use Illuminate\Support\Facades\Cache;
 
 class OrderRegistry
@@ -116,9 +117,9 @@ class OrderRegistry
     private function currentBatchPrices(int $botId): array
     {
         $hasRebalance = \App\Models\GridOrder::where('bot_config_id', $botId)
-            ->where('role', 'rebalance')
+            ->where('role', GridOrder::ROLE_REBALANCE)
             ->exists();
-        $currentRole = $hasRebalance ? 'rebalance' : 'initial_grid';
+        $currentRole = $hasRebalance ? GridOrder::ROLE_REBALANCE : GridOrder::ROLE_INITIAL_GRID;
 
         $rows = \App\Models\GridOrder::where('bot_config_id', $botId)
             ->where('role', $currentRole)

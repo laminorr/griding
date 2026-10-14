@@ -595,7 +595,7 @@ class TradingEngineService
                 }
 
                 $order->update([
-                    'status' => 'cancelled',
+                    'status' => GridOrder::STATUS_CANCELLED,
                     'cancelled_at' => now()
                 ]);
 
@@ -812,7 +812,7 @@ class TradingEngineService
         $callStartedAt = now();
 
         try {
-            $this->gridOrderExecutor->applyForBot($botConfig->id, $diff, simulation: $simulation, role: 'initial_grid');
+            $this->gridOrderExecutor->applyForBot($botConfig->id, $diff, simulation: $simulation, role: GridOrder::ROLE_INITIAL_GRID);
         } catch (\Throwable $e) {
             Log::error('GridOrderExecutor::applyForBot threw during initial grid setup', [
                 'bot_id' => $botConfig->id,

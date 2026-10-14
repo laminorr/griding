@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Models\GridOrder;
 use Illuminate\Support\Facades\Log;
 
 class GridOrderSync
@@ -113,7 +114,7 @@ class GridOrderSync
                 //   - paired_order_id: legacy signal, set on both legs of a cycle
                 // 'rearm' (GridRearmer) is deliberately NOT protected: an
                 // unfilled re-arm is a grid order and a rebuild replaces it.
-                $roleProtected = in_array((string) ($eo['role'] ?? ''), ['cycle_exit', 'manual'], true);
+                $roleProtected = in_array((string) ($eo['role'] ?? ''), [GridOrder::ROLE_CYCLE_EXIT, GridOrder::ROLE_MANUAL], true);
                 $pairProtected = !empty($eo['paired_order_id']);
 
                 if ($roleProtected || $pairProtected) {

@@ -393,7 +393,7 @@ class SubmissionReconciler
         // machine — including straight to 'filled' or 'cancelled' if that is
         // what actually happened while the row was parked.
         $row->forceFill([
-            'status'           => 'placed',
+            'status'           => GridOrder::STATUS_PLACED,
             'nobitex_order_id' => $nobitexOrderId,
         ])->save();
 
@@ -428,11 +428,11 @@ class SubmissionReconciler
                 $pairLock->release();
             }
         } else {
-            $row->forceFill(['status' => 'cancelled'])->save();
+            $row->forceFill(['status' => GridOrder::STATUS_CANCELLED])->save();
             // A re-arm sell reserved base_dust when its intent was written
             // (GridRearmer); it never reached the exchange, so give it back.
             // Its exit keeps the back-link: one exit → one re-arm attempt.
-            if ($row->role === 'rearm') {
+            if ($row->role === GridOrder::ROLE_REARM) {
                 app(ExitSizer::class)->revertDust($row);
             }
         }
@@ -451,7 +451,7 @@ class SubmissionReconciler
     protected function cancelRowAndUnlink(GridOrder $row, int $parentFillId): void
     {
         DB::transaction(function () use ($row, $parentFillId) {
-            $row->forceFill(['status' => 'cancelled'])->save();
+            $row->forceFill(['status' => GridOrder::STATUS_CANCELLED])->save();
 
             $parent = GridOrder::where('id', $parentFillId)->lockForUpdate()->first();
             if ($parent && (int) $parent->paired_order_id === (int) $row->id) {

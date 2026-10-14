@@ -110,7 +110,7 @@ class ExitRejectionHandler
             BotConfig::whereKey($bot->id)->update(['base_dust' => $after]);
             $exitRow->forceFill([
                 'amount'          => $retry,
-                'status'          => 'pending',
+                'status'          => GridOrder::STATUS_PENDING,
                 'exit_dust_delta' => Money::sub(ExitSizer::dec($exitRow->exit_dust_delta), $shortfall),
             ])->save();
         });
@@ -126,14 +126,14 @@ class ExitRejectionHandler
             $this->block($exitRow, $fill, $bot, $again->errorCode(), 'self-heal retry rejected: ' . $again->getMessage());
             return 'blocked';
         } catch (\Throwable $ambiguous) {
-            $exitRow->forceFill(['status' => 'submission_unknown'])->save();
+            $exitRow->forceFill(['status' => GridOrder::STATUS_SUBMISSION_UNKNOWN])->save();
             Log::channel('trading')->error('EXIT_SELF_HEAL_AMBIGUOUS', [
                 'bot_id' => $bot->id, 'exit_order_id' => $exitRow->id, 'amount' => $retry, 'error' => $ambiguous->getMessage(),
             ]);
             return 'submission_unknown';
         }
 
-        $exitRow->forceFill(['status' => 'placed', 'nobitex_order_id' => (string) $id])->save();
+        $exitRow->forceFill(['status' => GridOrder::STATUS_PLACED, 'nobitex_order_id' => (string) $id])->save();
 
         Log::channel('trading')->warning('EXIT_SELF_HEALED', [
             'bot_id'          => $bot->id,
@@ -160,7 +160,7 @@ class ExitRejectionHandler
         $reasonText = mb_substr("{$code}: {$reason}", 0, 255);
 
         DB::transaction(function () use ($exitRow, $fill, $reasonText) {
-            $exitRow->forceFill(['status' => 'cancelled'])->save();
+            $exitRow->forceFill(['status' => GridOrder::STATUS_CANCELLED])->save();
 
             $parent = GridOrder::whereKey($fill->id)->lockForUpdate()->first();
             if ($parent && ($parent->paired_order_id === null || (int) $parent->paired_order_id === (int) $exitRow->id)) {

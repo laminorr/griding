@@ -12,6 +12,51 @@ class GridOrder extends Model
 {
     protected $table = 'grid_orders';
 
+    /*
+     * ENUM values — the ONE list of what the code may write to each ENUM
+     * column of grid_orders. Production (MySQL/MariaDB) rejects anything else
+     * ("Data truncated for column ..."), while the sqlite test schema accepts
+     * any string, so every new value needs BOTH an entry here AND a migration
+     * that adds it to the column. Tests\Feature\Database\EnumDriftGuardTest
+     * fails CI on sqlite when the literals written in app/, these lists and
+     * the migrations disagree; `php artisan schema:check-enums` compares these
+     * lists with the live columns on the host.
+     */
+    public const ROLE_INITIAL_GRID = 'initial_grid';
+    public const ROLE_CYCLE_EXIT   = 'cycle_exit';
+    public const ROLE_REBALANCE    = 'rebalance';
+    public const ROLE_MANUAL       = 'manual';
+    public const ROLE_REARM        = 'rearm';
+
+    public const ROLES = [
+        self::ROLE_INITIAL_GRID, self::ROLE_CYCLE_EXIT, self::ROLE_REBALANCE, self::ROLE_MANUAL, self::ROLE_REARM,
+    ];
+
+    public const STATUS_PENDING            = 'pending';
+    public const STATUS_PLACED             = 'placed';
+    public const STATUS_FILLED             = 'filled';
+    public const STATUS_CANCELLED          = 'cancelled';
+    public const STATUS_FAILED             = 'failed';
+    public const STATUS_PARTIALLY_FILLED   = 'partially_filled';
+    public const STATUS_SUBMISSION_UNKNOWN = 'submission_unknown';
+
+    public const STATUSES = [
+        self::STATUS_PENDING, self::STATUS_PLACED, self::STATUS_FILLED, self::STATUS_CANCELLED,
+        self::STATUS_FAILED, self::STATUS_PARTIALLY_FILLED, self::STATUS_SUBMISSION_UNKNOWN,
+    ];
+
+    public const TYPE_BUY  = 'buy';
+    public const TYPE_SELL = 'sell';
+
+    public const TYPES = [self::TYPE_BUY, self::TYPE_SELL];
+
+    /** column => allowed values, for every ENUM column of grid_orders. */
+    public const ENUM_COLUMNS = [
+        'role'   => self::ROLES,
+        'status' => self::STATUSES,
+        'type'   => self::TYPES,
+    ];
+
     protected $fillable = [
         'client_order_id','exchange_order_id','status',
         'price_irt','amount','matched','unmatched','raw_json',
@@ -124,6 +169,20 @@ class GridOrder extends Model
     protected static function booted(): void
     {
         static::saving(function (GridOrder $order) {
+            // ENUM columns: refuse locally what MySQL would refuse with
+            // "Data truncated for column ..." — the same failure on sqlite
+            // (tests), MySQL and MariaDB alike. Query-builder writes bypass
+            // this; EnumDriftGuardTest scans those.
+            foreach (self::ENUM_COLUMNS as $column => $allowed) {
+                $value = $order->getAttributes()[$column] ?? null;
+                if ($value !== null && $order->isDirty($column) && ! in_array($value, $allowed, true)) {
+                    throw new \InvalidArgumentException(sprintf(
+                        "GridOrder::%s '%s' is not an allowed value (%s). Add it to GridOrder::%s AND to the grid_orders.%s ENUM in a migration.",
+                        $column, is_scalar($value) ? (string) $value : gettype($value), implode(', ', $allowed), strtoupper($column) . 'S', $column
+                    ));
+                }
+            }
+
             // Validate price is positive and within DECIMAL(20,0) limits
             if (!is_numeric($order->price) || $order->price <= 0) {
                 throw new \InvalidArgumentException("Invalid price on GridOrder: {$order->price}");
