@@ -44,6 +44,20 @@ class KillSwitchService
      */
     public function checkAndTrigger(BotConfig $bot): array
     {
+        $result = $this->evaluate($bot);
+
+        return $result['triggered'] ? $this->trip($bot, $result['reason'], $result['details']) : $result;
+    }
+
+    /**
+     * Read-only: would checkAndTrigger() trip right now? Same evaluation and
+     * return shape, but never logs KILL_SWITCH_TRIGGERED or stops the bot
+     * (used by `grid:rearm` dry-runs).
+     *
+     * @return array{triggered: bool, reason: 'stop_loss'|'max_drawdown'|null, details: array}
+     */
+    public function evaluate(BotConfig $bot): array
+    {
         // INTENTIONAL: no simulation guard here. The kill switch runs for
         // simulation (paper-traded) bots too, so a paper bot halts under exactly
         // the same conditions a live bot would — omitting the guard keeps the
@@ -62,7 +76,7 @@ class KillSwitchService
         if ($stopLossSet) {
             $stopLoss = $this->evaluateStopLoss($bot);
             if ($stopLoss !== null) {
-                return $this->trip($bot, 'stop_loss', $stopLoss);
+                return ['triggered' => true, 'reason' => 'stop_loss', 'details' => $stopLoss];
             }
         }
 
@@ -70,7 +84,7 @@ class KillSwitchService
         if ($maxDrawdownSet) {
             $drawdown = $this->evaluateMaxDrawdown($bot);
             if ($drawdown !== null) {
-                return $this->trip($bot, 'max_drawdown', $drawdown);
+                return ['triggered' => true, 'reason' => 'max_drawdown', 'details' => $drawdown];
             }
         }
 

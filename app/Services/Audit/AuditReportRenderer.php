@@ -195,7 +195,9 @@ final class AuditReportRenderer
             $L[] = '';
             $L[] = 'Classic re-arm (rearm_exits ' . ($rm['flag_on'] ? 'ON' : 'OFF') . ", grid generation {$rm['grid_generation']}): {$rm['rows']} re-arm rows (by status " . $this->kv($rm['by_status'])
                 . '); exit decisions ' . $this->kv($rm['exit_decisions']) . "; REARM_PLACED logged {$rm['placed_logged']}; skips logged " . $this->kv($rm['skipped_logged'])
-                . '. Invariant violations: one re-arm per exit ' . $rm['violations']['one_rearm_per_exit'] . ', level free ' . $rm['violations']['level_free'] . ', price side ' . $rm['violations']['price_side'] . '.';
+                . '. Invariant violations: one re-arm per exit ' . $rm['violations']['one_rearm_per_exit'] . ', level free ' . $rm['violations']['level_free'] . ', price side ' . $rm['violations']['price_side']
+                . '. Abandoned exits: ' . (($rm['abandoned'] ?? []) === [] ? 'none' : implode(', ', $rm['abandoned']))
+                . '; REARM_STUCK logged for: ' . (($rm['stuck_logged'] ?? []) === [] ? 'none' : implode(', ', $rm['stuck_logged'])) . '.';
         }
         $d = $o['exit_delay_s'];
         $L[] = '';
