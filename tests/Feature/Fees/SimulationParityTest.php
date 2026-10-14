@@ -88,7 +88,7 @@ final class SimulationParityTest extends TestCase
 
             $buy = GridOrder::create([
                 'bot_config_id' => $bot->id, 'type' => 'buy', 'status' => 'placed', 'price' => (string) $price,
-                'amount' => $amount, 'original_amount' => $amount, 'role' => 'grid',
+                'amount' => $amount, 'original_amount' => $amount, 'role' => 'initial_grid',
                 'client_order_id' => "sim-buy-{$i}", 'nobitex_order_id' => "SIM-B{$i}",
             ]);
 

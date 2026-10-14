@@ -175,7 +175,7 @@ class AdjustGridJob implements ShouldQueue
                     // mismatch and recompute inline via the observer's public
                     // helper before trusting the value.
                     $cycleExitCount = GridOrder::where('bot_config_id', $bot->id)
-                        ->where('role', 'cycle_exit')
+                        ->where('role', GridOrder::ROLE_CYCLE_EXIT)
                         ->where('status', 'placed')
                         ->count();
 
@@ -319,7 +319,7 @@ class AdjustGridJob implements ShouldQueue
                     $rebalanceApplied = !empty($diff['to_place']) || !empty($diff['to_cancel']);
 
                     // 4) Apply changes with bot_id context
-                    $exec->applyForBot($bot->id, $diff, simulation: $simulate, role: 'rebalance');
+                    $exec->applyForBot($bot->id, $diff, simulation: $simulate, role: GridOrder::ROLE_REBALANCE);
 
                     // 5) Persist rebalance bookkeeping only when a real rebalance
                     // actually placed/changed orders. `last_rebalance_at` is fillable;

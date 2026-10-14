@@ -34,7 +34,9 @@ class GridOrderExecutor
      * Statuses of an order that is (or may be) live on the exchange. A second
      * order for the same bot+side+price is refused while one of these exists.
      */
-    public const ACTIVE_STATUSES = ['pending', 'placed', 'partially_filled', 'submission_unknown'];
+    public const ACTIVE_STATUSES = [
+        GridOrder::STATUS_PENDING, GridOrder::STATUS_PLACED, GridOrder::STATUS_PARTIALLY_FILLED, GridOrder::STATUS_SUBMISSION_UNKNOWN,
+    ];
 
     public function __construct(
         protected NobitexService $svc,
@@ -96,7 +98,7 @@ class GridOrderExecutor
                 // them 'placed' forever alongside the newly-placed sim orders.
                 $updated = GridOrder::where('bot_config_id', $botId)
                     ->where('nobitex_order_id', $oid)
-                    ->update(['status' => 'cancelled']);
+                    ->update(['status' => GridOrder::STATUS_CANCELLED]);
 
                 if ($updated === 0) {
                     Log::channel('trading')->warning('EXEC_SIM_CANCEL_NO_LOCAL_RECORD', [
@@ -135,7 +137,7 @@ class GridOrderExecutor
 
                 $updated = GridOrder::where('bot_config_id', $botId)
                     ->where('nobitex_order_id', $oid)
-                    ->update(['status' => 'cancelled']);
+                    ->update(['status' => GridOrder::STATUS_CANCELLED]);
 
                 if ($updated === 0) {
                     Log::channel('trading')->warning('EXEC_CANCEL_NO_LOCAL_RECORD', [
@@ -250,7 +252,7 @@ class GridOrderExecutor
                         'price'            => $price,
                         'amount'           => $quantity,
                         'type'             => $side,
-                        'status'           => 'placed',
+                        'status'           => GridOrder::STATUS_PLACED,
                         'nobitex_order_id' => 'SIM-' . uniqid(),
                         'role'             => $role,
                         'grid_generation'  => $generation,
@@ -277,7 +279,7 @@ class GridOrderExecutor
                         'price'           => $price,
                         'amount'          => $quantity,
                         'type'            => $side,
-                        'status'          => 'pending',
+                        'status'          => GridOrder::STATUS_PENDING,
                         'role'            => $role,
                         'grid_generation' => $generation,
                     ]);
@@ -304,7 +306,7 @@ class GridOrderExecutor
                     $orderId = $resp->orderId ?? null;
 
                     $gridOrder->update([
-                        'status'           => 'placed',
+                        'status'           => GridOrder::STATUS_PLACED,
                         'nobitex_order_id' => $orderId ? (string) $orderId : null,
                     ]);
 
@@ -346,13 +348,13 @@ class GridOrderExecutor
                         // submission_unknown.
                         if ($e instanceof DefinitiveOrderRejection) {
                             $gridOrder->update([
-                                'status'             => 'cancelled',
+                                'status'             => GridOrder::STATUS_CANCELLED,
                                 'last_error_code'    => $e->errorCode(),
                                 'last_error_message' => mb_substr($e->getMessage(), 0, 255),
                             ]);
                         } else {
                             $gridOrder->update([
-                                'status' => $apiCallAttempted ? 'submission_unknown' : 'cancelled',
+                                'status' => $apiCallAttempted ? GridOrder::STATUS_SUBMISSION_UNKNOWN : GridOrder::STATUS_CANCELLED,
                             ]);
                         }
                     }
@@ -404,7 +406,7 @@ class GridOrderExecutor
      */
     private function beginGeneration(int $botId, array $diff, ?string $role): ?int
     {
-        $builds = in_array($role, ['initial_grid', 'rebalance'], true)
+        $builds = in_array($role, [GridOrder::ROLE_INITIAL_GRID, GridOrder::ROLE_REBALANCE], true)
             && (! empty($diff['to_place']) || ! empty($diff['to_cancel']));
 
         if ($builds) {
@@ -425,7 +427,7 @@ class GridOrderExecutor
             if ($keptIds !== []) {
                 GridOrder::where('bot_config_id', $botId)
                     ->whereIn('nobitex_order_id', $keptIds)
-                    ->whereIn('role', ['initial_grid', 'rebalance', 'rearm'])
+                    ->whereIn('role', [GridOrder::ROLE_INITIAL_GRID, GridOrder::ROLE_REBALANCE, GridOrder::ROLE_REARM])
                     ->update(['grid_generation' => $generation]);
             }
 

@@ -10,6 +10,7 @@ use App\Models\CompletedTrade;
 use App\Models\GridOrder;
 use App\Services\CandleService;
 use App\Services\FeeModel;
+use App\Services\GridRearmer;
 use App\Services\NobitexService;
 use App\Support\MarketPrecision;
 use App\Support\Money;
@@ -708,8 +709,52 @@ final class BotAuditor
             }
         }
 
+        // Re-arm failures that outlived their retries: a level stayed dark.
+        // Worse on a live bot (real inventory left unworked) than on a paper one.
+        $live      = ! (bool) ($this->bot->getAttributes()['simulation'] ?? false);
+        $severity  = $live ? 'critical' : 'warning';
+        $rearmed   = fn (int $exitId) => ($this->byId[$exitId]['rearm_order_id'] ?? null) !== null;
+        $abandoned = [];
+        foreach ($rows as $r) {
+            if (($r['role'] ?? null) === 'cycle_exit' && str_starts_with((string) ($r['rearm_state'] ?? ''), 'abandoned:')) {
+                $abandoned[(int) $r['id']] = (string) $r['rearm_state'];
+            }
+        }
+        foreach ($this->botEvents('REARM_ABANDONED') as $e) {
+            $id = (int) ($e['context']['exit_order_id'] ?? 0);
+            if ($id > 0 && ! $rearmed($id)) {
+                $abandoned[$id] ??= 'abandoned:' . ($e['context']['last_failure'] ?? '?');
+            }
+        }
+        ksort($abandoned);
+        if ($abandoned !== []) {
+            $this->flag($severity, 'REARM_ABANDONED', count($abandoned) . ' filled exit(s) never re-armed after repeated failures — level(s) dark: '
+                . implode(', ', array_map(fn ($id, $st) => "{$id} ({$st})", array_keys($abandoned), $abandoned))
+                . '. Fix the cause, then `php artisan grid:rearm <exit id>` (dry-run) and `--apply`.', array_keys($abandoned));
+        }
+
+        $stuck = [];
+        foreach ($this->botEvents('REARM_STUCK') as $e) {
+            $id = (int) ($e['context']['exit_order_id'] ?? 0);
+            if ($id > 0) {
+                $stuck[$id] = (string) ($e['context']['error'] ?? '');
+            }
+        }
+        ksort($stuck);
+        $stuckOpen = array_filter($stuck, fn ($err, $id) => ! $rearmed($id) && ! isset($abandoned[$id]), ARRAY_FILTER_USE_BOTH);
+        if ($stuckOpen !== []) {
+            $this->flag($severity, 'REARM_STUCK', count($stuckOpen) . ' exit(s) failed to re-arm ' . GridRearmer::STUCK_AFTER_FAILURES . '+ times in a row: '
+                . implode('; ', array_map(fn ($id, $err) => "{$id}: " . mb_substr($err, 0, 160), array_keys($stuckOpen), $stuckOpen)), array_keys($stuckOpen));
+        }
+        $stuckRecovered = array_diff_key($stuck, $stuckOpen, $abandoned);
+        if ($stuckRecovered !== []) {
+            $this->flag('info', 'REARM_STUCK_RECOVERED', 'Exit(s) ' . implode(', ', array_keys($stuckRecovered)) . ' were REARM_STUCK and later re-armed.', array_keys($stuckRecovered));
+        }
+
         return [
             'flag_on'         => (bool) ($this->bot->getAttributes()['rearm_exits'] ?? false),
+            'abandoned'       => array_keys($abandoned),
+            'stuck_logged'    => array_keys($stuck),
             'grid_generation' => (int) ($this->bot->getAttributes()['grid_generation'] ?? 0),
             'rows'            => count($rearms),
             'by_status'       => array_count_values(array_map(fn ($r) => (string) $r['status'], $rearms)),

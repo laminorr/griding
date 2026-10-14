@@ -225,13 +225,13 @@ class ExitSizer
      */
     public function settleExitBuyFill(GridOrder $exitBuy, BotConfig $bot): void
     {
-        if ($exitBuy->type !== 'buy' || $exitBuy->role !== 'cycle_exit'
+        if ($exitBuy->type !== GridOrder::TYPE_BUY || $exitBuy->role !== GridOrder::ROLE_CYCLE_EXIT
             || $exitBuy->paired_order_id === null || $exitBuy->exit_dust_delta !== null
             || $exitBuy->net_base_delta === null) {
             return;
         }
         $parent = GridOrder::whereKey($exitBuy->paired_order_id)->first();
-        if (! $parent || $parent->type !== 'sell' || $parent->net_base_delta === null) {
+        if (! $parent || $parent->type !== GridOrder::TYPE_SELL || $parent->net_base_delta === null) {
             return;
         }
 
@@ -311,13 +311,15 @@ class ExitSizer
      * Must run inside the caller's transaction: it locks the bot row and writes
      * base_dust ONLY when the order is placeable (positive, ≥ min notional);
      * a skipped re-arm moves no dust. 'dust_delta' goes on the re-arm row as
-     * exit_dust_delta so revertDust() can undo it.
+     * exit_dust_delta so revertDust() can undo it. $dryRun (grid:rearm preview)
+     * computes the same numbers but writes and logs nothing.
      *
      * @return array{amount:string, backing:string, dust_before:string, dust_after:string, dust_delta:string, notional:string, below_min:bool}
      */
-    public function reserveRearmSell(GridOrder $parentSell, BotConfig $bot, string $price): array
+    public function reserveRearmSell(GridOrder $parentSell, BotConfig $bot, string $price, bool $dryRun = false): array
     {
-        $botRow  = BotConfig::whereKey($bot->id)->lockForUpdate()->first() ?? $bot;
+        $query   = BotConfig::whereKey($bot->id);
+        $botRow  = ($dryRun ? $query : $query->lockForUpdate())->first() ?? $bot;
         $dust    = self::dec($botRow->getAttribute('base_dust'));
         $symbol  = (string) ($bot->symbol ?? 'BTCIRT');
         $backing = $parentSell->net_base_delta !== null
@@ -334,6 +336,10 @@ class ExitSizer
             'amount' => $amount, 'backing' => $backing, 'dust_before' => $dust, 'dust_after' => $dustAfter,
             'dust_delta' => Money::sub($dustAfter, $dust), 'notional' => $notional, 'below_min' => $belowMin,
         ];
+
+        if ($dryRun) {
+            return $sizing;
+        }
 
         if (Money::isPositive($amount) && ! $belowMin && Money::compare($dustAfter, $dust) !== 0) {
             BotConfig::whereKey($bot->id)->update(['base_dust' => $dustAfter]);
@@ -359,10 +365,11 @@ class ExitSizer
      * The level size is the chain root's quantity (the original level), so a
      * re-arm is the same size as the level whenever the proceeds cover it.
      * Pure — moves no dust (a buy's dust is settled when its exit sell is sized).
+     * $dryRun only skips the REARM_SIZED log.
      *
      * @return array{amount:string, level_qty:string, proceeds:string, affordable:string, notional:string, below_min:bool}
      */
-    public function sizeRearmBuy(GridOrder $exitSell, GridOrder $root, ?BotConfig $bot, string $price): array
+    public function sizeRearmBuy(GridOrder $exitSell, GridOrder $root, ?BotConfig $bot, string $price, bool $dryRun = false): array
     {
         $symbol    = (string) ($bot?->symbol ?? 'BTCIRT');
         $filled    = self::legQty($exitSell);
@@ -393,7 +400,9 @@ class ExitSizer
             'notional' => $notional, 'below_min' => Money::compare($notional, self::minOrderIrt()) < 0,
         ];
 
-        Log::channel('trading')->info('REARM_SIZED', ['bot_id' => $bot?->id, 'exit_order_id' => $exitSell->id, 'side' => 'buy'] + $sizing);
+        if (! $dryRun) {
+            Log::channel('trading')->info('REARM_SIZED', ['bot_id' => $bot?->id, 'exit_order_id' => $exitSell->id, 'side' => 'buy'] + $sizing);
+        }
 
         return $sizing;
     }

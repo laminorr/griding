@@ -256,7 +256,7 @@ class CheckTradesJob implements ShouldQueue
                     $simFields = app(FeeModel::class)->fillFields($bot, (string) $order->type, $symbol, $simFilled, $simPrice);
 
                     $order->update([
-                        'status'             => 'filled',
+                        'status'             => GridOrder::STATUS_FILLED,
                         'filled_at'          => now(),
                         'original_amount'    => $simFilled,
                         'filled_amount'      => $simFilled,
@@ -431,7 +431,7 @@ class CheckTradesJob implements ShouldQueue
             $q->orWhere(fn ($c) => $c->where('status', 'cancelled')
                 ->whereNotNull('fee_source')
                 ->where('filled_amount', '>', 0)
-                ->where(fn ($r) => $r->whereNull('role')->orWhere('role', '!=', 'cycle_exit')));
+                ->where(fn ($r) => $r->whereNull('role')->orWhere('role', '!=', GridOrder::ROLE_CYCLE_EXIT)));
         }
     }
 
@@ -444,7 +444,7 @@ class CheckTradesJob implements ShouldQueue
         return (bool) config('trading.fees.exit_for_partial_cancels', true)
             && $o->status === 'cancelled'
             && $o->fee_source !== null
-            && $o->role !== 'cycle_exit'
+            && $o->role !== GridOrder::ROLE_CYCLE_EXIT
             && Money::isPositive(self::dec($o->filled_amount));
     }
 
@@ -524,7 +524,7 @@ class CheckTradesJob implements ShouldQueue
 
         // Classic-grid re-arm for an exit this event just filled (same guard
         // set as the poller's sweep — whichever path gets there first wins).
-        if ($bot->rearm_exits && $order->role === 'cycle_exit' && $order->status === 'filled') {
+        if ($bot->rearm_exits && $order->role === GridOrder::ROLE_CYCLE_EXIT && $order->status === GridOrder::STATUS_FILLED) {
             app(GridRearmer::class)->rearmAfterExit($order, $bot);
         }
 
@@ -694,7 +694,7 @@ class CheckTradesJob implements ShouldQueue
             // (classified base/quote) or a FeeModel estimate, the exact
             // average fill price, and the net base change.
             $order->update([
-                'status'             => 'filled',
+                'status'             => GridOrder::STATUS_FILLED,
                 'filled_at'          => now(),
                 'original_amount'    => $originalAmount,
                 'filled_amount'      => $filledBase,
@@ -762,7 +762,7 @@ class CheckTradesJob implements ShouldQueue
         $remaining = Money::max('0', Money::sub($originalAmount, $filledBase));
 
         $order->update([
-            'status'             => 'partially_filled',
+            'status'             => GridOrder::STATUS_PARTIALLY_FILLED,
             // 'amount' is intentionally NOT touched — it stays the originally
             // requested quantity; the executed part lives in filled_amount.
             'original_amount'    => $originalAmount,
@@ -823,7 +823,7 @@ class CheckTradesJob implements ShouldQueue
             $remaining      = Money::max('0', Money::sub($originalAmount, $filledBase));
 
             $order->update([
-                'status'             => 'cancelled', // terminal — NOT 'partially_filled'
+                'status'             => GridOrder::STATUS_CANCELLED, // terminal — NOT 'partially_filled'
                 // 'amount' is intentionally left as the originally requested
                 // quantity; the executed part lives in filled_amount.
                 'original_amount'    => $originalAmount,
@@ -850,7 +850,7 @@ class CheckTradesJob implements ShouldQueue
 
         // Common case: canceled with nothing matched — behaviour unchanged.
         $order->update([
-            'status' => 'cancelled',
+            'status' => GridOrder::STATUS_CANCELLED,
         ]);
 
         Log::info("CheckTradesJob: Order {$order->id} marked as cancelled");
@@ -866,7 +866,7 @@ class CheckTradesJob implements ShouldQueue
     private function handleErrorOrder(GridOrder $order, $statusDto): void
     {
         $order->update([
-            'status' => 'cancelled', // تبدیل به cancelled چون قابل اجرا نیست
+            'status' => GridOrder::STATUS_CANCELLED, // تبدیل به cancelled چون قابل اجرا نیست
         ]);
 
         Log::error("CheckTradesJob: Order {$order->id} encountered an error on Nobitex, marked as cancelled");
@@ -1129,9 +1129,9 @@ class CheckTradesJob implements ShouldQueue
                 'price'           => $newPrice,
                 'amount'          => $pairAmount,
                 'type'            => $newType,
-                'status'          => 'pending',
+                'status'          => GridOrder::STATUS_PENDING,
                 'paired_order_id' => $filledOrder->id,
-                'role'            => 'cycle_exit',
+                'role'            => GridOrder::ROLE_CYCLE_EXIT,
                 // Lets a cancelled-and-unlinked intent undo its dust move once.
                 'exit_dust_delta' => $newType === 'sell' ? $sizing['dust_delta'] : null,
             ]);
@@ -1184,7 +1184,7 @@ class CheckTradesJob implements ShouldQueue
                 $nobitexOrderId = 'SIM-' . uniqid() . '-' . time();
 
                 $newOrder->update([
-                    'status'           => 'placed',
+                    'status'           => GridOrder::STATUS_PLACED,
                     'nobitex_order_id' => $nobitexOrderId,
                 ]);
 
@@ -1230,7 +1230,7 @@ class CheckTradesJob implements ShouldQueue
                 }
 
                 $newOrder->update([
-                    'status'           => 'placed',
+                    'status'           => GridOrder::STATUS_PLACED,
                     'nobitex_order_id' => (string) $nobitexOrderId,
                 ]);
 
@@ -1277,13 +1277,13 @@ class CheckTradesJob implements ShouldQueue
                 // this order. Park the row for reconciliation; the committed
                 // paired_order_id back-link blocks any re-place until the
                 // reconciler (Step 7) resolves it by this row's clientOrderId.
-                $newOrder->update(['status' => 'submission_unknown']);
+                $newOrder->update(['status' => GridOrder::STATUS_SUBMISSION_UNKNOWN]);
             } else {
                 // The failure happened before anything left our process — no
                 // exchange order can exist. Cancel the row and unlink the fill
                 // so the next run may attempt pairing again; undo the row's
                 // dust reservation so the re-pair does not count it twice.
-                $newOrder->update(['status' => 'cancelled']);
+                $newOrder->update(['status' => GridOrder::STATUS_CANCELLED]);
                 $filledOrder->update(['paired_order_id' => null]);
                 app(ExitSizer::class)->revertDust($newOrder);
             }

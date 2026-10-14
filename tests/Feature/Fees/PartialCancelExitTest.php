@@ -60,7 +60,7 @@ final class PartialCancelExitTest extends TestCase
     {
         return GridOrder::create([
             'bot_config_id' => $bot->id, 'type' => 'buy', 'status' => 'placed', 'price' => self::P,
-            'amount' => '0.001', 'original_amount' => '0.001', 'role' => 'grid',
+            'amount' => '0.001', 'original_amount' => '0.001', 'role' => 'initial_grid',
             'client_order_id' => "seed-{$nid}", 'nobitex_order_id' => $nid,
         ]);
     }
