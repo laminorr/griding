@@ -801,6 +801,9 @@ class BotMonitoring extends Page
         ];
     }
 
+    /** API call latency (ms) above which a check run is marked as a warning. */
+    public const SLOW_API_MS = 3000;
+
     /**
      * Finalize a cycle by determining its status based on events.
      */
@@ -812,10 +815,12 @@ class BotMonitoring extends Page
         } elseif ($cycle['ended_at'] === null) {
             $cycle['status'] = 'in_progress';
         } else {
-            // Check for slow API calls or long duration
+            // Check for slow API calls or long duration.
+            // Nobitex private endpoints routinely answer in 0.8–1.5s, so the
+            // threshold sits well above that to flag only genuinely slow calls.
             $hasSlowApi = false;
             foreach ($cycle['events'] as $event) {
-                if ($event['type'] === 'API_CALL' && $event['execution_time'] > 1000) {
+                if ($event['type'] === 'API_CALL' && $event['execution_time'] > self::SLOW_API_MS) {
                     $hasSlowApi = true;
                     break;
                 }
