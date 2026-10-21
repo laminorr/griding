@@ -484,7 +484,7 @@
                                             <div class="at-kv" style="align-items: baseline;">
                                                 <span class="at-badge muted" style="min-inline-size: 64px; justify-content: center;" x-text="eventTag(event.type)"></span>
                                                 <span style="flex: 1; text-align: start; margin-inline: var(--at-gap-sm); font-size: var(--at-fs-body); color: var(--at-text-dim);" x-text="event.message"></span>
-                                                <span x-show="event.type === 'API_CALL' && event.execution_time" class="at-t-warn at-mono" style="font-size: var(--at-fs-label);" x-text="faDigits(event.execution_time || 0) + 'ms'"></span>
+                                                <span x-show="event.type === 'API_CALL' && event.execution_time" :class="event.execution_time > {{ \App\Filament\Pages\BotMonitoring::SLOW_API_MS }} ? 'at-t-warn' : 'at-t-muted'" class="at-mono" style="font-size: var(--at-fs-label);" x-text="faDigits(event.execution_time || 0) + 'ms'"></span>
                                                 <span class="at-mono at-t-muted" style="font-size: var(--at-fs-label);"
                                                       x-text="new Date(event.time_iso).toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })"></span>
                                             </div>
