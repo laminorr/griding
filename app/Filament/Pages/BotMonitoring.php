@@ -6,10 +6,13 @@ use App\Models\BotConfig;
 use App\Models\GridOrder;
 use App\Models\CompletedTrade;
 use App\Models\BotActivityLog;
+use App\Services\BotPnlSummary;
 use App\Services\CandleService;
+use App\Services\MarketDataLayer;
 use App\Support\Money;
 use Filament\Pages\Page;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
 class BotMonitoring extends Page
@@ -305,6 +308,9 @@ class BotMonitoring extends Page
 
                 // Debug data
                 'debug' => $debugData,
+
+                // «پول من»: capital, realized + paper P&L, value now (rial).
+                'pnl' => $this->pnlSummary($bot),
             ];
         }
 
@@ -370,6 +376,22 @@ class BotMonitoring extends Page
             'success_rate' => round($profitable * 100 / $total, 1),
             'avg_cycle_duration' => $durations === [] ? null : round(array_sum($durations) / count($durations), 1),
         ];
+    }
+
+    /**
+     * «پول من» card data. Price comes only from the WS-fed cache (no network
+     * call from the page); without a fresh price the paper P&L is null, not 0.
+     */
+    private function pnlSummary(BotConfig $bot): ?array
+    {
+        try {
+            $cached = Cache::get(MarketDataLayer::CACHE_PREFIX_PRICE . strtoupper((string) $bot->symbol));
+            $price = is_array($cached) && (int) ($cached['price'] ?? 0) > 0 ? (string) (int) $cached['price'] : null;
+
+            return app(BotPnlSummary::class)->summarize($bot, $price);
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     /**
