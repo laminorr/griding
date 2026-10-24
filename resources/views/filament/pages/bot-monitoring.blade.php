@@ -49,6 +49,68 @@
         .at-pchart__legend .buy { color: #34D399; }
         .at-pchart__legend .sell { color: #ff5d68; }
         .at-pchart__note { font-size: 11px; margin-block-start: 6px; }
+
+        /* «پول من» card — scoped to .at-money (no layout/sidebar rules). */
+        .at-money {
+            background: var(--at-surface);
+            border: 1px solid var(--at-border);
+            border-radius: var(--at-radius, 16px);
+            padding: 14px;
+            margin-block-end: var(--at-gap-md, 12px);
+        }
+        .at-money__head { display: flex; align-items: center; gap: 8px; margin-block-end: 10px; }
+        .at-money__title { font-size: 14px; font-weight: 700; color: var(--at-text); }
+        .at-money__unit {
+            font-size: 11px; color: var(--at-muted); background: var(--at-surface-2);
+            border: 1px solid var(--at-border); border-radius: 999px; padding: 1px 8px;
+        }
+        .at-money__grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+        .at-money__cell {
+            min-inline-size: 0;
+            background: var(--at-surface-2);
+            border: 1px solid var(--at-border);
+            border-radius: 12px;
+            padding: 12px 14px;
+            display: flex; flex-direction: column; gap: 6px;
+        }
+        .at-money__label { font-size: 12px; color: var(--at-muted); }
+        .at-money__num {
+            font-size: 24px; font-weight: 800; line-height: 1.15; color: var(--at-text);
+            font-variant-numeric: tabular-nums; direction: ltr; unicode-bidi: isolate;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+            text-align: right; /* RTL start edge, matching the label */
+        }
+        .at-money__netrow { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+        .at-money__pct {
+            font-size: 12px; font-weight: 700; border-radius: 999px; padding: 2px 8px;
+            direction: ltr; unicode-bidi: isolate;
+            color: var(--at-muted); background: rgba(141, 156, 176, 0.12);
+        }
+        .at-money.is-up .is-net { border-color: rgba(35, 209, 139, 0.45); background: rgba(35, 209, 139, 0.08); }
+        .at-money.is-up .is-net .at-money__num { color: var(--at-pos); }
+        .at-money.is-up .at-money__pct { color: var(--at-pos); background: rgba(35, 209, 139, 0.14); }
+        .at-money.is-down .is-net { border-color: rgba(255, 91, 106, 0.45); background: rgba(255, 91, 106, 0.08); }
+        .at-money.is-down .is-net .at-money__num { color: var(--at-neg); }
+        .at-money.is-down .at-money__pct { color: var(--at-neg); background: rgba(255, 91, 106, 0.14); }
+        .at-money__split {
+            display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px;
+            margin-block-start: 10px; padding-block-start: 10px; border-block-start: 1px dashed var(--at-border);
+        }
+        .at-money__part { display: flex; align-items: baseline; gap: 10px; min-inline-size: 0; flex-wrap: wrap; }
+        .at-money__partlabel { font-size: 12px; color: var(--at-text-dim); }
+        .at-money__hint { font-size: 11px; color: var(--at-muted); margin-inline-start: 4px; }
+        .at-money__partnum {
+            font-size: 14px; font-weight: 700; color: var(--at-text-dim);
+            font-variant-numeric: tabular-nums; direction: ltr; unicode-bidi: isolate; white-space: nowrap;
+        }
+        .at-money__partnum.pos { color: var(--at-pos); }
+        .at-money__partnum.neg { color: var(--at-neg); }
+        .at-money__note { font-size: 11px; color: var(--at-muted); margin-block-start: 8px; }
+        @media (max-width: 720px) {
+            .at-money__grid { grid-template-columns: 1fr; }
+            .at-money__split { grid-template-columns: 1fr; }
+            .at-money__num { font-size: 22px; }
+        }
     </style>
 
     {{-- =================================================================
@@ -166,38 +228,39 @@
                                  closed cycles; paper = open cycles at the live price
                                  (same math as bot:audit §7). No live price → «—». --}}
                             <template x-if="bot.pnl">
-                                <div class="metric-card" style="margin-block-end: var(--at-gap-md);">
-                                    <div class="metric-head">
-                                        <span class="metric-label">پول من</span>
-                                        <span class="metric-chip">تومان</span>
+                                <div class="at-money" :class="bot.pnl.net === null ? '' : (Number(bot.pnl.net) >= 0 ? 'is-up' : 'is-down')">
+                                    <div class="at-money__head">
+                                        <span class="at-money__title">پول من</span>
+                                        <span class="at-money__unit">تومان</span>
                                     </div>
-                                    <div style="display: flex; flex-wrap: wrap; gap: var(--at-gap-lg); align-items: flex-end;">
-                                        <div>
-                                            <span class="metric-sub">پولی که گذاشتی</span>
-                                            <div class="metric-value" style="direction: ltr; text-align: start;" x-text="formatToman(bot.pnl.capital)"></div>
+                                    <div class="at-money__grid">
+                                        <div class="at-money__cell">
+                                            <span class="at-money__label">پولی که گذاشتی</span>
+                                            <span class="at-money__num" x-text="formatToman(bot.pnl.capital)"></span>
                                         </div>
-                                        <div>
-                                            <span class="metric-sub">پولت الان</span>
-                                            <div class="metric-value" style="direction: ltr; text-align: start;" x-text="formatToman(bot.pnl.value_now)"></div>
+                                        <div class="at-money__cell">
+                                            <span class="at-money__label">پولت الان</span>
+                                            <span class="at-money__num" x-text="formatToman(bot.pnl.value_now)"></span>
                                         </div>
-                                        <div>
-                                            <span class="metric-sub">سود / زیان کل</span>
-                                            <div class="metric-value" style="direction: ltr; text-align: start;"
-                                                 :class="bot.pnl.net === null ? '' : (Number(bot.pnl.net) >= 0 ? 'pos' : 'neg')"
-                                                 x-text="formatSignedToman(bot.pnl.net) + (bot.pnl.net_percent === null ? '' : '  (' + formatPct(bot.pnl.net_percent) + ')')"></div>
+                                        <div class="at-money__cell is-net">
+                                            <span class="at-money__label">سود / زیان کل</span>
+                                            <div class="at-money__netrow">
+                                                <span class="at-money__num" x-text="formatSignedToman(bot.pnl.net)"></span>
+                                                <span class="at-money__pct" x-show="bot.pnl.net_percent !== null" x-text="formatPct(bot.pnl.net_percent)"></span>
+                                            </div>
                                         </div>
                                     </div>
-                                    <div class="metric-foot" style="flex-wrap: wrap; gap: var(--at-gap-sm);">
-                                        <span class="metric-sub">
-                                            سود قطعی (چرخه‌های بسته):
-                                            <span class="at-num" style="direction: ltr; unicode-bidi: isolate;" x-text="formatSignedToman(bot.pnl.realized)"></span>
-                                        </span>
-                                        <span class="metric-sub">
-                                            <span x-text="'سود / زیان کاغذی (' + faDigits(bot.pnl.open_cycles) + ' چرخه‌ی باز، به قیمت الان):'"></span>
-                                            <span class="at-num" style="direction: ltr; unicode-bidi: isolate;" x-text="formatSignedToman(bot.pnl.unrealized)"></span>
-                                        </span>
-                                        <span class="metric-sub" x-show="bot.pnl.price_now === null">قیمت لحظه‌ای در دسترس نیست</span>
+                                    <div class="at-money__split">
+                                        <div class="at-money__part">
+                                            <span class="at-money__partlabel">سود قطعی <span class="at-money__hint">چرخه‌های بسته‌شده</span></span>
+                                            <span class="at-money__partnum" :class="Number(bot.pnl.realized) >= 0 ? 'pos' : 'neg'" x-text="formatSignedToman(bot.pnl.realized)"></span>
+                                        </div>
+                                        <div class="at-money__part">
+                                            <span class="at-money__partlabel">سود / زیان کاغذی <span class="at-money__hint" x-text="faDigits(bot.pnl.open_cycles) + ' چرخه‌ی باز، به قیمت الان'"></span></span>
+                                            <span class="at-money__partnum" :class="bot.pnl.unrealized === null ? '' : (Number(bot.pnl.unrealized) >= 0 ? 'pos' : 'neg')" x-text="formatSignedToman(bot.pnl.unrealized)"></span>
+                                        </div>
                                     </div>
+                                    <p class="at-money__note" x-show="bot.pnl.price_now === null">قیمت لحظه‌ای در دسترس نیست؛ سود کاغذی بعد از رسیدن قیمت نشان داده می‌شود.</p>
                                 </div>
                             </template>
                             <div class="metric-grid kpis">
