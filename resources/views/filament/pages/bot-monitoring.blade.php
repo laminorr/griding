@@ -161,6 +161,45 @@
                         </div>
 
                         <div class="panel-section__body">
+                            {{-- «پول من»: the one answer to "how much is my money now?" —
+                                 capital, value now and total P&L in TOMAN. realized =
+                                 closed cycles; paper = open cycles at the live price
+                                 (same math as bot:audit §7). No live price → «—». --}}
+                            <template x-if="bot.pnl">
+                                <div class="metric-card" style="margin-block-end: var(--at-gap-md);">
+                                    <div class="metric-head">
+                                        <span class="metric-label">پول من</span>
+                                        <span class="metric-chip">تومان</span>
+                                    </div>
+                                    <div style="display: flex; flex-wrap: wrap; gap: var(--at-gap-lg); align-items: flex-end;">
+                                        <div>
+                                            <span class="metric-sub">پولی که گذاشتی</span>
+                                            <div class="metric-value" style="direction: ltr; text-align: start;" x-text="formatToman(bot.pnl.capital)"></div>
+                                        </div>
+                                        <div>
+                                            <span class="metric-sub">پولت الان</span>
+                                            <div class="metric-value" style="direction: ltr; text-align: start;" x-text="formatToman(bot.pnl.value_now)"></div>
+                                        </div>
+                                        <div>
+                                            <span class="metric-sub">سود / زیان کل</span>
+                                            <div class="metric-value" style="direction: ltr; text-align: start;"
+                                                 :class="bot.pnl.net === null ? '' : (Number(bot.pnl.net) >= 0 ? 'pos' : 'neg')"
+                                                 x-text="formatSignedToman(bot.pnl.net) + (bot.pnl.net_percent === null ? '' : '  (' + formatPct(bot.pnl.net_percent) + ')')"></div>
+                                        </div>
+                                    </div>
+                                    <div class="metric-foot" style="flex-wrap: wrap; gap: var(--at-gap-sm);">
+                                        <span class="metric-sub">
+                                            سود قطعی (چرخه‌های بسته):
+                                            <span class="at-num" style="direction: ltr; unicode-bidi: isolate;" x-text="formatSignedToman(bot.pnl.realized)"></span>
+                                        </span>
+                                        <span class="metric-sub">
+                                            <span x-text="'سود / زیان کاغذی (' + faDigits(bot.pnl.open_cycles) + ' چرخه‌ی باز، به قیمت الان):'"></span>
+                                            <span class="at-num" style="direction: ltr; unicode-bidi: isolate;" x-text="formatSignedToman(bot.pnl.unrealized)"></span>
+                                        </span>
+                                        <span class="metric-sub" x-show="bot.pnl.price_now === null">قیمت لحظه‌ای در دسترس نیست</span>
+                                    </div>
+                                </div>
+                            </template>
                             <div class="metric-grid kpis">
                                 {{-- سرمایه کل --}}
                                 <div class="metric-card kpi wallet">
@@ -379,14 +418,14 @@
                                 <div style="margin-block-start: var(--at-gap-sm);">
                                     <span class="metric-label">اهداف بعدی</span>
                                     <div style="margin-block-start: var(--at-gap-xs);">
-                                        <template x-for="order in bot.active_orders.filter(o => !o.paired_order_id).slice(0, 4)" :key="'wait-' + order.id">
+                                        <template x-for="order in nextTargets(bot)" :key="'wait-' + order.id">
                                             <div class="at-kv">
                                                 <span class="at-kv__k" :class="order.type === 'buy' ? 'at-t-pos' : 'at-t-neg'"
                                                       x-text="order.type === 'buy' ? 'خرید در' : 'فروش در'"></span>
                                                 <span class="at-kv__v at-num" x-text="formatNum(order.price) + ' ریال'"></span>
                                             </div>
                                         </template>
-                                        <template x-if="bot.active_orders.filter(o => !o.paired_order_id).length === 0">
+                                        <template x-if="bot.active_orders.length === 0">
                                             <div class="at-empty" style="padding: var(--at-gap-sm);">هدف بازی در انتظار نیست</div>
                                         </template>
                                     </div>
@@ -847,6 +886,32 @@
                 formatNum(v) {
                     if (v === null || v === undefined || isNaN(v)) return '—';
                     return faDigits(Math.round(v).toLocaleString('en-US'));
+                },
+
+                // Rial string → toman, for the «پول من» card only.
+                formatToman(v) {
+                    if (v === null || v === undefined || isNaN(Number(v))) return '—';
+                    return this.formatNum(Number(v) / 10);
+                },
+
+                formatSignedToman(v) {
+                    if (v === null || v === undefined || isNaN(Number(v))) return '—';
+                    const n = Number(v) / 10;
+                    return (n >= 0 ? '+' : '−') + this.formatNum(Math.abs(n));
+                },
+
+                formatPct(v) {
+                    const n = Number(v);
+                    return (n >= 0 ? '+' : '−') + faDigits(Math.abs(n).toFixed(2)) + '٪';
+                },
+
+                // «اهداف بعدی»: every open order (grid, exit and re-arm legs alike),
+                // nearest to the live price first; by price when no price.
+                nextTargets(bot) {
+                    const now = bot.pnl && bot.pnl.price_now !== null ? Number(bot.pnl.price_now) : null;
+                    return [...bot.active_orders].sort((a, b) => now === null
+                        ? Number(b.price) - Number(a.price)
+                        : Math.abs(Number(a.price) - now) - Math.abs(Number(b.price) - now));
                 },
 
                 formatDuration(minutes) {
